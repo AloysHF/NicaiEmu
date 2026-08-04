@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/nicaiemu-core",
+    "crates/nicaiemu",
+    "crates/nicaiemu-libretro",
+]
+# The libretro buildbot runs a bare `cargo build --release --target <triple>` at
+# the repo root. Restrict the default build set to the libretro core so the CI
+# does not try to cross-compile the standalone GUI binary (minifb/rodio, which
+# need X11/ALSA). Explicit `-p` / `--workspace` selections are unaffected.
+default-members = ["crates/nicaiemu-libretro"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+description = "A Nicai/MStar CBE game emulator written in Rust"
+license = "BSD-3-Clause"
+
+[workspace.dependencies]
+nicaiemu-core = { path = "crates/nicaiemu-core" }
+anyhow = "1"              # Error handling (ergonomic Result types)
+thiserror = "2"           # Error handling (custom error enums)
+log = "0.4"               # Logging facade
+serde = { version = "1", features = ["derive"] }  # Save-state serialization
+serde_json = "1"          # Versioned save-state payloads
+image = "0.25"            # Image processing (GIF palette fixup)
+clap = { version = "4", features = ["derive"] }  # CLI argument parsing (standalone)
+minifb = "0.28"           # Window creation and pixel rendering (standalone)
+env_logger = "0.11"       # Log output to stderr (standalone)
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

@@ -1,0 +1,14 @@
+[package]
+name = "nicaiemu-core"
+description = "Platform-independent Nicai/MStar CBE emulator core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+image.workspace = true

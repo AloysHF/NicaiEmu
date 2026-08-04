@@ -1,0 +1,18 @@
+[package]
+name = "nicaiemu"
+description = "Nicai/MStar CBE game emulator - Desktop application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nicaiemu"
+path = "src/main.rs"
+
+[dependencies]
+nicaiemu-core.workspace = true
+anyhow.workspace = true
+log.workspace = true
+clap.workspace = true
+minifb.workspace = true
+env_logger.workspace = true
