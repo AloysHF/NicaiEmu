@@ -1,145 +1,131 @@
-//! NicaiEmu - Desktop Application
-//!
-//! A desktop emulator for Nicai/MStar CBE format games.
+//! NicaiEmu desktop frontend.
 
 use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use log::info;
-use minifb::{Key, Window, WindowOptions};
+use minifb::{Key, ScaleMode, Window, WindowOptions};
+use nicaiemu_core::{CbeArchive, NicaiMachine};
 
-use nicaiemu_core::{CbeArchive, NicaiRuntime};
-
-/// NicaiEmu - Nicai/MStar CBE Game Emulator
 #[derive(Parser)]
 #[command(name = "nicaiemu")]
-#[command(about = "A desktop emulator for Nicai/MStar CBE format games")]
+#[command(about = "A desktop emulator for Nicai/MStar CBE games")]
 struct Cli {
-    /// Path to the CBE file to load
+    /// Path to the CBE executable.
     #[arg(short, long)]
     file: PathBuf,
 
-    /// Scene to load (optional, loads first scene if not specified)
-    #[arg(short, long)]
-    scene: Option<String>,
-
-    /// List resources in the CBE file and exit
+    /// List packaged resources and exit.
     #[arg(short, long)]
     list: bool,
 
-    /// Window width
-    #[arg(short, long, default_value = "480")]
+    /// Initial window width.
+    #[arg(short, long, default_value_t = 480)]
     width: usize,
 
-    /// Window height
-    #[arg(short, long, default_value = "800")]
+    /// Initial window height.
+    #[arg(short = 'H', long, default_value_t = 800)]
     height: usize,
 
-    /// Enable verbose logging
+    /// Maximum guest instructions per callback.
+    #[arg(long, default_value_t = 5_000_000)]
+    instruction_limit: u64,
+
+    /// Enable verbose logging.
     #[arg(short, long)]
     verbose: bool,
 }
 
 fn main() -> Result<()> {
-    // Initialize logger
     let cli = Cli::parse();
-
     let log_level = if cli.verbose {
         log::LevelFilter::Debug
     } else {
         log::LevelFilter::Info
     };
+    env_logger::Builder::new().filter_level(log_level).init();
 
-    env_logger::Builder::new()
-        .filter_level(log_level)
-        .init();
-
-    info!("NicaiEmu - Nicai/MStar CBE Game Emulator");
-    info!("Loading: {}", cli.file.display());
-
-    // Load the CBE archive
     let archive = CbeArchive::load(&cli.file)
-        .with_context(|| format!("Failed to load CBE file: {}", cli.file.display()))?;
-
-    // Print archive summary
-    let summary = archive.summary();
-    info!("\n{}", summary);
-
-    // If --list flag, print resources and exit
+        .with_context(|| format!("failed to load CBE file: {}", cli.file.display()))?;
+    info!("{}", archive.summary());
     if cli.list {
-        println!("\nResources in {}:", cli.file.display());
-        for (i, resource) in archive.resources().iter().enumerate() {
-            println!("{:3}. {} (offset=0x{:X}, size={})",
-                     i + 1, resource.name, resource.offset, resource.size);
+        for (index, resource) in archive.resources().iter().enumerate() {
+            println!(
+                "{:3}. {} (offset=0x{:X}, size={})",
+                index + 1,
+                resource.name,
+                resource.offset,
+                resource.size
+            );
         }
         return Ok(());
     }
 
-    // Create runtime
-    let mut runtime = NicaiRuntime::new(archive);
+    let mut machine = NicaiMachine::new(&archive).context("failed to create CBE machine")?;
+    machine
+        .boot(cli.instruction_limit)
+        .context("failed to initialize CBE application")?;
 
-    // Load scene
-    if let Some(scene_name) = &cli.scene {
-        runtime.load_scene(scene_name)?;
-    } else {
-        runtime.load_first_scene()?;
-    }
-
-    // Try to render hero image at center of screen
-    runtime.try_render_image("hero.gif", 80, 160);
-
-    // Create window
+    let game_name = cli
+        .file
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("CBE Game");
+    let title = format!("NicaiEmu - {game_name}");
     let mut window = Window::new(
-        "NicaiEmu",
+        &title,
         cli.width,
         cli.height,
         WindowOptions {
             resize: true,
-            scale_mode: minifb::ScaleMode::AspectRatioStretch,
+            scale_mode: ScaleMode::AspectRatioStretch,
             ..WindowOptions::default()
         },
     )
-    .context("Failed to create window")?;
+    .context("failed to create emulator window")?;
+    window.set_target_fps(30);
 
-    // Limit to ~60fps
-    window.set_target_fps(60);
-
-    info!("Window created, starting main loop...");
-
-    // Main loop
-    let mut last_time = std::time::Instant::now();
-
+    info!("Controls: arrows/WASD move, Enter/F confirms, Q/E are soft keys, Esc exits");
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // Calculate delta time
-        let now = std::time::Instant::now();
-        let dt = now.duration_since(last_time).as_secs_f32();
-        last_time = now;
-
-        // Update runtime
-        runtime.update(dt);
-
-        // Render frame
-        let frame_buffer = runtime.render();
-
-        // Update window
-        // Convert RGBA to u32 for minifb
-        let buffer: Vec<u32> = frame_buffer
-            .data
-            .chunks_exact(4)
-            .map(|pixel| {
-                let r = pixel[0] as u32;
-                let g = pixel[1] as u32;
-                let b = pixel[2] as u32;
-                (r << 16) | (g << 8) | b
-            })
-            .collect();
-
+        update_keys(&window, &mut machine);
+        machine
+            .run_frame(cli.instruction_limit)
+            .context("guest screen callback failed")?;
+        let pixels = machine.frame_pixels();
         window
-            .update_with_buffer(&buffer, frame_buffer.width as usize, frame_buffer.height as usize)
-            .context("Failed to update window")?;
+            .update_with_buffer(&pixels, 240, 400)
+            .context("failed to update emulator window")?;
     }
-
-    info!("Shutting down...");
-
     Ok(())
+}
+
+fn update_keys(window: &Window, machine: &mut NicaiMachine) {
+    const KEY_MAP: &[(u8, &[Key])] = &[
+        (0, &[Key::Key0]),
+        (1, &[Key::Key1]),
+        (2, &[Key::Key2]),
+        (3, &[Key::Key3]),
+        (4, &[Key::Key4]),
+        (5, &[Key::Key5]),
+        (6, &[Key::Key6]),
+        (7, &[Key::Key7]),
+        (8, &[Key::Key8]),
+        (9, &[Key::Key9]),
+        (12, &[Key::Q]),
+        (13, &[Key::E]),
+        (14, &[Key::Enter, Key::F]),
+        (15, &[Key::Left, Key::A]),
+        (16, &[Key::Right, Key::D]),
+        (17, &[Key::Up, Key::W]),
+        (18, &[Key::Down, Key::S]),
+        (19, &[Key::N]),
+        (20, &[Key::M]),
+    ];
+    for &(guest_key, host_keys) in KEY_MAP {
+        machine.set_key(
+            guest_key,
+            host_keys.iter().any(|key| window.is_key_down(*key)),
+        );
+    }
 }

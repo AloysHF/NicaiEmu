@@ -12,3 +12,6 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
+armv4t_emu.workspace = true
+encoding_rs.workspace = true
+unifont.workspace = true

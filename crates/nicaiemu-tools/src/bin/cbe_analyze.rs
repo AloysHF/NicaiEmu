@@ -2,10 +2,10 @@
 //!
 //! Analyzes CBE (Cool Bar Engine) game archives and displays detailed information.
 
-use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 use nicaiemu_core::{CbeArchive, ResourceType};
+use std::path::PathBuf;
 
 /// CBE File Analyzer
 #[derive(Parser)]
@@ -36,18 +36,21 @@ fn main() -> Result<()> {
     println!("\n{}", summary);
 
     // Filter resources by type if specified
-    let filter_type = cli.filter.as_deref().and_then(|f| match f.to_lowercase().as_str() {
-        "scene" => Some(ResourceType::Scene),
-        "map" => Some(ResourceType::Map),
-        "actor" => Some(ResourceType::Actor),
-        "script" | "xse" => Some(ResourceType::Script),
-        "image" | "gif" => Some(ResourceType::Image),
-        "audio" => Some(ResourceType::Audio),
-        _ => {
-            eprintln!("Unknown resource type: {}", f);
-            None
-        }
-    });
+    let filter_type = cli
+        .filter
+        .as_deref()
+        .and_then(|f| match f.to_lowercase().as_str() {
+            "scene" => Some(ResourceType::Scene),
+            "map" => Some(ResourceType::Map),
+            "actor" => Some(ResourceType::Actor),
+            "script" | "xse" => Some(ResourceType::Script),
+            "image" | "gif" => Some(ResourceType::Image),
+            "audio" => Some(ResourceType::Audio),
+            _ => {
+                eprintln!("Unknown resource type: {}", f);
+                None
+            }
+        });
 
     // List resources
     let resources: Vec<_> = if let Some(filter) = filter_type {
@@ -61,12 +64,14 @@ fn main() -> Result<()> {
 
     for (i, resource) in resources.iter().enumerate() {
         if cli.detailed {
-            println!("{:3}. [{:8}] {} (offset=0x{:06X}, size={})",
-                     i + 1,
-                     resource.resource_type,
-                     resource.name,
-                     resource.offset,
-                     resource.size);
+            println!(
+                "{:3}. [{:8}] {} (offset=0x{:06X}, size={})",
+                i + 1,
+                resource.resource_type,
+                resource.name,
+                resource.offset,
+                resource.size
+            );
         } else {
             println!("{:3}. {}", i + 1, resource.name);
         }
@@ -77,12 +82,14 @@ fn main() -> Result<()> {
     println!("{:-<80}", "");
     for section in archive.sections() {
         let header = &section.header;
-        println!("  Section {}: offset=0x{:06X}, resources={}, dataRel=0x{:06X}, dataLen=0x{:06X}",
-                 header.index,
-                 header.file_offset,
-                 header.resource_count,
-                 header.data_rel,
-                 header.data_len);
+        println!(
+            "  Section {}: offset=0x{:06X}, resources={}, dataRel=0x{:06X}, dataLen=0x{:06X}",
+            header.index,
+            header.file_offset,
+            header.resource_count,
+            header.data_rel,
+            header.data_len
+        );
     }
 
     // Show resource type breakdown

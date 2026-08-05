@@ -89,9 +89,7 @@ pub struct ResourceEntry {
 impl ResourceEntry {
     /// Create a new resource entry
     pub fn new(name: String, section_index: usize, offset: u64, size: u64) -> Self {
-        let resource_type = ResourceType::from_extension(
-            name.rsplit('.').next().unwrap_or("")
-        );
+        let resource_type = ResourceType::from_extension(name.rsplit('.').next().unwrap_or(""));
         Self {
             name,
             section_index,
@@ -122,11 +120,7 @@ impl fmt::Display for ResourceEntry {
         write!(
             f,
             "[{}] {} (section={}, offset=0x{:X}, size={})",
-            self.resource_type,
-            self.name,
-            self.section_index,
-            self.offset,
-            self.size
+            self.resource_type, self.name, self.section_index, self.offset, self.size
         )
     }
 }

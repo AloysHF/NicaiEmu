@@ -1,106 +1,89 @@
 # NicaiEmu
 
-A desktop emulator for Nicai/MStar CBE format mobile games, written in Rust.
+NicaiEmu is a Rust emulator for ARM/Thumb CBE applications used by Nicai/MStar mobile phones. It loads the executable and packaged resources directly, runs guest code through a pure-Rust ARM core, and bridges the phone services needed by supported games.
 
-## Overview
+## Current capabilities
 
-NicaiEmu is an emulator for games built with the Cool Bar Engine (CBE) format, used on Nicai/MStar mobile phones. The project implements CBE archive loading, resource parsing, and aims to provide a complete XSE virtual machine for script execution.
+- CBE executable header, segment, checksum, section, and resource parsing
+- ARM and Thumb guest execution, including Thumb BLX instructions used by CBE applications
+- Firmware-style service tables for memory, resource, display, input, data streams, and formatted strings
+- CBE RGB565 GIF reconstruction and clipped image drawing
+- GBK text decoding with an embedded Unicode bitmap font
+- 240×400 RGB565 framebuffer and a resizable desktop window
+- Scriptable headless execution for deterministic compatibility testing
+- SCE, MAP, and actor resource inspection helpers
 
-## Features
-
-- **CBE Archive Loading**: Parse and load CBE game containers
-- **Resource Parsing**: Handle .sce (scenes), .map (maps), .actor (sprites), .xse (scripts)
-- **Scene Rendering**: Display game scenes with proper resolution (240x400 WQVGA)
-- **XSE Virtual Machine**: Execute game scripts (planned)
-
-## Architecture
-
-The project follows a modular architecture with platform-independent core and frontend crates:
-
-```
-nicaiemu-core/      # Platform-independent emulator core
-├── cbe/           # CBE format parsing
-├── vm/            # XSE virtual machine (planned)
-└── runtime.rs     # Runtime state management
-
-nicaiemu/           # Desktop application
-└── main.rs        # Window management and main loop
-
-nicaiemu-libretro/  # Libretro integration (planned)
-```
+The desktop frontend runs compatible native CBE executables. Libretro integration, audio output, save states, and broad compatibility across every CBE engine revision remain incomplete.
 
 ## Building
 
-### Prerequisites
-
-- Rust 1.70+ (with cargo)
-- For desktop: X11/ALSA development libraries (Linux)
-
-### Build
+Install a current stable Rust toolchain, then build the desktop frontend:
 
 ```bash
-# Build desktop application
 cargo build --release -p nicaiemu
-
-# Build libretro core
-cargo build --release -p nicaiemu-libretro
 ```
 
-### Run
+All runtime dependencies are implemented in Rust. Linux desktop builds also require the system libraries used by `minifb`.
+
+## Running a game
 
 ```bash
-# Run with a CBE file
-./target/release/nicaiemu --file path/to/game.CBE
-
-# Run with specific scene
-./target/release/nicaiemu --file game.CBE --scene guangmingshendian.sce
-
-# Enable verbose logging
-./target/release/nicaiemu --file game.CBE -v
+cargo run --release -p nicaiemu -- --file path/to/game.CBE
 ```
 
-## Project Status
+Useful options:
 
-**Phase 1: CBE Loader** (In Progress)
-- [x] Project structure and architecture
-- [x] CBE archive loading
-- [x] Resource type identification
-- [ ] Full CBE section parsing
-- [ ] GIF palette fixup
-- [ ] Scene/MAP/Actor parsing
+```text
+-f, --file <FILE>                 CBE executable to load
+-l, --list                        List packaged resources and exit
+-w, --width <WIDTH>               Initial window width (default: 480)
+-H, --height <HEIGHT>             Initial window height (default: 800)
+    --instruction-limit <COUNT>   Maximum guest instructions per callback
+-v, --verbose                     Enable debug logging
+```
 
-**Phase 2: XSE Virtual Machine** (Planned)
-- [ ] XSE script parsing
-- [ ] Group dispatcher
-- [ ] Operand resolution
-- [ ] Writeback mechanism
+Controls:
 
-**Phase 3: Complete Emulator** (Planned)
-- [ ] Input handling
-- [ ] Audio playback
-- [ ] Save/load state
-- [ ] Libretro integration
+| Phone input | Keyboard |
+| --- | --- |
+| Direction pad | Arrow keys or WASD |
+| Confirm | Enter or F |
+| Left/right soft keys | Q / E |
+| Numeric keypad | 0–9 |
+| Additional keys | N / M |
+| Exit | Escape |
 
-## Technical Details
+## Headless validation
 
-### CBE File Format
+The `cbe_boot` tool runs the same machine core without opening a window. A key event uses `FRAME:PHONE_KEY` syntax.
 
-CBE files are container archives containing game resources:
+```bash
+cargo run --release -p nicaiemu-tools --bin cbe_boot -- \
+  path/to/game.CBE --frames 120 --key-event 1:14 --screenshot frame.png
+```
 
-- **Signature**: `FE FE FE FE FE FE FE FE` marks section boundaries
-- **Sections**: Each section contains a header, offset table, name table, and resource data
-- **Resources**: Games contain scenes (.sce), maps (.map), actors (.actor), scripts (.xse), images (.gif), and audio
+Set `CBE_TRACE=all` to trace every bridged service, or provide comma-separated service filters such as `CBE_TRACE=4:24,6:3`. Tracing is disabled by default.
 
-### Screen Resolution
+## Architecture
 
-Nicai phones use WQVGA resolution: **240x400 pixels**
+The workspace separates the platform-independent machine from its frontends:
 
-### XSE Virtual Machine
+```text
+crates/nicaiemu-core/      CBE parser, ARM machine, services, and rendering
+crates/nicaiemu/           Desktop window, input, and frame loop
+crates/nicaiemu-tools/     Archive analysis and headless diagnostics
+crates/nicaiemu-libretro/  Libretro integration scaffold
+```
 
-The XSE VM executes game scripts with:
-- Group dispatcher for command routing
-- Operand stack for parameter passing
-- Writeback mechanism for state updates
+See [Architecture](docs/architecture.md) and [Compatibility](docs/compatibility.md) for implementation details and current limitations.
+
+## Testing
+
+```bash
+cargo test --workspace --release
+```
+
+Game files are not included. Supply legally obtained CBE applications separately.
 
 ## License
 

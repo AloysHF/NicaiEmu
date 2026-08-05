@@ -10,10 +10,10 @@
 //! - Name table: count * (1 + name_len) bytes
 //! - Data region: firstDataRel + 0x18 bytes from section start
 
-use std::fs;
-use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use log::{debug, info, warn};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use super::resource::{ResourceEntry, ResourceType};
 
@@ -100,21 +100,24 @@ impl CbeArchive {
         }
 
         // Check signature
-        if &buf[off..off + 8] != CBE_SECTION_SIGNATURE {
+        if buf[off..off + 8] != CBE_SECTION_SIGNATURE {
             return false;
         }
 
         let marker = u32::from_le_bytes([buf[off + 8], buf[off + 9], buf[off + 10], buf[off + 11]]);
-        let count = u32::from_le_bytes([buf[off + 12], buf[off + 13], buf[off + 14], buf[off + 15]]);
+        let count =
+            u32::from_le_bytes([buf[off + 12], buf[off + 13], buf[off + 14], buf[off + 15]]);
         let one = u32::from_le_bytes([buf[off + 16], buf[off + 17], buf[off + 18], buf[off + 19]]);
-        let first_data_rel = u32::from_le_bytes([buf[off + 20], buf[off + 21], buf[off + 22], buf[off + 23]]);
-        let data_len = u32::from_le_bytes([buf[off + 24], buf[off + 25], buf[off + 26], buf[off + 27]]);
+        let first_data_rel =
+            u32::from_le_bytes([buf[off + 20], buf[off + 21], buf[off + 22], buf[off + 23]]);
+        let data_len =
+            u32::from_le_bytes([buf[off + 24], buf[off + 25], buf[off + 26], buf[off + 27]]);
 
         // Validate header values
-        if marker != 8 || count < 1 || count > 10000 || one != 1 {
+        if marker != 8 || !(1..=10000).contains(&count) || one != 1 {
             return false;
         }
-        if first_data_rel < 0x18 || data_len < 1 || first_data_rel as usize + data_len as usize + 0x18 > buf.len() - off {
+        if data_len < 1 || first_data_rel as usize + data_len as usize + 0x18 > buf.len() - off {
             return false;
         }
 
@@ -128,17 +131,19 @@ impl CbeArchive {
         let mut checked = 0;
         while checked < count.min(16) && pos < buf.len() {
             let len = buf[pos] as usize;
-            if len < 1 || len > 96 || pos + 1 + len > buf.len() {
+            if !(1..=96).contains(&len) || pos + 1 + len > buf.len() {
                 return false;
             }
             let name = &buf[pos + 1..pos + 1 + len];
             // Check if name looks like ASCII resource name
             let valid = name.iter().all(|&c| {
-                (c >= 0x30 && c <= 0x39) ||
-                (c >= 0x41 && c <= 0x5a) ||
-                (c >= 0x61 && c <= 0x7a) ||
-                c == 0x2e || c == 0x5f || c == 0x2d ||
-                c >= 0x80 // Allow Chinese/other extended chars
+                (0x30..=0x39).contains(&c)
+                    || (0x41..=0x5a).contains(&c)
+                    || (0x61..=0x7a).contains(&c)
+                    || c == 0x2e
+                    || c == 0x5f
+                    || c == 0x2d
+                    || c >= 0x80 // Allow Chinese/other extended chars
             });
             if !valid {
                 return false;
@@ -177,13 +182,27 @@ impl CbeArchive {
 
         // Read section header
         let marker = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-        let resource_count = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
-        let one = u32::from_le_bytes([data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11]]);
-        let data_rel = u32::from_le_bytes([data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15]]);
-        let data_len = u32::from_le_bytes([data[pos + 16], data[pos + 17], data[pos + 18], data[pos + 19]]);
+        let resource_count =
+            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
+        let one =
+            u32::from_le_bytes([data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11]]);
+        let data_rel = u32::from_le_bytes([
+            data[pos + 12],
+            data[pos + 13],
+            data[pos + 14],
+            data[pos + 15],
+        ]);
+        let data_len = u32::from_le_bytes([
+            data[pos + 16],
+            data[pos + 17],
+            data[pos + 18],
+            data[pos + 19],
+        ]);
 
-        debug!("Section {}: marker={}, {} resources, dataRel=0x{:X}, dataLen=0x{:X}",
-               index, marker, resource_count, data_rel, data_len);
+        debug!(
+            "Section {}: marker={}, {} resources, dataRel=0x{:X}, dataLen=0x{:X}",
+            index, marker, resource_count, data_rel, data_len
+        );
 
         if resource_count == 0 {
             return None;
@@ -198,8 +217,10 @@ impl CbeArchive {
                 return None;
             }
             let end_offset = u32::from_le_bytes([
-                data[table_pos], data[table_pos + 1],
-                data[table_pos + 2], data[table_pos + 3]
+                data[table_pos],
+                data[table_pos + 1],
+                data[table_pos + 2],
+                data[table_pos + 3],
             ]);
             ends.push(end_offset);
             table_pos += 4;
@@ -220,7 +241,8 @@ impl CbeArchive {
                 warn!("Invalid name length at 0x{:X}: {}", name_pos, name_len);
                 return None;
             }
-            let name = String::from_utf8_lossy(&data[name_pos + 1..name_pos + 1 + name_len]).to_string();
+            let name =
+                String::from_utf8_lossy(&data[name_pos + 1..name_pos + 1 + name_len]).to_string();
             names.push(name);
             name_pos += 1 + name_len;
         }
@@ -232,18 +254,17 @@ impl CbeArchive {
         let mut resources = Vec::with_capacity(resource_count as usize);
         for i in 0..resource_count as usize {
             let start_rel = if i == 0 { 0 } else { ends[i - 1] as usize };
-            let end_rel = if i < ends.len() { ends[i] as usize } else { data_len as usize };
+            let end_rel = if i < ends.len() {
+                ends[i] as usize
+            } else {
+                data_len as usize
+            };
 
             let start = data_start + start_rel;
             let end = data_start + end_rel;
             let size = end.saturating_sub(start);
 
-            let entry = ResourceEntry::new(
-                names[i].clone(),
-                index,
-                start as u64,
-                size as u64,
-            );
+            let entry = ResourceEntry::new(names[i].clone(), index, start as u64, size as u64);
             resources.push(entry);
         }
 
@@ -258,15 +279,17 @@ impl CbeArchive {
             data_start: data_start as u64,
         };
 
-        Some(CbeSection {
-            header,
-            resources,
-        })
+        Some(CbeSection { header, resources })
     }
 
     /// Get the file path
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Get the complete CBE file image, including executable and data segments.
+    pub fn bytes(&self) -> &[u8] {
+        &self.data
     }
 
     /// Get all sections
@@ -286,7 +309,8 @@ impl CbeArchive {
 
     /// Get resources of a specific type
     pub fn resources_by_type(&self, resource_type: ResourceType) -> Vec<&ResourceEntry> {
-        self.all_resources.iter()
+        self.all_resources
+            .iter()
             .filter(|r| r.resource_type == resource_type)
             .collect()
     }
@@ -371,20 +395,39 @@ mod tests {
         assert_eq!(ResourceType::from_extension("actor"), ResourceType::Actor);
         assert_eq!(ResourceType::from_extension("xse"), ResourceType::Script);
         assert_eq!(ResourceType::from_extension("gif"), ResourceType::Image);
-        assert_eq!(ResourceType::from_extension("unknown"), ResourceType::Unknown);
+        assert_eq!(
+            ResourceType::from_extension("unknown"),
+            ResourceType::Unknown
+        );
     }
 
     #[test]
     fn test_resource_entry_creation() {
-        let entry = ResourceEntry::new(
-            "test.sce".to_string(),
-            0,
-            0x1000,
-            0x2000,
-        );
+        let entry = ResourceEntry::new("test.sce".to_string(), 0, 0x1000, 0x2000);
         assert_eq!(entry.resource_type, ResourceType::Scene);
         assert_eq!(entry.extension(), Some("sce"));
         assert!(entry.is_scene());
         assert!(!entry.is_script());
+    }
+
+    #[test]
+    fn accepts_compact_single_resource_section() {
+        let mut data = vec![0u8; 41];
+        data[0..8].copy_from_slice(&CBE_SECTION_SIGNATURE);
+        data[8..12].copy_from_slice(&8u32.to_le_bytes());
+        data[12..16].copy_from_slice(&1u32.to_le_bytes());
+        data[16..20].copy_from_slice(&1u32.to_le_bytes());
+        data[20..24].copy_from_slice(&14u32.to_le_bytes());
+        data[24..28].copy_from_slice(&1u32.to_le_bytes());
+        data[36] = 1;
+        data[37] = b'x';
+        data[38] = 0x5a;
+
+        let sections = CbeArchive::scan_sections(&data).unwrap();
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].resources.len(), 1);
+        assert_eq!(sections[0].resources[0].name, "x");
+        assert_eq!(sections[0].resources[0].offset, 38);
+        assert_eq!(sections[0].resources[0].size, 1);
     }
 }

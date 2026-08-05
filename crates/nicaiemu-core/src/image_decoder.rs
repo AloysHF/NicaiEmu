@@ -32,8 +32,7 @@ pub fn decode_image(data: &[u8]) -> Result<DecodedImage> {
     }
 
     // Check if it's a standard GIF (GIF87a or GIF89a)
-    let is_standard_gif = data.len() >= 6 &&
-        (data[..6] == *b"GIF89a" || data[..6] == *b"GIF87a");
+    let is_standard_gif = data.len() >= 6 && (data[..6] == *b"GIF89a" || data[..6] == *b"GIF87a");
 
     if is_standard_gif {
         debug!("Decoding standard GIF");
@@ -47,8 +46,7 @@ pub fn decode_image(data: &[u8]) -> Result<DecodedImage> {
 
 /// Decode a standard GIF image
 fn decode_standard_gif(data: &[u8]) -> Result<DecodedImage> {
-    let img = image::load_from_memory(data)
-        .context("Failed to decode standard GIF")?;
+    let img = image::load_from_memory(data).context("Failed to decode standard GIF")?;
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
     Ok(DecodedImage {
@@ -60,18 +58,27 @@ fn decode_standard_gif(data: &[u8]) -> Result<DecodedImage> {
 
 /// Decode a CBE custom GIF format
 fn decode_cbe_gif(data: &[u8]) -> Result<DecodedImage> {
+    if data.len() < 7 {
+        anyhow::bail!("CBE GIF header is truncated");
+    }
+    let flags = data[4];
+    if flags & 0x80 == 0 {
+        anyhow::bail!("CBE GIF has no local palette");
+    }
+    let color_count = 1usize << ((flags & 7) + 1);
+
     // Look for GIF graphic control extension (0x21 0xF9 0x04)
-    let gce_pos = data.windows(3).position(|w| w == [0x21, 0xF9, 0x04])
+    let gce_pos = data
+        .windows(3)
+        .position(|w| w == [0x21, 0xF9, 0x04])
         .context("Could not find GIF graphic control extension")?;
 
-    if gce_pos < 8 {
+    let palette_start = 7;
+    let palette_end = palette_start + color_count * 2;
+    if gce_pos != palette_end || palette_end > data.len() {
         anyhow::bail!("Invalid CBE GIF format: GCE too early");
     }
-
-    let palette_bytes = gce_pos - 8;
-    let color_count = palette_bytes / 2;
-
-    if color_count < 2 || color_count > 256 || palette_bytes % 2 != 0 {
+    if !(2..=256).contains(&color_count) {
         anyhow::bail!("Invalid palette: {} colors", color_count);
     }
 
@@ -81,14 +88,8 @@ fn decode_cbe_gif(data: &[u8]) -> Result<DecodedImage> {
         anyhow::bail!("Could not find image descriptor");
     }
 
-    let width = u16::from_le_bytes([
-        data[image_start + 5],
-        data[image_start + 6],
-    ]) as u32;
-    let height = u16::from_le_bytes([
-        data[image_start + 7],
-        data[image_start + 8],
-    ]) as u32;
+    let width = u16::from_le_bytes([data[image_start + 5], data[image_start + 6]]) as u32;
+    let height = u16::from_le_bytes([data[image_start + 7], data[image_start + 8]]) as u32;
 
     if width == 0 || width > 4096 || height == 0 || height > 4096 {
         anyhow::bail!("Invalid image dimensions: {}x{}", width, height);
@@ -97,7 +98,7 @@ fn decode_cbe_gif(data: &[u8]) -> Result<DecodedImage> {
     debug!("CBE GIF: {}x{}, {} colors", width, height, color_count);
 
     // Build standard GIF header
-    let color_bits = 8; // Use 8 bits for simplicity
+    let color_bits = color_count.ilog2() as u8;
     let mut gif_data = Vec::with_capacity(data.len() + 100);
 
     // GIF89a header
@@ -114,10 +115,8 @@ fn decode_cbe_gif(data: &[u8]) -> Result<DecodedImage> {
 
     // Global color table (RGB888 from RGB565)
     for i in 0..color_count {
-        let rgb565 = u16::from_be_bytes([
-            data[8 + i * 2],
-            data[8 + i * 2 + 1],
-        ]);
+        let rgb565 =
+            u16::from_be_bytes([data[palette_start + i * 2], data[palette_start + i * 2 + 1]]);
         let (r, g, b) = rgb565_to_rgb888(rgb565);
         gif_data.push(r);
         gif_data.push(g);
@@ -128,8 +127,7 @@ fn decode_cbe_gif(data: &[u8]) -> Result<DecodedImage> {
     gif_data.extend_from_slice(&data[gce_pos..]);
 
     // Decode with image crate
-    let img = image::load_from_memory(&gif_data)
-        .context("Failed to decode rebuilt CBE GIF")?;
+    let img = image::load_from_memory(&gif_data).context("Failed to decode rebuilt CBE GIF")?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
 
@@ -156,7 +154,7 @@ mod tests {
         let (r, g, b) = rgb565_to_rgb888(0x07E0);
         // RGB565 pure green: 5 bits = 0x1F, expanded to 8 bits = 252
         assert_eq!(r, 0);
-        assert!(g >= 252 && g <= 255); // Allow small rounding differences
+        assert!(g >= 252); // Allow small rounding differences
         assert_eq!(b, 0);
 
         // Pure blue: 0x001F

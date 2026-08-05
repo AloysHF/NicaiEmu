@@ -7,6 +7,7 @@
 // TODO: Implement libretro API
 // See: https://github.com/libretro/RetroArch/blob/master/libretro-common/include/libretro.h
 
+#[derive(Default)]
 pub struct NicaiLibretro {
     // Runtime state will be added here
 }
