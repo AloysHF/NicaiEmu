@@ -7,6 +7,7 @@ use log::{debug, info};
 
 use crate::cbe::CbeArchive;
 use crate::cbe::sce::Scene;
+use crate::image_decoder::{self, DecodedImage};
 
 /// Entity state in the runtime
 #[derive(Debug, Clone)]
@@ -19,6 +20,8 @@ pub struct EntityState {
     pub current_frame: u32,
     /// Animation state
     pub animation: Option<String>,
+    /// Reference to actor resource
+    pub actor_ref: Option<String>,
 }
 
 /// Script execution state
@@ -70,6 +73,45 @@ impl FrameBuffer {
             }
         }
     }
+
+    /// Get pixel color at position
+    pub fn get_pixel(&self, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        if x < self.width && y < self.height {
+            let idx = ((y * self.width + x) * 4) as usize;
+            if idx + 4 <= self.data.len() {
+                return (
+                    self.data[idx],
+                    self.data[idx + 1],
+                    self.data[idx + 2],
+                    self.data[idx + 3],
+                );
+            }
+        }
+        (0, 0, 0, 0)
+    }
+
+    /// Blit an image onto the frame buffer at the specified position
+    pub fn blit(&mut self, x: i32, y: i32, image: &DecodedImage) {
+        for sy in 0..image.height as i32 {
+            for sx in 0..image.width as i32 {
+                let dx = x + sx;
+                let dy = y + sy;
+                if dx >= 0 && dy >= 0 && (dx as u32) < self.width && (dy as u32) < self.height {
+                    let src_idx = ((sy as u32 * image.width + sx as u32) * 4) as usize;
+                    let dst_idx = ((dy as u32 * self.width + dx as u32) * 4) as usize;
+                    if src_idx + 4 <= image.data.len() && dst_idx + 4 <= self.data.len() {
+                        let a = image.data[src_idx + 3];
+                        if a > 0 {
+                            self.data[dst_idx] = image.data[src_idx];
+                            self.data[dst_idx + 1] = image.data[src_idx + 1];
+                            self.data[dst_idx + 2] = image.data[src_idx + 2];
+                            self.data[dst_idx + 3] = a;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Main runtime state
@@ -85,6 +127,8 @@ pub struct NicaiRuntime {
     scripts: Vec<ScriptState>,
     /// Frame buffer for rendering
     frame_buffer: FrameBuffer,
+    /// Cached decoded images
+    image_cache: std::collections::HashMap<String, DecodedImage>,
 }
 
 impl NicaiRuntime {
@@ -103,6 +147,7 @@ impl NicaiRuntime {
             entities: Vec::new(),
             scripts: Vec::new(),
             frame_buffer,
+            image_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -141,6 +186,22 @@ impl NicaiRuntime {
         }
     }
 
+    /// Decode a GIF image from CBE resource bytes
+    fn decode_gif(&self, data: &[u8]) -> Result<DecodedImage> {
+        image_decoder::decode_image(data)
+    }
+
+    /// Get or decode an image by resource name
+    pub fn get_image(&mut self, name: &str) -> Option<&DecodedImage> {
+        if !self.image_cache.contains_key(name) {
+            let resource = self.archive.find_resource(name)?;
+            let data = self.archive.read_resource_bytes(resource).ok()?;
+            let image = self.decode_gif(data).ok()?;
+            self.image_cache.insert(name.to_string(), image);
+        }
+        self.image_cache.get(name)
+    }
+
     /// Update runtime state
     pub fn update(&mut self, dt: f32) {
         // TODO: Implement entity updates, animation, script execution
@@ -149,22 +210,50 @@ impl NicaiRuntime {
 
     /// Render the current frame
     pub fn render(&mut self) -> &FrameBuffer {
-        // Clear frame buffer
+        // Clear frame buffer with black background
         self.frame_buffer.clear();
 
-        // TODO: Implement actual rendering
-        // For now, just fill with a solid color
+        // Fill with dark background
         for y in 0..self.frame_buffer.height {
             for x in 0..self.frame_buffer.width {
-                // Create a simple gradient
-                let r = (x * 255 / self.frame_buffer.width) as u8;
-                let g = (y * 255 / self.frame_buffer.height) as u8;
-                let b = 128;
-                self.frame_buffer.set_pixel(x, y, r, g, b, 255);
+                self.frame_buffer.set_pixel(x, y, 20, 20, 30, 255);
+            }
+        }
+
+        // If we have a scene, try to render its background
+        if let Some(_scene) = &self.current_scene {
+            // For now, render a simple grid to show the scene is loaded
+            for y in (0..self.frame_buffer.height).step_by(32) {
+                for x in (0..self.frame_buffer.width).step_by(32) {
+                    let color = if (x / 32 + y / 32) % 2 == 0 {
+                        (40, 40, 50)
+                    } else {
+                        (50, 50, 60)
+                    };
+                    for dy in 0..32.min(self.frame_buffer.height - y) {
+                        for dx in 0..32.min(self.frame_buffer.width - x) {
+                            self.frame_buffer.set_pixel(
+                                x + dx, y + dy,
+                                color.0, color.1, color.2, 255,
+                            );
+                        }
+                    }
+                }
             }
         }
 
         &self.frame_buffer
+    }
+
+    /// Try to render an image from the archive at the specified position
+    pub fn try_render_image(&mut self, name: &str, x: i32, y: i32) -> bool {
+        if let Some(image) = self.get_image(name) {
+            let img = image.clone();
+            self.frame_buffer.blit(x, y, &img);
+            true
+        } else {
+            false
+        }
     }
 
     /// Get reference to the archive
@@ -205,5 +294,29 @@ mod tests {
         assert_eq!(fb.data[idx + 1], 128); // G
         assert_eq!(fb.data[idx + 2], 64);  // B
         assert_eq!(fb.data[idx + 3], 255); // A
+    }
+
+    #[test]
+    fn test_frame_buffer_blit() {
+        let mut fb = FrameBuffer::new(10, 10);
+        // Create a 3x3 red image (RGBA format: 4 bytes per pixel)
+        let mut data = Vec::new();
+        for _ in 0..9 {
+            data.extend_from_slice(&[255, 0, 0, 255]); // Red pixel
+        }
+        let image = DecodedImage {
+            width: 3,
+            height: 3,
+            data,
+        };
+
+        fb.blit(1, 1, &image);
+
+        // Check pixel at (1, 1) is red
+        let (r, g, b, a) = fb.get_pixel(1, 1);
+        assert_eq!(r, 255);
+        assert_eq!(g, 0);
+        assert_eq!(b, 0);
+        assert_eq!(a, 255);
     }
 }

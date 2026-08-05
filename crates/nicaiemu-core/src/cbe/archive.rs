@@ -1,34 +1,44 @@
 //! CBE Archive Parser
 //!
 //! Loads and parses CBE (Cool Bar Engine) game archives.
-//! CBE files contain one or more resource sections marked by the signature
-//! `FE FE FE FE FE FE FE FE`.
+//! CBE files are container archives containing game resources.
+//!
+//! Format structure (from reverse engineering):
+//! - Signature: 8 bytes (0xFE x 8)
+//! - Section header: marker(4) + count(4) + one(4) + firstDataRel(4) + dataLen(4)
+//! - Offset table: (count - 1) * 4 bytes (each is end offset of resource i)
+//! - Name table: count * (1 + name_len) bytes
+//! - Data region: firstDataRel + 0x18 bytes from section start
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
-use log::{debug, info};
+use log::{debug, info, warn};
 
 use super::resource::{ResourceEntry, ResourceType};
 
 /// CBE section signature (8 bytes)
 const CBE_SECTION_SIGNATURE: [u8; 8] = [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE];
 
-/// Header for a CBE section
+/// Section header structure after the 8-byte signature
 #[derive(Debug, Clone)]
 pub struct SectionHeader {
     /// Section index
     pub index: usize,
     /// Offset of this section in the file
     pub file_offset: u64,
-    /// Size of the section header
-    pub header_size: u32,
+    /// Marker value (always 8?)
+    pub marker: u32,
     /// Number of resources in this section
     pub resource_count: u32,
-    /// Offset to the resource offset table
-    pub offset_table_offset: u64,
-    /// Offset to the name table
-    pub name_table_offset: u64,
+    /// Value 1
+    pub one: u32,
+    /// Relative offset to the data region (from section start + 0x18)
+    pub data_rel: u32,
+    /// Total length of the data region
+    pub data_len: u32,
+    /// Offset to the data start in the file
+    pub data_start: u64,
 }
 
 /// A CBE section containing multiple resources
@@ -45,7 +55,7 @@ pub struct CbeSection {
 pub struct CbeArchive {
     /// Path to the CBE file
     path: PathBuf,
-    /// Raw file data (memory-mapped or loaded)
+    /// Raw file data (loaded into memory)
     data: Vec<u8>,
     /// Sections found in the archive
     sections: Vec<CbeSection>,
@@ -83,106 +93,172 @@ impl CbeArchive {
         })
     }
 
+    /// Check if a buffer looks like a CBE resource section
+    fn looks_like_resource_section(buf: &[u8], off: usize) -> bool {
+        if off + 40 > buf.len() {
+            return false;
+        }
+
+        // Check signature
+        if &buf[off..off + 8] != CBE_SECTION_SIGNATURE {
+            return false;
+        }
+
+        let marker = u32::from_le_bytes([buf[off + 8], buf[off + 9], buf[off + 10], buf[off + 11]]);
+        let count = u32::from_le_bytes([buf[off + 12], buf[off + 13], buf[off + 14], buf[off + 15]]);
+        let one = u32::from_le_bytes([buf[off + 16], buf[off + 17], buf[off + 18], buf[off + 19]]);
+        let first_data_rel = u32::from_le_bytes([buf[off + 20], buf[off + 21], buf[off + 22], buf[off + 23]]);
+        let data_len = u32::from_le_bytes([buf[off + 24], buf[off + 25], buf[off + 26], buf[off + 27]]);
+
+        // Validate header values
+        if marker != 8 || count < 1 || count > 10000 || one != 1 {
+            return false;
+        }
+        if first_data_rel < 0x18 || data_len < 1 || first_data_rel as usize + data_len as usize + 0x18 > buf.len() - off {
+            return false;
+        }
+
+        // Check that we can read at least some valid names
+        let names_start = off + 36 + (count as usize - 1) * 4;
+        if names_start >= buf.len() {
+            return false;
+        }
+
+        let mut pos = names_start;
+        let mut checked = 0;
+        while checked < count.min(16) && pos < buf.len() {
+            let len = buf[pos] as usize;
+            if len < 1 || len > 96 || pos + 1 + len > buf.len() {
+                return false;
+            }
+            let name = &buf[pos + 1..pos + 1 + len];
+            // Check if name looks like ASCII resource name
+            let valid = name.iter().all(|&c| {
+                (c >= 0x30 && c <= 0x39) ||
+                (c >= 0x41 && c <= 0x5a) ||
+                (c >= 0x61 && c <= 0x7a) ||
+                c == 0x2e || c == 0x5f || c == 0x2d ||
+                c >= 0x80 // Allow Chinese/other extended chars
+            });
+            if !valid {
+                return false;
+            }
+            pos += 1 + len;
+            checked += 1;
+        }
+
+        checked > 0
+    }
+
     /// Scan the file for CBE sections
     fn scan_sections(data: &[u8]) -> Result<Vec<CbeSection>> {
         let mut sections = Vec::new();
-        let mut offset = 0;
         let mut section_index = 0;
 
-        while offset + 8 <= data.len() {
-            // Check for section signature
-            if &data[offset..offset + 8] == CBE_SECTION_SIGNATURE {
-                debug!("Found section signature at offset 0x{:X}", offset);
+        for off in 0..data.len().saturating_sub(40) {
+            if Self::looks_like_resource_section(data, off) {
+                debug!("Found section signature at offset 0x{:X}", off);
 
                 // Parse section header
-                let section = Self::parse_section(data, offset, section_index)
-                    .with_context(|| format!("Failed to parse section at 0x{:X}", offset))?;
-
-                // Move offset past this section for next scan
-                // For now, we'll scan the entire file for signatures
-                sections.push(section);
-                section_index += 1;
+                if let Some(section) = Self::parse_section(data, off, section_index) {
+                    sections.push(section);
+                    section_index += 1;
+                }
             }
-            offset += 1;
         }
 
         Ok(sections)
     }
 
     /// Parse a single CBE section starting at the given offset
-    fn parse_section(data: &[u8], start_offset: usize, index: usize) -> Result<CbeSection> {
+    fn parse_section(data: &[u8], start_offset: usize, index: usize) -> Option<CbeSection> {
         // Skip signature (8 bytes)
-        let mut pos = start_offset + 8;
+        let pos = start_offset + 8;
 
         // Read section header
-        // The exact format needs to be determined from reverse engineering
-        // For now, we'll use a simplified parser
+        let marker = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+        let resource_count = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
+        let one = u32::from_le_bytes([data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11]]);
+        let data_rel = u32::from_le_bytes([data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15]]);
+        let data_len = u32::from_le_bytes([data[pos + 16], data[pos + 17], data[pos + 18], data[pos + 19]]);
 
-        // Read resource count (assume 4 bytes, little-endian)
-        if pos + 4 > data.len() {
-            anyhow::bail!("Section header truncated at offset 0x{:X}", pos);
+        debug!("Section {}: marker={}, {} resources, dataRel=0x{:X}, dataLen=0x{:X}",
+               index, marker, resource_count, data_rel, data_len);
+
+        if resource_count == 0 {
+            return None;
         }
-        let resource_count = u32::from_le_bytes([
-            data[pos], data[pos + 1], data[pos + 2], data[pos + 3]
-        ]);
-        pos += 4;
 
-        debug!("Section {}: {} resources", index, resource_count);
-
-        // Read offset table
-        let mut offsets = Vec::with_capacity(resource_count as usize);
-        for _ in 0..resource_count {
-            if pos + 4 > data.len() {
-                anyhow::bail!("Offset table truncated at offset 0x{:X}", pos);
+        // Read offset table (count - 1 entries, each is the end offset of resource i)
+        let mut ends = Vec::with_capacity(resource_count as usize);
+        let mut table_pos = start_offset + 36;
+        for _ in 0..(resource_count - 1) {
+            if table_pos + 4 > data.len() {
+                warn!("Offset table truncated at 0x{:X}", table_pos);
+                return None;
             }
-            let offset = u32::from_le_bytes([
-                data[pos], data[pos + 1], data[pos + 2], data[pos + 3]
+            let end_offset = u32::from_le_bytes([
+                data[table_pos], data[table_pos + 1],
+                data[table_pos + 2], data[table_pos + 3]
             ]);
-            offsets.push(offset as u64);
-            pos += 4;
+            ends.push(end_offset);
+            table_pos += 4;
         }
 
         // Read name table
-        // Names are length-prefixed (1 or 2 bytes) followed by the name string
+        let names_start = start_offset + 36 + (resource_count as usize - 1) * 4;
+        let mut names = Vec::with_capacity(resource_count as usize);
+        let mut name_pos = names_start;
+
+        for _ in 0..resource_count {
+            if name_pos >= data.len() {
+                warn!("Name table truncated at 0x{:X}", name_pos);
+                return None;
+            }
+            let name_len = data[name_pos] as usize;
+            if name_len == 0 || name_pos + 1 + name_len > data.len() {
+                warn!("Invalid name length at 0x{:X}: {}", name_pos, name_len);
+                return None;
+            }
+            let name = String::from_utf8_lossy(&data[name_pos + 1..name_pos + 1 + name_len]).to_string();
+            names.push(name);
+            name_pos += 1 + name_len;
+        }
+
+        // Calculate data start offset
+        let data_start = start_offset + data_rel as usize + 0x18;
+
+        // Build resource entries
         let mut resources = Vec::with_capacity(resource_count as usize);
-        let name_table_start = pos;
+        for i in 0..resource_count as usize {
+            let start_rel = if i == 0 { 0 } else { ends[i - 1] as usize };
+            let end_rel = if i < ends.len() { ends[i] as usize } else { data_len as usize };
 
-        for &offset in offsets.iter() {
-            // Read name length (assume 1 byte for now)
-            if pos >= data.len() {
-                anyhow::bail!("Name table truncated at offset 0x{:X}", pos);
-            }
-            let name_len = data[pos] as usize;
-            pos += 1;
+            let start = data_start + start_rel;
+            let end = data_start + end_rel;
+            let size = end.saturating_sub(start);
 
-            // Read name bytes
-            if pos + name_len > data.len() {
-                anyhow::bail!("Name string truncated at offset 0x{:X}", pos);
-            }
-            let name_bytes = &data[pos..pos + name_len];
-            pos += name_len;
-
-            // Convert to string (try UTF-8, fall back to GBK/GB2312)
-            let name = String::from_utf8_lossy(name_bytes).to_string();
-
-            // Calculate resource data offset
-            // This is simplified; actual offset calculation may differ
-            let resource_offset = start_offset + 8 + offset as usize;
-
-            let entry = ResourceEntry::new(name, index, resource_offset as u64, 0);
+            let entry = ResourceEntry::new(
+                names[i].clone(),
+                index,
+                start as u64,
+                size as u64,
+            );
             resources.push(entry);
         }
 
         let header = SectionHeader {
             index,
             file_offset: start_offset as u64,
-            header_size: (pos - start_offset) as u32,
+            marker,
             resource_count,
-            offset_table_offset: (start_offset + 8) as u64,
-            name_table_offset: name_table_start as u64,
+            one,
+            data_rel,
+            data_len,
+            data_start: data_start as u64,
         };
 
-        Ok(CbeSection {
+        Some(CbeSection {
             header,
             resources,
         })

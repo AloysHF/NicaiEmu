@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/nicaiemu-core",
     "crates/nicaiemu",
+    "crates/nicaiemu-tools",
     "crates/nicaiemu-libretro",
 ]
 # The libretro buildbot runs a bare `cargo build --release --target <triple>` at

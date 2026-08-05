@@ -23,6 +23,10 @@ struct Cli {
     #[arg(short, long)]
     scene: Option<String>,
 
+    /// List resources in the CBE file and exit
+    #[arg(short, long)]
+    list: bool,
+
     /// Window width
     #[arg(short, long, default_value = "480")]
     width: usize,
@@ -32,7 +36,7 @@ struct Cli {
     height: usize,
 
     /// Enable verbose logging
-    #[arg(short, v)]
+    #[arg(short, long)]
     verbose: bool,
 }
 
@@ -61,6 +65,16 @@ fn main() -> Result<()> {
     let summary = archive.summary();
     info!("\n{}", summary);
 
+    // If --list flag, print resources and exit
+    if cli.list {
+        println!("\nResources in {}:", cli.file.display());
+        for (i, resource) in archive.resources().iter().enumerate() {
+            println!("{:3}. {} (offset=0x{:X}, size={})",
+                     i + 1, resource.name, resource.offset, resource.size);
+        }
+        return Ok(());
+    }
+
     // Create runtime
     let mut runtime = NicaiRuntime::new(archive);
 
@@ -70,6 +84,9 @@ fn main() -> Result<()> {
     } else {
         runtime.load_first_scene()?;
     }
+
+    // Try to render hero image at center of screen
+    runtime.try_render_image("hero.gif", 80, 160);
 
     // Create window
     let mut window = Window::new(

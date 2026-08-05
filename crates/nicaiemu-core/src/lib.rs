@@ -6,10 +6,13 @@
 //! - SCE/MAP/Actor resource decoders
 //! - XSE script VM (planned)
 //! - Runtime state management
+//! - Image decoding
 
 pub mod cbe;
+pub mod image_decoder;
 pub mod runtime;
 
 // Re-export commonly used types
 pub use cbe::{CbeArchive, ResourceEntry, ResourceType};
+pub use image_decoder::DecodedImage;
 pub use runtime::NicaiRuntime;

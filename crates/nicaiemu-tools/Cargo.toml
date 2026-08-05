@@ -1,0 +1,17 @@
+[package]
+name = "nicaiemu-tools"
+version.workspace = true
+edition.workspace = true
+description = "Tools for analyzing CBE game files"
+license.workspace = true
+
+[[bin]]
+name = "cbe-analyze"
+path = "src/bin/cbe_analyze.rs"
+
+[dependencies]
+nicaiemu-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+log.workspace = true
+env_logger.workspace = true
