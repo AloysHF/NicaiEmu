@@ -39,7 +39,16 @@ Useful options:
 -w, --width <WIDTH>               Initial window width (default: 480)
 -H, --height <HEIGHT>             Initial window height (default: 800)
     --instruction-limit <COUNT>   Maximum guest instructions per callback
+-S, --screenshot <PATH>           Run headlessly, save a PNG screenshot, and exit
+    --screenshot-frames <COUNT>   Frames to run before capture (default: 30)
 -v, --verbose                     Enable debug logging
+```
+
+Capture a screenshot after 120 frames without opening a window:
+
+```bash
+cargo run --release -p nicaiemu -- --file path/to/game.CBE \
+  --screenshot frame.png --screenshot-frames 120
 ```
 
 Controls:
@@ -64,6 +73,17 @@ cargo run --release -p nicaiemu-tools --bin cbe_boot -- \
 
 Set `CBE_TRACE=all` to trace every bridged service, or provide comma-separated service filters such as `CBE_TRACE=4:24,6:3`. Tracing is disabled by default.
 
+To capture every CBE application in the local validation directory, run:
+
+```powershell
+pwsh scripts/batch-screenshots.ps1
+```
+
+The script builds the standalone `nicaiemu` executable, runs each application
+for 120 frames, and writes available PNG captures to `docs/images`. Use
+`-Frames`, `-Binary`, `-GameDirectory`, or `-OutputDirectory` to override the
+script defaults.
+
 ## Architecture
 
 The workspace separates the platform-independent machine from its frontends:
@@ -75,7 +95,9 @@ crates/nicaiemu-tools/     Archive analysis and headless diagnostics
 crates/nicaiemu-libretro/  Libretro integration scaffold
 ```
 
-See [Architecture](docs/architecture.md) and [Compatibility](docs/compatibility.md) for implementation details and current limitations.
+See [Architecture](docs/architecture.md) and
+[Game Compatibility](docs/Game-Compatibility.md) for implementation details,
+current limitations, and the latest batch results.
 
 ## Testing
 

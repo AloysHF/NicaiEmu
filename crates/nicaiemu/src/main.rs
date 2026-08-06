@@ -1,6 +1,6 @@
 //! NicaiEmu desktop frontend.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -31,6 +31,14 @@ struct Cli {
     /// Maximum guest instructions per callback.
     #[arg(long, default_value_t = 5_000_000)]
     instruction_limit: u64,
+
+    /// Take a PNG screenshot after running headlessly, then exit.
+    #[arg(short = 'S', long, value_name = "PATH")]
+    screenshot: Option<PathBuf>,
+
+    /// Number of frames to run before taking a screenshot.
+    #[arg(long, default_value_t = 30)]
+    screenshot_frames: u32,
 
     /// Enable verbose logging.
     #[arg(short, long)]
@@ -67,6 +75,16 @@ fn main() -> Result<()> {
         .boot(cli.instruction_limit)
         .context("failed to initialize CBE application")?;
 
+    if let Some(path) = &cli.screenshot {
+        capture_screenshot(
+            &mut machine,
+            cli.screenshot_frames,
+            cli.instruction_limit,
+            path,
+        )?;
+        return Ok(());
+    }
+
     let game_name = cli
         .file
         .file_stem()
@@ -100,6 +118,35 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn capture_screenshot(
+    machine: &mut NicaiMachine,
+    frames: u32,
+    instruction_limit: u64,
+    path: &Path,
+) -> Result<()> {
+    for frame in 0..frames {
+        machine
+            .run_frame(instruction_limit)
+            .with_context(|| format!("guest screen callback failed at frame {}", frame + 1))?;
+    }
+
+    let pixels = machine.frame_pixels();
+    let nonzero = pixels.iter().filter(|pixel| **pixel != 0).count();
+    let colors = pixels
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    info!("frame nonzero={nonzero} colors={}", colors.len());
+    let rgb: Vec<u8> = pixels
+        .iter()
+        .flat_map(|pixel| [(pixel >> 16) as u8, (pixel >> 8) as u8, *pixel as u8])
+        .collect();
+    image::save_buffer(path, &rgb, 240, 400, image::ColorType::Rgb8)
+        .with_context(|| format!("failed to save screenshot: {}", path.display()))?;
+    info!("Screenshot saved to: {}", path.display());
+    Ok(())
+}
+
 fn update_keys(window: &Window, machine: &mut NicaiMachine) {
     const KEY_MAP: &[(u8, &[Key])] = &[
         (0, &[Key::Key0]),
@@ -127,5 +174,35 @@ fn update_keys(window: &Window, machine: &mut NicaiMachine) {
             guest_key,
             host_keys.iter().any(|key| window.is_key_down(*key)),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_screenshot_options() {
+        let cli = Cli::try_parse_from([
+            "nicaiemu",
+            "--file",
+            "game.CBE",
+            "--screenshot",
+            "frame.png",
+            "--screenshot-frames",
+            "120",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.screenshot, Some(PathBuf::from("frame.png")));
+        assert_eq!(cli.screenshot_frames, 120);
+    }
+
+    #[test]
+    fn screenshot_frames_default_to_thirty() {
+        let cli = Cli::try_parse_from(["nicaiemu", "--file", "game.CBE"]).unwrap();
+
+        assert_eq!(cli.screenshot, None);
+        assert_eq!(cli.screenshot_frames, 30);
     }
 }
