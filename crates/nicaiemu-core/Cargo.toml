@@ -15,3 +15,6 @@ image.workspace = true
 armv4t_emu.workspace = true
 encoding_rs.workspace = true
 unifont.workspace = true
+
+[dev-dependencies]
+cargo-husky = { version = "1", default-features = false, features = ["precommit-hook", "run-cargo-fmt", "run-cargo-clippy"] }

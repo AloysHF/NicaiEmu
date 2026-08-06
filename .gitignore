@@ -31,4 +31,6 @@ out_*/
 
 # Internal project files
 CLAUDE.md
+AGENTS.md
 tmp/
+.codegraph/
