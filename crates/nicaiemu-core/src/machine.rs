@@ -23,6 +23,10 @@ const LOG_NOOP_SERVICE: u32 = SERVICE_BASE + SERVICE_SIZE - 4;
 const EXIT_ADDRESS: u32 = 0x0f00_0000;
 const FIXED_MANAGER_INIT: u32 = SERVICE_BASE + 0xe000;
 const FIXED_MANAGER_DIRECTORY: u32 = MANAGER_BASE + 0xa000;
+const FIXED_GAMEOLD_OBJECT_SERVICE: u32 = SERVICE_BASE + 0xd000;
+const FIXED_GAMEOLD_REGION_SERVICE: u32 = SERVICE_BASE + 0xd100;
+const NATIVE_DISPATCH_SERVICE: u32 = SERVICE_BASE + 0xf000;
+const NATIVE_SYSTEM_TIME_SERVICE: u32 = SERVICE_BASE + 0xf100;
 
 const TABLE_STRIDE: u32 = 0x400;
 const MEMORY_BLOCK_POOL: u32 = HEAP_BASE + 0x40_0000;
@@ -315,6 +319,13 @@ fn arm_blx_immediate_target(pc: u32, instruction: u32) -> Option<u32> {
     Some(pc.wrapping_add(8).wrapping_add(signed_offset as u32))
 }
 
+fn thumb_add_pc_target(pc: u32, instruction: u16, source_value: u32) -> Option<u32> {
+    if instruction & 0xff87 != 0x4487 {
+        return None;
+    }
+    Some(pc.wrapping_add(4).wrapping_add(source_value) & !1)
+}
+
 fn ascii_uppercase(value: u16) -> u16 {
     if (b'a' as u16..=b'z' as u16).contains(&value) {
         value - (b'a' - b'A') as u16
@@ -325,8 +336,8 @@ fn ascii_uppercase(value: u16) -> u16 {
 
 fn image_payload(resource: &[u8]) -> &[u8] {
     if resource.first() == Some(&3)
-        && resource.len() > 9
-        && image::guess_format(&resource[9..]).is_ok()
+        && resource.len() >= 17
+        && (image::guess_format(&resource[9..]).is_ok() || &resource[9..17] == b"\x89PNGGAME")
     {
         &resource[9..]
     } else if matches!(resource.first(), Some(1 | 3)) {
@@ -580,6 +591,94 @@ fn native_package_resources(data: &[u8], start: usize) -> Vec<HostResource> {
         .collect()
 }
 
+fn flat_package_resources(data: &[u8], start: usize) -> Option<(Vec<HostResource>, usize)> {
+    let read_u32 = |offset: usize| {
+        data.get(offset..offset + 4)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u32::from_le_bytes)
+    };
+    let header_size = read_u32(start)? as usize;
+    let data_size = read_u32(start + 4)? as usize;
+    let count = read_u32(start + 8)? as usize;
+    if header_size < 8 || !(1..=10_000).contains(&count) {
+        return None;
+    }
+    let data_start = start.checked_add(4)?.checked_add(header_size)?;
+    let package_end = data_start.checked_add(data_size)?;
+    if package_end > data.len() {
+        return None;
+    }
+
+    let mut offsets = Vec::with_capacity(count);
+    let mut cursor = start.checked_add(12)?;
+    for _ in 0..count {
+        let offset = read_u32(cursor)? as usize;
+        if offset > data_size || offsets.last().is_some_and(|previous| *previous > offset) {
+            return None;
+        }
+        offsets.push(offset);
+        cursor += 4;
+    }
+    if offsets.first() != Some(&0) {
+        return None;
+    }
+
+    let mut names = Vec::with_capacity(count);
+    for _ in 0..count {
+        let length = *data.get(cursor)? as usize;
+        let end = cursor.checked_add(1 + length)?;
+        let name = data.get(cursor + 1..end)?;
+        names.push(String::from_utf8_lossy(name).into_owned());
+        cursor = end;
+    }
+    if cursor > data_start {
+        return None;
+    }
+
+    let resources = names
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let end = offsets.get(index + 1).copied().unwrap_or(data_size);
+            HostResource {
+                name,
+                data: data[data_start + offsets[index]..data_start + end].to_vec(),
+            }
+        })
+        .collect();
+    Some((resources, package_end))
+}
+
+fn grouped_package_resources(data: &[u8], start: usize, size: usize) -> Vec<HostResource> {
+    let Some(header_size) = data
+        .get(start..start + 4)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u32::from_le_bytes)
+        .map(|value| value as usize)
+    else {
+        return Vec::new();
+    };
+    let Some(mut cursor) = start
+        .checked_add(4)
+        .and_then(|value| value.checked_add(header_size))
+    else {
+        return Vec::new();
+    };
+    let limit = start.saturating_add(size).min(data.len());
+    let mut resources = Vec::new();
+    while cursor < limit {
+        let Some((mut group, next)) = flat_package_resources(data, cursor) else {
+            break;
+        };
+        if next <= cursor || next > limit {
+            break;
+        }
+        resources.append(&mut group);
+        cursor = next;
+    }
+    resources
+}
+
 impl Memory for MachineMemory {
     fn r8(&mut self, addr: u32) -> u8 {
         self.read(addr, 1) as u8
@@ -629,6 +728,10 @@ pub struct NicaiMachine {
     app_image_package: u32,
     inner_image_package: u32,
     current_image_package: u32,
+    native_app_parser: u32,
+    native_app_init: u32,
+    native_system_info: u32,
+    native_property_info: u32,
 }
 
 impl std::fmt::Debug for NicaiMachine {
@@ -658,6 +761,7 @@ impl NicaiMachine {
         let code_address = executable.code_address();
         let data_address = executable.data_address();
         let resource_package_offset = executable.resource_package_offset;
+        let resource_package_size = executable.resource_package_size;
         let rom_size = executable
             .code_image_size
             .saturating_add(executable.data_image_size)
@@ -700,7 +804,14 @@ impl NicaiMachine {
             key_down: 0,
             key_held: 0,
             resources: {
-                let native = native_package_resources(archive.bytes(), resource_package_offset);
+                let mut native = native_package_resources(archive.bytes(), resource_package_offset);
+                if native.is_empty() {
+                    native = grouped_package_resources(
+                        archive.bytes(),
+                        resource_package_offset,
+                        resource_package_size,
+                    );
+                }
                 if native.is_empty() {
                     archive
                         .sections()
@@ -732,6 +843,10 @@ impl NicaiMachine {
             app_image_package: 0,
             inner_image_package: 0,
             current_image_package: 0,
+            native_app_parser: 0,
+            native_app_init: 0,
+            native_system_info: 0,
+            native_property_info: 0,
         };
         machine.initialize_tables();
         machine.initialize_screen();
@@ -775,6 +890,12 @@ impl NicaiMachine {
             && self.executable.code_image_size as usize > self.executable.code_size
     }
 
+    fn uses_native_dispatch_abi(&self) -> bool {
+        self.executable.big_endian
+            && self.executable.preferred_code_address != 0
+            && !self.uses_fixed_manager_abi()
+    }
+
     fn initialize_screen(&mut self) {
         self.memory.w32(SCREEN_IMAGE_STRUCT, SCREEN_IMAGE);
         self.memory.w16(SCREEN_IMAGE_STRUCT + 4, 240);
@@ -792,7 +913,12 @@ impl NicaiMachine {
         self.state = MachineState::Initializing;
         let code_address = self.executable.code_address();
         let data_address = self.executable.data_address();
-        self.cpu.reg_set(Mode::User, 0, MANAGER_BASE);
+        let application_interface = if self.uses_native_dispatch_abi() {
+            NATIVE_DISPATCH_SERVICE | 1
+        } else {
+            MANAGER_BASE
+        };
+        self.cpu.reg_set(Mode::User, 0, application_interface);
         self.cpu.reg_set(Mode::User, 9, data_address);
         self.cpu
             .reg_set(Mode::User, reg::SP, STACK_BASE + STACK_SIZE as u32);
@@ -800,6 +926,17 @@ impl NicaiMachine {
         self.cpu.reg_set(Mode::User, reg::PC, code_address);
         self.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
         self.run_until_return(instruction_limit)?;
+        if self.uses_native_dispatch_abi() {
+            if self.native_app_parser == 0 {
+                self.state = MachineState::Faulted;
+                bail!("CBE initializer returned without registering a native application entry");
+            }
+            self.app_main = self.native_app_parser;
+            self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit)?;
+            self.invoke_callback(self.native_app_init, 0, 0, 0, instruction_limit)?;
+            self.state = MachineState::Ready;
+            return Ok(());
+        }
         self.app_main = self.memory.r32(MANAGER_BASE);
         self.app_exit = self.memory.r32(MANAGER_BASE + 4);
         if self.app_main == 0 {
@@ -845,7 +982,7 @@ impl NicaiMachine {
                 self.handle_service(pc)?;
             } else if self.cpu.thumb_mode() && self.memory.r16(pc) == 0xdfab {
                 self.handle_semihosting(pc)?;
-            } else if self.handle_interworking_branch(pc) {
+            } else if self.handle_thumb_add_pc(pc) || self.handle_interworking_branch(pc) {
             } else if self
                 .memory
                 .region(pc, if self.cpu.thumb_mode() { 2 } else { 4 })
@@ -868,6 +1005,19 @@ impl NicaiMachine {
 
     fn handle_thumb_blx(&mut self, pc: u32) -> bool {
         self.handle_thumb_blx_register(pc) || self.handle_thumb_blx_immediate(pc)
+    }
+
+    fn handle_thumb_add_pc(&mut self, pc: u32) -> bool {
+        if !self.cpu.thumb_mode() {
+            return false;
+        }
+        let instruction = self.memory.r16(pc);
+        let source = ((instruction >> 3) & 0x0f) as u8;
+        let Some(target) = thumb_add_pc_target(pc, instruction, self.register(source)) else {
+            return false;
+        };
+        self.cpu.reg_set(Mode::User, reg::PC, target);
+        true
     }
 
     fn handle_interworking_branch(&mut self, pc: u32) -> bool {
@@ -972,6 +1122,38 @@ impl NicaiMachine {
             self.return_from_service();
             return Ok(());
         }
+        if (FIXED_GAMEOLD_OBJECT_SERVICE..FIXED_GAMEOLD_OBJECT_SERVICE + 15 * 4).contains(&address)
+        {
+            let index = (address - FIXED_GAMEOLD_OBJECT_SERVICE) / 4;
+            self.handle_fixed_gameold_object_service(index);
+            self.return_from_service();
+            return Ok(());
+        }
+        if (FIXED_GAMEOLD_REGION_SERVICE..FIXED_GAMEOLD_REGION_SERVICE + 8 * 4).contains(&address) {
+            let index = (address - FIXED_GAMEOLD_REGION_SERVICE) / 4;
+            self.handle_fixed_gameold_region_service(index);
+            self.return_from_service();
+            return Ok(());
+        }
+        if address == NATIVE_DISPATCH_SERVICE {
+            self.handle_native_dispatch_service();
+            self.return_from_service();
+            return Ok(());
+        }
+        if (NATIVE_SYSTEM_TIME_SERVICE..NATIVE_SYSTEM_TIME_SERVICE + 6 * 4).contains(&address) {
+            let index = (address - NATIVE_SYSTEM_TIME_SERVICE) / 4;
+            let value = match index {
+                0 => 2026,
+                1 => 8,
+                2 => 7,
+                3 => 12,
+                4 => 0,
+                _ => 0,
+            };
+            self.set_result(value);
+            self.return_from_service();
+            return Ok(());
+        }
         if (MEMORY_BLOCK_SERVICE..MEMORY_BLOCK_SERVICE + 12).contains(&address) {
             let index = (address - MEMORY_BLOCK_SERVICE) / 4;
             *self.service_calls.entry((27, index)).or_default() += 1;
@@ -1059,6 +1241,14 @@ impl NicaiMachine {
             }
             22 => self.set_result(255),
             23 => self.set_result(0),
+            25 => {
+                let destination = self.register(0);
+                let capacity = self.register(1) as usize;
+                let value = b"cbe_emu\0";
+                let length = value.len().min(capacity);
+                self.memory.write_bytes(destination, &value[..length]);
+                self.set_result(0);
+            }
             30 => self.set_result(46),
             33 => self.set_result(1002),
             37 => self.set_result(1),
@@ -1068,9 +1258,9 @@ impl NicaiMachine {
             80 | 89 => self.set_result(1),
             90 => self.set_result(0),
             106 => {
-                let destination = self.register(0);
-                if destination != 0 {
-                    self.memory.w16(destination, 0);
+                let destination = self.register(1);
+                if destination != 0 && self.register(2) != 0 {
+                    self.memory.w8(destination, 0);
                 }
                 self.set_result(0);
             }
@@ -1320,7 +1510,7 @@ impl NicaiMachine {
                 }
                 self.memory
                     .w8(destination.wrapping_add(output.len() as u32), 0);
-                self.set_result(output.len() as u32);
+                self.set_result(destination);
             }
             4 => self.set_result(0),
             5 => self.set_result(self.instruction_count as u32),
@@ -1708,6 +1898,32 @@ impl NicaiMachine {
                 let result = self.create_image_from_stream(source, 0);
                 self.set_result(result);
             }
+            1 | 2 if self.uses_fixed_manager_abi() => {
+                let source = self.register(0);
+                let source_x = signed_coord(self.register(1));
+                let source_y = signed_coord(self.register(2));
+                let width = signed_coord(self.register(3));
+                let stack = self.register(reg::SP);
+                let height = signed_coord(self.memory.r32(stack));
+                let destination_x = signed_coord(self.memory.r32(stack + 4));
+                let destination_y = signed_coord(self.memory.r32(stack + 8));
+                self.blit_image(
+                    SCREEN_IMAGE_STRUCT,
+                    source,
+                    source_x,
+                    source_y,
+                    width,
+                    height,
+                    destination_x,
+                    destination_y,
+                    index == 2,
+                );
+                self.set_result(0);
+            }
+            23 => {
+                let result = self.decode_resource_stream(self.register(0));
+                self.set_result(result);
+            }
             58 => {
                 let block = self.register(0);
                 let size = self.register(1);
@@ -1722,6 +1938,35 @@ impl NicaiMachine {
                 let mask = self.register(0);
                 self.set_result(u32::from(self.key_held & mask != 0));
             }
+            14 if self.uses_fixed_manager_abi() => {
+                self.set_result(self.register(1).wrapping_add(self.register(3)));
+            }
+            15 if self.uses_fixed_manager_abi() => {
+                let image = self.register(0);
+                let height = if image == 0 {
+                    0
+                } else {
+                    self.memory.r16(image + 6) as u32
+                };
+                self.set_result(height);
+            }
+            16 if self.uses_fixed_manager_abi() => {
+                let image = self.register(0);
+                let width = if image == 0 {
+                    0
+                } else {
+                    self.memory.r16(image + 4) as u32
+                };
+                self.set_result(width);
+            }
+            17 if self.uses_fixed_manager_abi() => {
+                let red = self.register(0) as u16;
+                let green = self.register(1) as u16;
+                let blue = self.register(2) as u16;
+                self.set_result(
+                    (((red & 0xf8) << 8) | ((green & 0xfc) << 3) | ((blue & 0xf8) >> 3)) as u32,
+                );
+            }
             60 => {
                 self.pending_screen = self.register(0);
                 self.memory.w32(SCREEN_IS_IN_QUIT, 0);
@@ -1734,6 +1979,30 @@ impl NicaiMachine {
             }
             62..=65 => self.set_result(0),
             68 => self.set_result(self.key_down),
+            75 if self.uses_fixed_manager_abi() => {
+                let object = self.register(0);
+                let capacity = self.register(1) & 0xffff;
+                let scanline = self.allocate(240 * 2);
+                let resource_ids = self.allocate(capacity.saturating_mul(2).max(2));
+                let pictures = self.allocate(capacity.saturating_mul(4).max(4));
+                self.memory.w32(object, scanline);
+                self.memory.w16(object + 8, capacity as u16);
+                self.memory.w32(object + 12, resource_ids);
+                self.memory.w32(object + 16, pictures);
+                self.memory.w16(object + 20, 0);
+                for method in 0..15 {
+                    self.memory.w32(
+                        object + 0x18 + method * 4,
+                        FIXED_GAMEOLD_OBJECT_SERVICE + method * 4,
+                    );
+                }
+                self.set_result(u32::from(
+                    scanline != 0 && resource_ids != 0 && pictures != 0,
+                ));
+            }
+            79 if self.uses_fixed_manager_abi() => {
+                self.initialize_fixed_gameold_region();
+            }
             80 => {
                 self.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, 0);
                 self.memory
@@ -1815,6 +2084,227 @@ impl NicaiMachine {
                 self.initialize_data_package(package, capacity);
             }
             _ => self.set_result(0),
+        }
+    }
+
+    fn handle_fixed_gameold_object_service(&mut self, index: u32) {
+        if index == 4 {
+            let x = signed_coord(self.register(1));
+            let y = signed_coord(self.register(2));
+            let width = signed_coord(self.register(3));
+            let stack = self.register(reg::SP);
+            let height = signed_coord(self.memory.r32(stack));
+            let color = self.memory.r32(stack + 4) as u16;
+            self.fill_screen_rect(x, y, width, height, color);
+        }
+        self.set_result(0);
+    }
+
+    fn handle_fixed_gameold_region_service(&mut self, index: u32) {
+        let object = self.register(0);
+        match index {
+            0 => {
+                let slot = self.register(2);
+                if slot <= 1 {
+                    self.memory.w32(object + 0x20 + slot * 4, self.register(1));
+                }
+                self.set_result(object);
+            }
+            4 => {
+                self.memory.w32(object + 4, 0);
+                self.set_result(0);
+            }
+            5 => {
+                let rectangle = self.register(2);
+                let used = self.memory.r32(object + 4);
+                let capacity = self.memory.r32(object + 8);
+                let entries = self.memory.r32(object + 12);
+                if rectangle != 0 && entries != 0 && used < capacity {
+                    let entry = self.memory.r32(entries + used * 4);
+                    if entry != 0 {
+                        for offset in (0..8).step_by(2) {
+                            let value = self.memory.r16(rectangle + offset);
+                            self.memory.w16(entry + offset, value);
+                        }
+                        self.memory.w32(object + 4, used + 1);
+                    }
+                }
+                self.set_result(0);
+            }
+            _ => self.set_result(0),
+        }
+    }
+
+    fn initialize_fixed_gameold_region(&mut self) {
+        let object = self.register(0);
+        let first_bounds = self.register(1);
+        let second_bounds = self.register(2);
+        let owner_a = self.register(3);
+        let stack = self.register(reg::SP);
+        let owner_b = self.memory.r32(stack);
+        let capacity = self.memory.r32(stack + 4);
+        let entries = self.allocate(capacity.saturating_mul(4).max(4));
+        for index in 0..capacity {
+            let rectangle = self.allocate(8);
+            self.memory.w32(entries + index * 4, rectangle);
+        }
+        self.memory.w32(object + 4, 0);
+        self.memory.w32(object + 8, capacity);
+        self.memory.w32(object + 12, entries);
+        self.memory.w32(object + 16, owner_a);
+        self.memory.w32(object + 20, owner_b);
+        self.memory.w32(object + 24, first_bounds);
+        self.memory.w32(object + 28, second_bounds);
+        self.memory.w32(object + 32, 0);
+        self.memory.w32(object + 36, 0);
+        for method in 0..8 {
+            self.memory.w32(
+                object + 0x28 + method * 4,
+                FIXED_GAMEOLD_REGION_SERVICE + method * 4,
+            );
+        }
+        if capacity != 0 {
+            let first = self.memory.r32(entries);
+            self.memory.w32(first, first_bounds);
+            self.memory.w32(first + 4, second_bounds);
+            self.memory.w32(object + 4, 1);
+        }
+        self.set_result(u32::from(entries != 0));
+    }
+
+    fn handle_native_dispatch_service(&mut self) {
+        let id = self.register(0);
+        let argument = self.register(1);
+        let code_start = self.executable.code_address();
+        let code_end = code_start.saturating_add(self.executable.code_image_size);
+        let data_start = self.executable.data_address();
+        let data_end = data_start.saturating_add(self.executable.data_image_size);
+        if (code_start..code_end).contains(&id)
+            || (data_start..data_end).contains(&id)
+            || (HEAP_BASE..HEAP_BASE + HEAP_SIZE as u32).contains(&id)
+        {
+            self.set_result(0);
+            return;
+        }
+        match id {
+            0x79e => {
+                if argument != 0 {
+                    self.native_app_parser = self.memory.r32(argument);
+                    self.native_app_init = self.memory.r32(argument + 4);
+                    self.memory.w32(argument + 8, NATIVE_DISPATCH_SERVICE | 1);
+                }
+                self.set_result(NATIVE_DISPATCH_SERVICE | 1);
+            }
+            0x52 => {
+                if argument != 0 {
+                    self.memory
+                        .w32(self.executable.data_address() + 0x1724, argument);
+                }
+                self.set_result(0);
+            }
+            0x8e | 0x8f | 0x97 | 0xac | 0x421 | 0x41a => self.set_result(id),
+            0x3ed => {
+                if argument != 0 {
+                    self.memory.w8(argument, 0);
+                }
+                self.set_result(0);
+            }
+            0x3ec | 0x3ee => {
+                if argument != 0 {
+                    for offset in 0..4 {
+                        self.memory.w8(argument + offset, 0);
+                    }
+                }
+                self.set_result(0);
+            }
+            0x7d1 => {
+                self.handle_native_interface_request(argument);
+                self.set_result(0);
+            }
+            _ => self.set_result(0),
+        }
+    }
+
+    fn handle_native_interface_request(&mut self, argument: u32) {
+        if argument == 0 {
+            return;
+        }
+        let output = self.memory.r32(argument);
+        let handle = self.memory.r32(argument + 4);
+        let size = self.memory.r32(argument + 8);
+        if output == 0 || size < 4 {
+            return;
+        }
+        self.memory.w32(output, 0);
+        match handle {
+            0x8f => {
+                if self.native_system_info == 0 {
+                    self.native_system_info = self.allocate(0x400);
+                    let info = self.native_system_info;
+                    self.memory
+                        .w32(info + 0x9c, SERVICE_BASE + TABLE_STRIDE * 2 + 13 * 4);
+                    self.memory
+                        .w32(info + 0xa0, SERVICE_BASE + TABLE_STRIDE * 2 + 14 * 4);
+                    self.memory
+                        .w32(info + 0x24, SERVICE_BASE + TABLE_STRIDE * 4 + 9 * 4);
+                    self.memory
+                        .w32(info + 0x58, SERVICE_BASE + TABLE_STRIDE * 4 + 19 * 4);
+                    self.memory
+                        .w32(info + 0x70, SERVICE_BASE + TABLE_STRIDE * 4 + 5 * 4);
+                    self.memory
+                        .w32(info + 0x74, SERVICE_BASE + TABLE_STRIDE * 4 + 5 * 4);
+                    self.memory
+                        .w32(info + 0x78, SERVICE_BASE + TABLE_STRIDE * 4 + 6 * 4);
+                    self.memory
+                        .w32(info + 0x20c, SERVICE_BASE + TABLE_STRIDE * 6);
+                    self.memory
+                        .w32(info + 0x210, SERVICE_BASE + TABLE_STRIDE * 6 + 4);
+                    self.memory
+                        .w32(info + 0x214, SERVICE_BASE + TABLE_STRIDE * 6 + 8);
+                    self.memory
+                        .w32(info + 0x22c, SERVICE_BASE + TABLE_STRIDE * 6 + 8 * 4);
+                    for (offset, index) in [
+                        (0xa4, 2),
+                        (0xa8, 1),
+                        (0xac, 0),
+                        (0xb0, 3),
+                        (0xb4, 4),
+                        (0xb8, 5),
+                    ] {
+                        self.memory
+                            .w32(info + offset, NATIVE_SYSTEM_TIME_SERVICE + index * 4);
+                    }
+                    self.memory.w32(info + 0xf0, NATIVE_DISPATCH_SERVICE | 1);
+                }
+                self.memory.w32(output, self.native_system_info);
+            }
+            0x8e => {
+                if self.native_property_info == 0 {
+                    self.native_property_info = self.allocate(0x100);
+                    self.memory.w32(
+                        self.native_property_info + 0x14,
+                        NATIVE_DISPATCH_SERVICE | 1,
+                    );
+                }
+                self.memory.w32(output, self.native_property_info);
+            }
+            0x41a => self.memory.w32(output, u32::MAX),
+            _ => {}
+        }
+    }
+
+    fn fill_screen_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: u16) {
+        let left = x.clamp(0, 240);
+        let top = y.clamp(0, 400);
+        let right = x.saturating_add(width).clamp(0, 240);
+        let bottom = y.saturating_add(height).clamp(0, 400);
+        for screen_y in top..bottom {
+            for screen_x in left..right {
+                self.memory.w16(
+                    SCREEN_IMAGE + (screen_y as u32 * 240 + screen_x as u32) * 2,
+                    color,
+                );
+            }
         }
     }
 
@@ -2097,7 +2587,7 @@ impl NicaiMachine {
                         r0,
                         signed_coord(self.register(1)),
                         signed_coord(self.register(2)),
-                        self.memory.r16(self.register(reg::SP) + 4),
+                        self.memory.r32(self.register(reg::SP) + 4) as u16,
                     )
                 } else {
                     (
@@ -2123,7 +2613,21 @@ impl NicaiMachine {
                 self.set_result(1);
             }
             19 => {
-                self.draw_rect(true, false);
+                let x = signed_coord(self.register(0));
+                let y = signed_coord(self.register(1));
+                let width = signed_coord(self.register(2));
+                let height = signed_coord(self.register(3));
+                if self.register(0) <= u16::MAX as u32
+                    && (-239..240).contains(&x)
+                    && (-399..400).contains(&y)
+                    && (-239..=240).contains(&width)
+                    && (-399..=400).contains(&height)
+                {
+                    let color = self.memory.r32(self.register(reg::SP)) as u16;
+                    self.fill_screen_rect(x, y, width, height, color);
+                } else {
+                    self.draw_rect(true, false);
+                }
                 self.set_result(1);
             }
             22 => {
@@ -2283,6 +2787,17 @@ impl NicaiMachine {
             || decoded.height > u16::MAX as u32
         {
             return 0;
+        }
+        if service_trace_enabled(4, 49) {
+            let opaque = decoded
+                .data
+                .chunks_exact(4)
+                .filter(|pixel| pixel[3] >= 128)
+                .count();
+            eprintln!(
+                "image resource {} decoded={}x{} opaque={opaque}",
+                host_resource.name, decoded.width, decoded.height
+            );
         }
         let pitch = decoded.width.next_multiple_of(4);
         let pixels = self.allocate(pitch.saturating_mul(decoded.height).saturating_mul(2));
@@ -2503,7 +3018,7 @@ impl NicaiMachine {
         };
         let stack = self.register(reg::SP);
         let mut height = signed_coord(self.memory.r32(stack));
-        let color = self.memory.r16(stack + 4);
+        let color = self.memory.r32(stack + 4) as u16;
         let mut pixels = self.memory.r32(destination);
         let mut destination_width = self.memory.r16(destination + 4) as i32;
         let mut destination_height = self.memory.r16(destination + 6) as i32;
@@ -2892,6 +3407,9 @@ impl NicaiMachine {
         if self.state != MachineState::Ready {
             bail!("CBE machine is not ready");
         }
+        if self.uses_native_dispatch_abi() {
+            return self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit);
+        }
         if self.pending_screen != 0 && self.pending_screen != self.active_screen {
             self.active_screen = self.pending_screen;
             self.screen_initialized = false;
@@ -3045,6 +3563,19 @@ mod tests {
     }
 
     #[test]
+    fn thumb_add_pc_preserves_halfword_aligned_program_counter() {
+        assert_eq!(
+            thumb_add_pc_target(0x0100_112c, 0x449f, 0x18),
+            Some(0x0100_1148)
+        );
+        assert_eq!(
+            thumb_add_pc_target(0x0100_81e6, 0x449f, 0x20),
+            Some(0x0100_820a)
+        );
+        assert_eq!(thumb_add_pc_target(0x1000, 0x4478, 4), None);
+    }
+
+    #[test]
     fn manager_initializers_use_firmware_table_lengths() {
         assert_eq!(manager_initializer_count(0), Some(30));
         assert_eq!(manager_initializer_count(18), Some(115));
@@ -3074,6 +3605,26 @@ mod tests {
         data[36..39].copy_from_slice(&[0x11, 0x22, 0x33]);
 
         let resources = native_package_resources(&data, 0);
+        assert_eq!(resources.len(), 2);
+        assert_eq!(resources[0].name, "a");
+        assert_eq!(resources[0].data, [0x11]);
+        assert_eq!(resources[1].name, "b");
+        assert_eq!(resources[1].data, [0x22, 0x33]);
+    }
+
+    #[test]
+    fn parses_grouped_data_package_resources() {
+        let mut data = vec![0u8; 39];
+        data[0..4].copy_from_slice(&8u32.to_le_bytes());
+        data[12..16].copy_from_slice(&20u32.to_le_bytes());
+        data[16..20].copy_from_slice(&3u32.to_le_bytes());
+        data[20..24].copy_from_slice(&2u32.to_le_bytes());
+        data[24..28].copy_from_slice(&0u32.to_le_bytes());
+        data[28..32].copy_from_slice(&1u32.to_le_bytes());
+        data[32..36].copy_from_slice(&[1, b'a', 1, b'b']);
+        data[36..39].copy_from_slice(&[0x11, 0x22, 0x33]);
+
+        let resources = grouped_package_resources(&data, 0, data.len());
         assert_eq!(resources.len(), 2);
         assert_eq!(resources[0].name, "a");
         assert_eq!(resources[0].data, [0x11]);

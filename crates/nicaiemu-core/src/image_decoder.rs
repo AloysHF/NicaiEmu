@@ -31,6 +31,12 @@ pub fn decode_image(data: &[u8]) -> Result<DecodedImage> {
         anyhow::bail!("Empty image data");
     }
 
+    if data.starts_with(b"\x89PNGGAME") {
+        debug!("Decoding firmware PNG");
+        let normalized = normalize_firmware_png(data)?;
+        return decode_standard_image(&normalized);
+    }
+
     if image::guess_format(data).is_ok() {
         debug!("Decoding standard image");
         return decode_standard_image(data);
@@ -39,6 +45,72 @@ pub fn decode_image(data: &[u8]) -> Result<DecodedImage> {
     // CBE custom format: 8-byte metadata + RGB565 palette + GIF blocks
     debug!("Attempting CBE custom GIF format");
     decode_cbe_gif(data)
+}
+
+fn normalize_firmware_png(data: &[u8]) -> Result<Vec<u8>> {
+    const FIRMWARE_SIGNATURE: &[u8; 8] = b"\x89PNGGAME";
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if !data.starts_with(FIRMWARE_SIGNATURE) {
+        anyhow::bail!("Invalid firmware PNG signature");
+    }
+
+    let mut normalized = Vec::with_capacity(data.len() + 1024);
+    normalized.extend_from_slice(PNG_SIGNATURE);
+    let mut position = 8usize;
+    while position + 8 <= data.len() {
+        let declared_length = u32::from_be_bytes(
+            data[position..position + 4]
+                .try_into()
+                .context("Firmware PNG chunk length is truncated")?,
+        ) as usize;
+        let chunk_type = &data[position + 4..position + 8];
+        let is_palette = chunk_type == b"PLTE";
+        let source_length = if is_palette {
+            (declared_length / 3) * 2
+        } else {
+            declared_length
+        };
+        let chunk_end = position
+            .checked_add(8 + source_length + 4)
+            .context("Firmware PNG chunk length overflow")?;
+        if chunk_end > data.len() {
+            anyhow::bail!("Firmware PNG chunk is truncated");
+        }
+
+        normalized.extend_from_slice(&(declared_length as u32).to_be_bytes());
+        normalized.extend_from_slice(chunk_type);
+        if is_palette {
+            if !declared_length.is_multiple_of(3) {
+                anyhow::bail!("Firmware PNG palette length is invalid");
+            }
+            let palette = &data[position + 8..position + 8 + source_length];
+            for color in palette.chunks_exact(2) {
+                let (red, green, blue) = rgb565_to_rgb888(u16::from_be_bytes([color[0], color[1]]));
+                normalized.extend_from_slice(&[red, green, blue]);
+            }
+            let crc_start = normalized.len() - declared_length - 4;
+            let crc = png_crc32(&normalized[crc_start..]);
+            normalized.extend_from_slice(&crc.to_be_bytes());
+        } else {
+            normalized.extend_from_slice(&data[position + 8..chunk_end]);
+        }
+        position = chunk_end;
+        if chunk_type == b"IEND" {
+            return Ok(normalized);
+        }
+    }
+    anyhow::bail!("Firmware PNG has no IEND chunk")
+}
+
+fn png_crc32(data: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in data {
+        crc ^= *byte as u32;
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    crc ^ u32::MAX
 }
 
 /// Decode an image format supported by the image crate.
@@ -165,5 +237,24 @@ mod tests {
         assert!(r >= 252);
         assert!(g >= 252);
         assert!(b >= 252);
+    }
+
+    #[test]
+    fn normalizes_firmware_png_palette() {
+        let mut encoded = b"\x89PNGGAME".to_vec();
+        encoded.extend_from_slice(&6u32.to_be_bytes());
+        encoded.extend_from_slice(b"PLTE");
+        encoded.extend_from_slice(&0xf800u16.to_be_bytes());
+        encoded.extend_from_slice(&0x07e0u16.to_be_bytes());
+        encoded.extend_from_slice(&[0; 4]);
+        encoded.extend_from_slice(&0u32.to_be_bytes());
+        encoded.extend_from_slice(b"IEND");
+        encoded.extend_from_slice(&[0xae, 0x42, 0x60, 0x82]);
+
+        let normalized = normalize_firmware_png(&encoded).unwrap();
+
+        assert!(normalized.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(&normalized[16..22], &[255, 0, 0, 0, 255, 0]);
+        assert!(normalized.ends_with(&[0xae, 0x42, 0x60, 0x82]));
     }
 }

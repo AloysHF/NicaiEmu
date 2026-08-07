@@ -4,10 +4,10 @@ NicaiEmu executes native CBE applications instead of replacing their game logic 
 
 ## Boot flow
 
-1. `CbeArchive` scans resource-package sections and records resource names and ranges.
+1. `CbeArchive` scans flat, grouped, and nested resource-package sections and records resource names and ranges.
 2. `CbeExecutable` validates the executable header, segment bounds, checksums, and guest byte order.
 3. `NicaiMachine` maps code, initialized data, stack, heap, manager tables, and service trampolines into the guest address space.
-4. The ARM/Thumb interpreter runs the application initializer and entry point.
+4. The ARM/Thumb interpreter runs the application initializer and entry point, including interworking branches and compiler-generated PC-relative jump tables.
 5. Each frontend frame invokes the active screen's logic and render callbacks.
 
 ## Guest memory
@@ -31,7 +31,7 @@ Unsupported service entries currently return a neutral value. Service usage coun
 
 ## Rendering
 
-The guest owns a 240×400 RGB565 screen. Image resources are reconstructed from the CBE GIF variant, decoded, and copied into guest image objects. The desktop frontend converts the completed screen to 32-bit RGB for `minifb`. Text is decoded as GBK and rasterized from an embedded Unicode font, so the core does not depend on host fonts.
+The guest owns a 240×400 RGB565 screen. Image resources are reconstructed from the CBE GIF variant or firmware PNG representation, decoded, and copied into guest image objects. The desktop frontend converts the completed screen to 32-bit RGB for `minifb`. Text is decoded as GBK and rasterized from an embedded Unicode font, so the core does not depend on host fonts.
 
 ## Headless execution
 

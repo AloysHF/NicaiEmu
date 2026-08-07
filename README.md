@@ -5,9 +5,9 @@ NicaiEmu is a Rust emulator for ARM/Thumb CBE applications used by Nicai/MStar m
 ## Current capabilities
 
 - Little- and big-endian CBE executable header, segment, checksum, section, and resource parsing
-- ARM and Thumb guest execution, including Thumb BLX instructions used by CBE applications
+- ARM and Thumb guest execution, including interworking branches and PC-relative jump tables
 - Firmware-style service tables for memory, resource, display, input, data streams, and formatted strings
-- CBE RGB565 GIF reconstruction and clipped image drawing
+- CBE RGB565 GIF and firmware PNG reconstruction with clipped image drawing
 - GBK text decoding with an embedded Unicode bitmap font
 - 240×400 RGB565 framebuffer and a resizable desktop window
 - Scriptable headless execution for deterministic compatibility testing
