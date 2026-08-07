@@ -1,4 +1,19 @@
-# NicaiEmu
+# NicaiEmu — A Nicai/MStar CBE game emulator written in Rust
+
+<p align="center">
+  <img src="res/logo-banner.png" alt="NicaiEmu" width="600">
+</p>
+
+<p align="center">
+  <a href="https://jiangxincode.github.io/NicaiEmu/"><img src="https://img.shields.io/badge/Website-NicaiEmu-E8553A?logo=githubpages&logoColor=white" alt="Website"></a>
+  <a href="https://github.com/jiangxincode/NicaiEmu/actions/workflows/ci.yml"><img src="https://github.com/jiangxincode/NicaiEmu/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/jiangxincode/NicaiEmu/releases/latest"><img src="https://img.shields.io/github/v/release/jiangxincode/NicaiEmu" alt="Release"></a>
+  <a href="https://github.com/jiangxincode/NicaiEmu/releases"><img src="https://img.shields.io/github/downloads/jiangxincode/NicaiEmu/total" alt="Downloads"></a>
+  <a href="https://sonarcloud.io/dashboard?id=jiangxincode_NicaiEmu"><img src="https://sonarcloud.io/api/project_badges/measure?project=jiangxincode_NicaiEmu&metric=alert_status" alt="Quality Gate Status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-BSD%203--Clause-blue.svg" alt="License: BSD 3-Clause"></a>
+  <a href="https://discord.gg/7XDdSrYD"><img src="https://img.shields.io/badge/Discord-Join%20Us-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://qm.qq.com/q/LAO7DKAWUC"><img src="https://img.shields.io/badge/QQ%E7%BE%A4-Join%20Us-12B7F5?logo=tencent-qq&logoColor=white" alt="QQ Group"></a>
+</p>
 
 NicaiEmu is a Rust emulator for ARM/Thumb CBE applications used by Nicai/MStar mobile phones. It loads the executable and packaged resources directly, runs guest code through a pure-Rust ARM core, and bridges the phone services needed by supported games.
 
@@ -111,4 +126,4 @@ Game files are not included. Supply legally obtained CBE applications separately
 
 ## License
 
-BSD-3-Clause
+This project is licensed under the [BSD 3-Clause License](LICENSE).
