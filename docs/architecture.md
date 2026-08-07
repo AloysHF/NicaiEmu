@@ -5,14 +5,14 @@ NicaiEmu executes native CBE applications instead of replacing their game logic 
 ## Boot flow
 
 1. `CbeArchive` scans resource-package sections and records resource names and ranges.
-2. `CbeExecutable` validates the executable header, segment bounds, and checksums.
+2. `CbeExecutable` validates the executable header, segment bounds, checksums, and guest byte order.
 3. `NicaiMachine` maps code, initialized data, stack, heap, manager tables, and service trampolines into the guest address space.
 4. The ARM/Thumb interpreter runs the application initializer and entry point.
 5. Each frontend frame invokes the active screen's logic and render callbacks.
 
 ## Guest memory
 
-The machine uses checked sparse regions rather than reserving the entire 32-bit address space. Code is read-only. Initialized data, stack, heap, service-manager state, and framebuffer storage are writable. Unmapped accesses are recorded for diagnostics, and an unmapped instruction fetch stops execution with an error.
+The machine uses checked sparse regions rather than reserving the entire 32-bit address space. Guest reads and writes honor the executable's byte order. Initialized data, stack, heap, service-manager state, and framebuffer storage are writable. Unmapped accesses are recorded for diagnostics, and an unmapped instruction fetch stops execution with an error.
 
 ## Service bridge
 
@@ -36,3 +36,5 @@ The guest owns a 240×400 RGB565 screen. Image resources are reconstructed from 
 ## Headless execution
 
 `cbe_boot` loads the same archive and machine used by the desktop frontend. It can schedule phone-key presses at exact frames, run a fixed number of callbacks, print machine diagnostics, and save a screenshot. This is the preferred path for deterministic runtime regression checks.
+
+The desktop screenshot mode preserves the last framebuffer produced before a guest callback error. It only writes a PNG when guest execution has produced a framebuffer with more than one color; blank frames and startup failures are reported without creating a screenshot.

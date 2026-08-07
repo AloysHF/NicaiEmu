@@ -31,12 +31,9 @@ pub fn decode_image(data: &[u8]) -> Result<DecodedImage> {
         anyhow::bail!("Empty image data");
     }
 
-    // Check if it's a standard GIF (GIF87a or GIF89a)
-    let is_standard_gif = data.len() >= 6 && (data[..6] == *b"GIF89a" || data[..6] == *b"GIF87a");
-
-    if is_standard_gif {
-        debug!("Decoding standard GIF");
-        return decode_standard_gif(data);
+    if image::guess_format(data).is_ok() {
+        debug!("Decoding standard image");
+        return decode_standard_image(data);
     }
 
     // CBE custom format: 8-byte metadata + RGB565 palette + GIF blocks
@@ -44,9 +41,9 @@ pub fn decode_image(data: &[u8]) -> Result<DecodedImage> {
     decode_cbe_gif(data)
 }
 
-/// Decode a standard GIF image
-fn decode_standard_gif(data: &[u8]) -> Result<DecodedImage> {
-    let img = image::load_from_memory(data).context("Failed to decode standard GIF")?;
+/// Decode an image format supported by the image crate.
+fn decode_standard_image(data: &[u8]) -> Result<DecodedImage> {
+    let img = image::load_from_memory(data).context("Failed to decode standard image")?;
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
     Ok(DecodedImage {

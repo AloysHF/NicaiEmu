@@ -19,7 +19,10 @@ const MANAGER_BASE: u32 = 0x0a00_0000;
 const MANAGER_SIZE: usize = 0x10_0000;
 const SERVICE_BASE: u32 = 0x0c00_0000;
 const SERVICE_SIZE: u32 = 0x10_0000;
+const LOG_NOOP_SERVICE: u32 = SERVICE_BASE + SERVICE_SIZE - 4;
 const EXIT_ADDRESS: u32 = 0x0f00_0000;
+const FIXED_MANAGER_INIT: u32 = SERVICE_BASE + 0xe000;
+const FIXED_MANAGER_DIRECTORY: u32 = MANAGER_BASE + 0xa000;
 
 const TABLE_STRIDE: u32 = 0x400;
 const MEMORY_BLOCK_POOL: u32 = HEAP_BASE + 0x40_0000;
@@ -30,6 +33,29 @@ const DREAM_FACTORY_MEMORY_BLOCK_SLOT: u32 = MANAGER_BASE + 0x7ff4;
 const SCREEN_IMAGE_STRUCT: u32 = MEMORY_BLOCK_PTR + 0x408;
 const SCREEN_IMAGE: u32 = SCREEN_IMAGE_STRUCT + 24;
 const SCREEN_IS_IN_QUIT: u32 = MANAGER_BASE + 0x7fe0;
+
+fn fixed_manager_specs() -> &'static [(u32, u32, u32)] {
+    &[
+        (0x00, 5, 0x60 / 4),
+        (0x08, 4, 0xfc / 4),
+        (0x10, 7, 0x18 / 4),
+        (0x18, 8, 0x3c / 4),
+        (0x20, 2, 0x48 / 4),
+        (0x28, 12, 0x40 / 4),
+        (0x30, 14, 0x2c / 4),
+        (0x38, 9, 0x1c / 4),
+        (0x40, 13, 0x30 / 4),
+        (0x48, 1, 0x6c / 4),
+        (0x50, 15, 0x58 / 4),
+        (0x58, 16, 0xa0 / 4),
+        (0x60, 10, 0xa0 / 4),
+        (0x68, 11, 0x3c / 4),
+        (0x70, 17, 0xf0 / 4),
+        (0x78, 18, 0x24 / 4),
+        (0x80, 3, 0x27c / 4),
+        (0x8c, 19, 0x1c / 4),
+    ]
+}
 
 /// Executable image metadata stored at the beginning of a CBE file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,19 +116,37 @@ impl CbeExecutable {
         let embedded_package_size = read_be(segment_header + 56)? as usize;
         let embedded_checksum = read_be(segment_header + 68)?;
 
-        let mut cursor = 0x98;
-        let code_offset = cursor;
+        let mut cursor = segment_header
+            .checked_add(6 * 12)
+            .context("CBE executable header size overflow")?;
+        let (code_offset, big_endian) =
+            locate_checked_segment(data, cursor, code_size, code_checksum, None, "code")?;
+        cursor = code_offset;
         cursor = checked_advance(cursor, code_size, data.len(), "code")?;
-        cursor = skip_marker(data, cursor)?;
-        let data_offset = cursor;
+        let (data_offset, _) = locate_checked_segment(
+            data,
+            cursor,
+            initialized_data_size,
+            data_checksum,
+            Some(big_endian),
+            "initialized data",
+        )?;
+        cursor = data_offset;
         cursor = checked_advance(
             cursor,
             initialized_data_size,
             data.len(),
             "initialized data",
         )?;
-        cursor = skip_marker(data, cursor)?;
-        let embedded_package_offset = cursor;
+        let (embedded_package_offset, _) = locate_checked_segment(
+            data,
+            cursor,
+            embedded_package_size,
+            embedded_checksum,
+            Some(big_endian),
+            "embedded package",
+        )?;
+        cursor = embedded_package_offset;
         cursor = checked_advance(
             cursor,
             embedded_package_size,
@@ -120,25 +164,6 @@ impl CbeExecutable {
             data.len(),
             "resource package",
         )?;
-
-        let code = &data[code_offset..code_offset + code_size];
-        let initialized = &data[data_offset..data_offset + initialized_data_size];
-        let embedded =
-            &data[embedded_package_offset..embedded_package_offset + embedded_package_size];
-        let little_matches = checksum_le(code) == code_checksum;
-        let big_matches = checksum_be(code) == code_checksum;
-        let big_endian = match (little_matches, big_matches) {
-            (true, _) => false,
-            (false, true) => true,
-            _ => bail!("CBE code checksum mismatch"),
-        };
-        let checksum = if big_endian { checksum_be } else { checksum_le };
-        if checksum(initialized) != data_checksum {
-            bail!("CBE initialized-data checksum mismatch");
-        }
-        if checksum(embedded) != embedded_checksum {
-            bail!("CBE embedded-package checksum mismatch");
-        }
 
         Ok(Self {
             preferred_code_address,
@@ -184,12 +209,51 @@ fn checked_advance(cursor: usize, size: usize, file_size: usize, name: &str) -> 
     Ok(end)
 }
 
+fn locate_checked_segment(
+    data: &[u8],
+    separator_start: usize,
+    size: usize,
+    expected_checksum: u32,
+    big_endian: Option<bool>,
+    name: &str,
+) -> Result<(usize, bool)> {
+    let mut separator_end = separator_start;
+    while data.get(separator_end) == Some(&0xfe) {
+        separator_end += 1;
+    }
+    let separator_len = separator_end.saturating_sub(separator_start);
+    if separator_len < 8 {
+        bail!("missing CBE segment separator at 0x{separator_start:X}");
+    }
+
+    let candidates = if size == 0 {
+        separator_len..=separator_len
+    } else {
+        8..=separator_len
+    };
+    for separator_size in candidates {
+        let offset = separator_start + separator_size;
+        let Some(segment) = data.get(offset..offset.saturating_add(size)) else {
+            continue;
+        };
+        match big_endian {
+            Some(true) if checksum_be(segment) == expected_checksum => return Ok((offset, true)),
+            Some(false) if checksum_le(segment) == expected_checksum => return Ok((offset, false)),
+            None if checksum_le(segment) == expected_checksum => return Ok((offset, false)),
+            None if checksum_be(segment) == expected_checksum => return Ok((offset, true)),
+            _ => {}
+        }
+    }
+
+    bail!("CBE {name} checksum mismatch")
+}
+
 fn skip_marker(data: &[u8], mut cursor: usize) -> Result<usize> {
     let start = cursor;
     while data.get(cursor) == Some(&0xfe) {
         cursor += 1;
     }
-    if cursor == start {
+    if cursor.saturating_sub(start) < 8 {
         bail!("missing CBE segment separator at 0x{start:X}");
     }
     Ok(cursor)
@@ -209,6 +273,27 @@ fn checksum_be(data: &[u8]) -> u32 {
 
 fn signed_coord(value: u32) -> i32 {
     value as u16 as i16 as i32
+}
+
+fn ascii_uppercase(value: u16) -> u16 {
+    if (b'a' as u16..=b'z' as u16).contains(&value) {
+        value - (b'a' - b'A') as u16
+    } else {
+        value
+    }
+}
+
+fn image_payload(resource: &[u8]) -> &[u8] {
+    if resource.first() == Some(&3)
+        && resource.len() > 9
+        && image::guess_format(&resource[9..]).is_ok()
+    {
+        &resource[9..]
+    } else if matches!(resource.first(), Some(1 | 3)) {
+        &resource[1..]
+    } else {
+        resource
+    }
 }
 
 fn clip_axis(
@@ -262,13 +347,15 @@ struct Region {
 struct MachineMemory {
     regions: Vec<Region>,
     bad_accesses: BTreeSet<u32>,
+    big_endian: bool,
 }
 
 impl MachineMemory {
-    fn new() -> Self {
+    fn new(big_endian: bool) -> Self {
         Self {
             regions: Vec::new(),
             bad_accesses: BTreeSet::new(),
+            big_endian,
         }
     }
 
@@ -327,8 +414,13 @@ impl MachineMemory {
         if let Some(region) = self.region(address, size) {
             let offset = (address - region.base) as usize;
             let mut bytes = [0u8; 4];
-            bytes[..size].copy_from_slice(&region.data[offset..offset + size]);
-            u32::from_le_bytes(bytes)
+            if self.big_endian {
+                bytes[4 - size..].copy_from_slice(&region.data[offset..offset + size]);
+                u32::from_be_bytes(bytes)
+            } else {
+                bytes[..size].copy_from_slice(&region.data[offset..offset + size]);
+                u32::from_le_bytes(bytes)
+            }
         } else {
             self.bad_accesses.insert(address);
             0
@@ -336,13 +428,24 @@ impl MachineMemory {
     }
 
     fn write(&mut self, address: u32, value: u32, size: usize) {
+        let big_endian = self.big_endian;
         if let Some(region) = self.region_mut(address, size) {
             if region.read_only {
                 self.bad_accesses.insert(address);
                 return;
             }
             let offset = (address - region.base) as usize;
-            region.data[offset..offset + size].copy_from_slice(&value.to_le_bytes()[..size]);
+            let bytes = if big_endian {
+                value.to_be_bytes()
+            } else {
+                value.to_le_bytes()
+            };
+            let source = if big_endian {
+                &bytes[4 - size..]
+            } else {
+                &bytes[..size]
+            };
+            region.data[offset..offset + size].copy_from_slice(source);
         } else {
             self.bad_accesses.insert(address);
         }
@@ -353,6 +456,88 @@ impl MachineMemory {
 struct HostResource {
     name: String,
     data: Vec<u8>,
+}
+
+fn native_package_resources(data: &[u8], start: usize) -> Vec<HostResource> {
+    let read_u32 = |offset: usize| {
+        data.get(offset..offset + 4)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u32::from_le_bytes)
+    };
+    let Some(header_size) = read_u32(start).map(|value| value as usize) else {
+        return Vec::new();
+    };
+    if header_size < 8 || read_u32(start + 8) != Some(1) {
+        return Vec::new();
+    }
+    let Some(metadata_size) = read_u32(start + 12).map(|value| value as usize) else {
+        return Vec::new();
+    };
+    let metadata_start = start + 16;
+    let Some(data_size) = read_u32(metadata_start).map(|value| value as usize) else {
+        return Vec::new();
+    };
+    let Some(count) = read_u32(metadata_start + 4).map(|value| value as usize) else {
+        return Vec::new();
+    };
+    if !(1..=10_000).contains(&count) {
+        return Vec::new();
+    }
+    let Some(data_start) = metadata_start.checked_add(metadata_size) else {
+        return Vec::new();
+    };
+    if data_start
+        .checked_add(data_size)
+        .is_none_or(|end| end > data.len())
+    {
+        return Vec::new();
+    }
+
+    let mut offsets = Vec::with_capacity(count);
+    let mut cursor = metadata_start + 8;
+    for _ in 0..count {
+        let Some(offset) = read_u32(cursor).map(|value| value as usize) else {
+            return Vec::new();
+        };
+        if offset > data_size || offsets.last().is_some_and(|previous| *previous > offset) {
+            return Vec::new();
+        }
+        offsets.push(offset);
+        cursor += 4;
+    }
+
+    let mut names = Vec::with_capacity(count);
+    for _ in 0..count {
+        let Some(&length) = data.get(cursor) else {
+            return Vec::new();
+        };
+        let length = length as usize;
+        let Some(end) = cursor.checked_add(1 + length) else {
+            return Vec::new();
+        };
+        let Some(name) = data.get(cursor + 1..end) else {
+            return Vec::new();
+        };
+        names.push(String::from_utf8_lossy(name).into_owned());
+        cursor = end;
+    }
+    if cursor > data_start {
+        return Vec::new();
+    }
+
+    names
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, name)| {
+            let resource_start = data_start.checked_add(offsets[index])?;
+            let resource_end =
+                data_start.checked_add(offsets.get(index + 1).copied().unwrap_or(data_size))?;
+            (resource_start <= resource_end && resource_end <= data.len()).then(|| HostResource {
+                name,
+                data: data[resource_start..resource_end].to_vec(),
+            })
+        })
+        .collect()
 }
 
 impl Memory for MachineMemory {
@@ -386,11 +571,13 @@ pub struct NicaiMachine {
     app_main: u32,
     app_exit: u32,
     service_calls: HashMap<(u32, u32), u64>,
+    recent_services: VecDeque<(u32, u32, u32, u32)>,
     instruction_count: u64,
     last_pc: u32,
     recent_pcs: VecDeque<u32>,
     pending_screen: u32,
     active_screen: u32,
+    screen_stack: Vec<u32>,
     screen_initialized: bool,
     resource_load_pending: bool,
     key_down: u32,
@@ -416,6 +603,7 @@ impl std::fmt::Debug for NicaiMachine {
                     .map(|pc| format!("0x{pc:08X}"))
                     .collect::<Vec<_>>(),
             )
+            .field("recent_services", &self.recent_services)
             .finish()
     }
 }
@@ -423,9 +611,6 @@ impl std::fmt::Debug for NicaiMachine {
 impl NicaiMachine {
     pub fn new(archive: &CbeArchive) -> Result<Self> {
         let executable = CbeExecutable::parse(archive.bytes())?;
-        if executable.big_endian {
-            bail!("big-endian CBE executables are not supported by the ARM core");
-        }
         let code_address = executable.code_address();
         let data_address = executable.data_address();
         let resource_package_offset = executable.resource_package_offset;
@@ -434,7 +619,7 @@ impl NicaiMachine {
             .saturating_add(executable.data_image_size)
             .max(executable.code_size as u32)
             .next_multiple_of(0x1000) as usize;
-        let mut memory = MachineMemory::new();
+        let mut memory = MachineMemory::new(executable.big_endian);
         memory.map(code_address, rom_size, false);
         memory.map(STACK_BASE, STACK_SIZE, false);
         memory.map(HEAP_BASE, HEAP_SIZE, false);
@@ -458,35 +643,45 @@ impl NicaiMachine {
             app_main: 0,
             app_exit: 0,
             service_calls: HashMap::new(),
+            recent_services: VecDeque::with_capacity(16),
             instruction_count: 0,
             last_pc: 0,
             recent_pcs: VecDeque::with_capacity(32),
             pending_screen: 0,
             active_screen: 0,
+            screen_stack: Vec::new(),
             screen_initialized: false,
             resource_load_pending: false,
             key_down: 0,
             key_held: 0,
-            resources: archive
-                .sections()
-                .iter()
-                .find(|section| section.header.file_offset as usize + 8 == resource_package_offset)
-                .map(|section| {
-                    section
-                        .resources
+            resources: {
+                let native = native_package_resources(archive.bytes(), resource_package_offset);
+                if native.is_empty() {
+                    archive
+                        .sections()
                         .iter()
-                        .filter_map(|resource| {
-                            archive
-                                .read_resource_bytes(resource)
-                                .ok()
-                                .map(|data| HostResource {
-                                    name: resource.name.clone(),
-                                    data: data.to_vec(),
-                                })
+                        .find(|section| {
+                            section.header.file_offset as usize + 8 == resource_package_offset
                         })
-                        .collect()
-                })
-                .unwrap_or_default(),
+                        .map(|section| {
+                            section
+                                .resources
+                                .iter()
+                                .filter_map(|resource| {
+                                    archive.read_resource_bytes(resource).ok().map(|data| {
+                                        HostResource {
+                                            name: resource.name.clone(),
+                                            data: data.to_vec(),
+                                        }
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    native
+                }
+            },
             resource_data: Vec::new(),
             resource_names: Vec::new(),
         };
@@ -503,9 +698,23 @@ impl NicaiMachine {
         }
         self.memory
             .w32(MANAGER_BASE + 8, MANAGER_BASE + TABLE_STRIDE);
-        self.memory
-            .w32(MANAGER_BASE + 12, SERVICE_BASE + SERVICE_SIZE - 4);
+        self.memory.w32(MANAGER_BASE + 12, LOG_NOOP_SERVICE);
         self.memory.w32(MANAGER_BASE + 16, MANAGER_BASE + 0x9000);
+        if self.uses_fixed_manager_abi() {
+            for (index, &(offset, _, _)) in fixed_manager_specs().iter().enumerate() {
+                self.memory.w32(
+                    FIXED_MANAGER_DIRECTORY + offset,
+                    FIXED_MANAGER_INIT + index as u32 * 4,
+                );
+            }
+            self.memory.w32(MANAGER_BASE + 8, FIXED_MANAGER_DIRECTORY);
+        }
+    }
+
+    fn uses_fixed_manager_abi(&self) -> bool {
+        self.executable.big_endian
+            && self.executable.preferred_code_address != 0
+            && self.executable.code_image_size as usize > self.executable.code_size
     }
 
     fn initialize_screen(&mut self) {
@@ -556,7 +765,16 @@ impl NicaiMachine {
 
     fn run_until_return(&mut self, instruction_limit: u64) -> Result<()> {
         for _ in 0..instruction_limit {
-            let pc = self.cpu.reg_get(Mode::User, reg::PC);
+            let mut pc = self.cpu.reg_get(Mode::User, reg::PC);
+            let aligned_pc = if self.cpu.thumb_mode() {
+                pc & !1
+            } else {
+                pc & !3
+            };
+            if aligned_pc != pc {
+                pc = aligned_pc;
+                self.cpu.reg_set(Mode::User, reg::PC, pc);
+            }
             self.last_pc = pc;
             if self.recent_pcs.len() == 32 {
                 self.recent_pcs.pop_front();
@@ -659,6 +877,23 @@ impl NicaiMachine {
     }
 
     fn handle_service(&mut self, address: u32) -> Result<()> {
+        if address == LOG_NOOP_SERVICE {
+            self.return_from_service();
+            return Ok(());
+        }
+        if (FIXED_MANAGER_INIT..FIXED_MANAGER_INIT + fixed_manager_specs().len() as u32 * 4)
+            .contains(&address)
+        {
+            let index = ((address - FIXED_MANAGER_INIT) / 4) as usize;
+            let (_, group, count) = fixed_manager_specs()[index];
+            let destination = self.register(0);
+            if destination != 0 {
+                self.populate_table(destination, SERVICE_BASE + TABLE_STRIDE * group, count);
+            }
+            self.set_result(destination);
+            self.return_from_service();
+            return Ok(());
+        }
         if (MEMORY_BLOCK_SERVICE..MEMORY_BLOCK_SERVICE + 12).contains(&address) {
             let index = (address - MEMORY_BLOCK_SERVICE) / 4;
             *self.service_calls.entry((27, index)).or_default() += 1;
@@ -671,6 +906,11 @@ impl NicaiMachine {
         let index = (offset % TABLE_STRIDE) / 4;
         *self.service_calls.entry((group, index)).or_default() += 1;
         let trace_service = service_trace_enabled(group, index);
+        if self.recent_services.len() == 16 {
+            self.recent_services.pop_front();
+        }
+        self.recent_services
+            .push_back((group, index, self.register(reg::LR), self.register(0)));
         if trace_service {
             eprintln!(
                 "service group={group} index={index} r0={:08X} r1={:08X} r2={:08X} r3={:08X} lr={:08X}",
@@ -687,8 +927,13 @@ impl NicaiMachine {
             2 => self.handle_memory_service(index),
             3 => self.handle_game_service(index),
             4 => self.handle_lcd_service(index),
+            5 => self.handle_file_service(index),
             6 => self.handle_stdio_service(index),
+            7 => self.handle_timer_service(index),
             10 => self.handle_game_util_service(index),
+            11 => self.handle_df_engine_service(index),
+            13 => self.handle_ucs2_service(index),
+            14 => self.handle_screen_service(index),
             16 => self.handle_game_lcd_service(index),
             21 => self.handle_data_package_service(index),
             _ => self.set_result(0),
@@ -702,8 +947,32 @@ impl NicaiMachine {
 
     fn handle_system_service(&mut self, index: u32) {
         match index {
+            3 => self.set_result(3),
+            15 => self.set_result(1),
+            17 => {
+                let destination = self.register(0);
+                self.memory.w16(destination, b'.' as u16);
+                self.memory.w16(destination + 2, b'/' as u16);
+                self.memory.w16(destination + 4, 0);
+                self.set_result(4);
+            }
+            22 => self.set_result(255),
+            23 => self.set_result(0),
             30 => self.set_result(46),
             33 => self.set_result(1002),
+            37 => self.set_result(1),
+            47 => self.set_result(self.instruction_count as u32),
+            64 => self.set_result(0x0e),
+            65 => self.set_result(5),
+            80 | 89 => self.set_result(1),
+            90 => self.set_result(0),
+            106 => {
+                let destination = self.register(0);
+                if destination != 0 {
+                    self.memory.w16(destination, 0);
+                }
+                self.set_result(0);
+            }
             _ => self.set_result(0),
         }
     }
@@ -780,10 +1049,50 @@ impl NicaiMachine {
                 self.memory.w32(destination, pointer);
                 self.set_result(1);
             }
+            3 => {
+                let destination = self.register(0);
+                if destination != 0 {
+                    self.memory.w32(destination, 0);
+                }
+                self.set_result(0);
+            }
+            5 => {
+                let block = self.register(0);
+                let size = self.register(1);
+                self.initialize_memory_block(block, size);
+                self.set_result(block);
+            }
+            6 => {
+                let block = self.register(0);
+                let size = self.register(1);
+                let pointer = self.allocate_from_memory_block(block, size);
+                self.set_result(pointer);
+            }
+            7 => {
+                let block = self.register(0);
+                self.memory.w32(block + 4, 0);
+                self.set_result(block);
+            }
             8 => self.set_result(MEMORY_BLOCK_PTR),
             9 => {
                 self.initialize_memory_block(MEMORY_BLOCK_PTR, 0x40_0000);
                 self.set_result(MEMORY_BLOCK_PTR);
+            }
+            10 | 11 => {
+                if self.memory.r32(MEMORY_BLOCK_PTR) == 0 {
+                    self.initialize_memory_block(MEMORY_BLOCK_PTR, 0x40_0000);
+                } else {
+                    self.memory.w32(MEMORY_BLOCK_PTR + 4, 0);
+                }
+                self.set_result(MEMORY_BLOCK_PTR);
+            }
+            12 => {
+                let size = self.register(0);
+                if self.memory.r32(MEMORY_BLOCK_PTR) == 0 {
+                    self.initialize_memory_block(MEMORY_BLOCK_PTR, 0x40_0000);
+                }
+                let pointer = self.allocate_from_memory_block(MEMORY_BLOCK_PTR, size);
+                self.set_result(pointer);
             }
             13 => {
                 let size = self.register(0).max(1);
@@ -795,8 +1104,40 @@ impl NicaiMachine {
         }
     }
 
+    fn handle_file_service(&mut self, index: u32) {
+        match index {
+            3 | 17 => self.set_result(1),
+            13 | 14 => self.set_result(u32::MAX),
+            16 => self.set_result(64 * 1024 * 1024),
+            _ => self.set_result(0),
+        }
+    }
+
     fn handle_stdio_service(&mut self, index: u32) {
         match index {
+            0 => {
+                let destination = self.register(0);
+                let source = self.register(1);
+                let count = self.register(2);
+                let bytes: Vec<u8> = (0..count)
+                    .map(|offset| self.memory.r8(source + offset))
+                    .collect();
+                self.memory.write_bytes(destination, &bytes);
+                self.set_result(destination);
+            }
+            1 => {
+                let length = self.read_c_bytes(self.register(0), 0x1_0000).len() as u32;
+                self.set_result(length);
+            }
+            2 => {
+                let destination = self.register(0);
+                let value = self.register(1) as u8;
+                let count = self.register(2);
+                for offset in 0..count {
+                    self.memory.w8(destination + offset, value);
+                }
+                self.set_result(destination);
+            }
             3 => {
                 let destination = self.register(0);
                 let format = self.read_c_bytes(self.register(1), 4096);
@@ -809,6 +1150,317 @@ impl NicaiMachine {
                     .w8(destination.wrapping_add(output.len() as u32), 0);
                 self.set_result(output.len() as u32);
             }
+            4 => self.set_result(0),
+            5 => self.set_result(self.instruction_count as u32),
+            7 => {
+                let destination = self.register(0);
+                let source = self.register(1);
+                let count = self.register(2);
+                for offset in 0..count {
+                    let value = self.memory.r8(source + offset);
+                    self.memory.w8(destination + offset, value);
+                    if value == 0 {
+                        for remainder in offset + 1..count {
+                            self.memory.w8(destination + remainder, 0);
+                        }
+                        break;
+                    }
+                }
+                self.set_result(destination);
+            }
+            8 | 9 => {
+                let destination = self.register(0);
+                let source = self.register(1);
+                let destination_offset = if index == 9 {
+                    self.read_c_bytes(destination, 0x1_0000).len() as u32
+                } else {
+                    0
+                };
+                let bytes = self.read_c_bytes(source, 0x1_0000);
+                self.memory
+                    .write_bytes(destination + destination_offset, &bytes);
+                self.memory
+                    .w8(destination + destination_offset + bytes.len() as u32, 0);
+                self.set_result(destination);
+            }
+            10 | 12 => {
+                let text = self.read_c_string(self.register(0), 256);
+                let value = text.trim().parse::<i32>().unwrap_or(0);
+                self.set_result(value as u32);
+            }
+            11 => {
+                let destination = self.register(0);
+                let source = self.register(1);
+                let count = self.register(2);
+                let bytes: Vec<u8> = (0..count)
+                    .map(|offset| self.memory.r8(source + offset))
+                    .collect();
+                self.memory.write_bytes(destination, &bytes);
+                self.set_result(destination);
+            }
+            13 => {
+                let left = f32::from_bits(self.register(0));
+                let right = f32::from_bits(self.register(1));
+                self.set_result(left.powf(right).to_bits());
+            }
+            14..=16 => {
+                let limit = if index == 14 {
+                    0x1_0000
+                } else {
+                    self.register(2)
+                };
+                let stop_at_nul = index != 15;
+                let result = self.compare_c_bytes(
+                    self.register(0),
+                    self.register(1),
+                    limit,
+                    stop_at_nul,
+                    false,
+                );
+                self.set_result(result as u32);
+            }
+            20 | 21 => {
+                let limit = if index == 20 {
+                    0x1_0000
+                } else {
+                    self.register(2)
+                };
+                let result =
+                    self.compare_c_bytes(self.register(0), self.register(1), limit, true, true);
+                self.set_result(result as u32);
+            }
+            _ => self.set_result(0),
+        }
+    }
+
+    fn compare_c_bytes(
+        &mut self,
+        left: u32,
+        right: u32,
+        limit: u32,
+        stop_at_nul: bool,
+        ignore_ascii_case: bool,
+    ) -> i32 {
+        for offset in 0..limit {
+            let mut a = self.memory.r8(left + offset);
+            let mut b = self.memory.r8(right + offset);
+            if ignore_ascii_case {
+                a = a.to_ascii_lowercase();
+                b = b.to_ascii_lowercase();
+            }
+            if a != b {
+                return a as i32 - b as i32;
+            }
+            if stop_at_nul && (a == 0 || b == 0) {
+                break;
+            }
+        }
+        0
+    }
+
+    fn handle_timer_service(&mut self, index: u32) {
+        match index {
+            0 => self.set_result(self.register(0)),
+            1 | 5 => self.set_result(0),
+            2 => self.set_result((self.instruction_count / 10_000) as u32),
+            3 | 4 => self.set_result(1_786_080_000 + (self.instruction_count / 10_000) as u32),
+            _ => self.set_result(0),
+        }
+    }
+
+    fn handle_ucs2_service(&mut self, index: u32) {
+        match index {
+            0 => {
+                let length = self.ucs2_len(self.register(0), 0x8000);
+                self.set_result(length);
+            }
+            1 => {
+                let destination = self.register(0);
+                let source = self.register(1);
+                let length = self.ucs2_len(source, 0x8000);
+                self.copy_ucs2(destination, source, length + 1);
+                self.set_result(destination);
+            }
+            2 => {
+                let destination = self.register(0);
+                let source = self.register(1);
+                let destination_length = self.ucs2_len(destination, 512);
+                let source_length = self.ucs2_len(source, 0x8000);
+                self.copy_ucs2(
+                    destination + destination_length * 2,
+                    source,
+                    source_length + 1,
+                );
+                self.set_result(destination);
+            }
+            3 => {
+                let destination = self.register(0);
+                let bytes = self.read_c_bytes(self.register(1), 0x8000);
+                let (text, _, _) = GBK.decode(&bytes);
+                for (index, unit) in text.encode_utf16().enumerate() {
+                    self.memory.w16(destination + index as u32 * 2, unit);
+                }
+                let length = text.encode_utf16().count() as u32;
+                self.memory.w16(destination + length * 2, 0);
+                self.set_result(destination);
+            }
+            4 => {
+                let destination = self.register(0);
+                let source = self.register(1);
+                let count = self.register(2);
+                self.copy_ucs2(destination, source, count);
+                self.set_result(destination);
+            }
+            5 | 6 => {
+                let destination = self.register(0);
+                let source = self.register(1);
+                let count = self.register(2);
+                for offset in 0..count {
+                    let byte = self.memory.r8(source + offset);
+                    self.memory.w16(destination + offset * 2, byte as u16);
+                    if index == 5 && byte == 0 {
+                        for remainder in offset + 1..count {
+                            self.memory.w16(destination + remainder * 2, 0);
+                        }
+                        break;
+                    }
+                }
+                self.set_result(destination);
+            }
+            7 => {
+                let source = self.register(0);
+                let character = self.register(1) as u16;
+                let mut result = 0;
+                for offset in 0..0x8000 {
+                    let value = self.memory.r16(source + offset * 2);
+                    if value == character {
+                        result = source + offset * 2;
+                        break;
+                    }
+                    if value == 0 {
+                        break;
+                    }
+                }
+                self.set_result(result);
+            }
+            8..=10 => {
+                let left = self.register(0);
+                let right = self.register(1);
+                let limit = if index == 10 {
+                    self.register(2).min(0x8000)
+                } else {
+                    0x8000
+                };
+                let mut result = 0i32;
+                for offset in 0..limit {
+                    let mut a = self.memory.r16(left + offset * 2);
+                    let mut b = self.memory.r16(right + offset * 2);
+                    if index == 9 {
+                        a = ascii_uppercase(a);
+                        b = ascii_uppercase(b);
+                    }
+                    result = a as i32 - b as i32;
+                    if result != 0 || a == 0 || b == 0 {
+                        break;
+                    }
+                }
+                self.set_result(result as u32);
+            }
+            _ => self.set_result(0),
+        }
+    }
+
+    fn ucs2_len(&mut self, address: u32, limit: u32) -> u32 {
+        for offset in 0..limit {
+            if self.memory.r16(address + offset * 2) == 0 {
+                return offset;
+            }
+        }
+        limit
+    }
+
+    fn copy_ucs2(&mut self, destination: u32, source: u32, count: u32) {
+        for offset in 0..count {
+            let value = self.memory.r16(source + offset * 2);
+            self.memory.w16(destination + offset * 2, value);
+            if value == 0 {
+                for remainder in offset + 1..count {
+                    self.memory.w16(destination + remainder * 2, 0);
+                }
+                break;
+            }
+        }
+    }
+
+    fn handle_df_engine_service(&mut self, index: u32) {
+        match index {
+            8 => {
+                self.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, 0);
+                self.memory
+                    .w32(DREAM_FACTORY_MEMORY_BLOCK_SLOT, MEMORY_BLOCK_PTR);
+                self.set_result(0);
+            }
+            10 => {
+                let package = self.register(0);
+                let capacity = self.register(1);
+                self.initialize_data_package(package, capacity);
+            }
+            _ => self.set_result(0),
+        }
+    }
+
+    fn handle_screen_service(&mut self, index: u32) {
+        match index {
+            0 | 2 | 3 => {
+                let screen = self.register(0);
+                if screen != 0 {
+                    if let Some(current) = self.screen_stack.last_mut() {
+                        *current = screen;
+                    } else {
+                        self.screen_stack.push(screen);
+                    }
+                    self.pending_screen = screen;
+                    self.memory.w32(SCREEN_IS_IN_QUIT, 0);
+                }
+                self.set_result(SCREEN_IS_IN_QUIT);
+            }
+            1 | 7 | 8 => {
+                self.resource_load_pending = true;
+                self.set_result(0);
+            }
+            4 | 5 => {
+                let screen = self.register(0);
+                if screen != 0 {
+                    self.screen_stack.push(screen);
+                    self.pending_screen = screen;
+                    self.memory.w32(SCREEN_IS_IN_QUIT, 0);
+                }
+                self.set_result(0);
+            }
+            6 => {
+                let screen = self.register(0);
+                let removed = self
+                    .screen_stack
+                    .iter()
+                    .rposition(|candidate| *candidate == screen)
+                    .map(|position| {
+                        self.screen_stack.remove(position);
+                        true
+                    })
+                    .unwrap_or(false);
+                if removed && (self.active_screen == screen || self.pending_screen == screen) {
+                    self.pending_screen = self.screen_stack.last().copied().unwrap_or(0);
+                    self.active_screen = self.pending_screen;
+                    self.screen_initialized = false;
+                }
+                self.set_result(u32::from(removed));
+            }
+            9 => self.set_result(u32::from(
+                self.screen_stack.last().copied() == Some(self.register(0)),
+            )),
+            10 => self.set_result(u32::from(
+                self.screen_stack.first().copied() == Some(self.register(0)),
+            )),
             _ => self.set_result(0),
         }
     }
@@ -897,10 +1549,11 @@ impl NicaiMachine {
                 self.memory.w32(SCREEN_IS_IN_QUIT, 0);
                 self.set_result(SCREEN_IS_IN_QUIT);
             }
-            62 => {
+            61 => {
                 self.resource_load_pending = true;
                 self.set_result(0);
             }
+            62..=65 => self.set_result(0),
             68 => self.set_result(self.key_down),
             80 => {
                 self.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, 0);
@@ -958,6 +1611,25 @@ impl NicaiMachine {
                 self.memory.w32(cursor, offset.wrapping_add(4));
                 self.set_result(value);
             }
+            95 => {
+                let buffer = self.register(0);
+                let cursor = self.register(1);
+                let offset = self.memory.r32(cursor);
+                self.memory
+                    .w16(buffer.wrapping_add(offset), self.register(2) as u16);
+                self.memory.w32(cursor, offset.wrapping_add(2));
+                self.set_result(offset.wrapping_add(2));
+            }
+            96 => {
+                let buffer = self.register(0);
+                let cursor = self.register(1);
+                let offset = self.memory.r32(cursor);
+                self.memory
+                    .w32(buffer.wrapping_add(offset), self.register(2));
+                self.memory.w32(cursor, offset.wrapping_add(4));
+                self.set_result(offset.wrapping_add(4));
+            }
+            102 => self.set_result(MEMORY_BLOCK_PTR),
             110 => {
                 let package = self.register(0);
                 let capacity = self.register(1);
@@ -1123,16 +1795,8 @@ impl NicaiMachine {
         match index {
             0 => {
                 let requested = self.register(1);
-                let aligned = requested.saturating_add(3) & !3;
-                let base = self.memory.r32(block);
-                let offset = self.memory.r32(block + 4);
-                let size = self.memory.r32(block + 8);
-                if offset.saturating_add(aligned) <= size {
-                    self.memory.w32(block + 4, offset + aligned);
-                    self.set_result(base + offset);
-                } else {
-                    self.set_result(0);
-                }
+                let pointer = self.allocate_from_memory_block(block, requested);
+                self.set_result(pointer);
             }
             1 => {
                 self.memory.w32(block + 4, 0);
@@ -1145,6 +1809,19 @@ impl NicaiMachine {
                 self.set_result(0);
             }
             _ => self.set_result(0),
+        }
+    }
+
+    fn allocate_from_memory_block(&mut self, block: u32, requested: u32) -> u32 {
+        let aligned = requested.saturating_add(3) & !3;
+        let base = self.memory.r32(block);
+        let offset = self.memory.r32(block + 4);
+        let size = self.memory.r32(block + 8);
+        if base != 0 && offset.saturating_add(aligned) <= size {
+            self.memory.w32(block + 4, offset + aligned);
+            base + offset
+        } else {
+            0
         }
     }
 
@@ -1167,6 +1844,14 @@ impl NicaiMachine {
                     .sum();
                 self.set_result(width);
             }
+            9 => {
+                let string = self.register(0);
+                let x = signed_coord(self.register(1));
+                let y = signed_coord(self.register(2));
+                let color = self.register(3) as u16;
+                self.draw_text(string, x, y, color);
+                self.set_result(1);
+            }
             10 => {
                 let string = self.register(1);
                 let x = signed_coord(self.register(2));
@@ -1180,6 +1865,58 @@ impl NicaiMachine {
                 self.draw_text(string, x, y, color);
                 self.set_result(1);
             }
+            11..=13 => {
+                let r0 = self.register(0);
+                let r0_is_string = self
+                    .memory
+                    .region(r0, 1)
+                    .is_some_and(|region| region.data[(r0 - region.base) as usize] != 0);
+                let (string, x, y, color) = if r0_is_string {
+                    (
+                        r0,
+                        signed_coord(self.register(1)),
+                        signed_coord(self.register(2)),
+                        self.memory.r16(self.register(reg::SP) + 4),
+                    )
+                } else {
+                    (
+                        self.register(1),
+                        signed_coord(self.register(2)),
+                        signed_coord(self.register(3)),
+                        self.memory.r16(self.register(reg::SP) + 16),
+                    )
+                };
+                self.draw_text(string, x, y, color);
+                self.set_result(1);
+            }
+            16 => {
+                self.draw_rect(false, true);
+                self.set_result(1);
+            }
+            17 => {
+                self.draw_rect(true, true);
+                self.set_result(1);
+            }
+            18 => {
+                self.draw_rect(false, false);
+                self.set_result(1);
+            }
+            19 => {
+                self.draw_rect(true, false);
+                self.set_result(1);
+            }
+            22 => {
+                let image_id = self.register(0);
+                let output = self.register(1);
+                let local_id = if image_id >= 0xfff {
+                    image_id - 0xfff
+                } else {
+                    image_id
+                };
+                let result = self.create_image_from_resource_index(local_id as usize, output);
+                self.set_result(result);
+            }
+            23 => self.set_result(0),
             24 => {
                 self.draw_image_clip(false);
                 self.set_result(1);
@@ -1188,10 +1925,56 @@ impl NicaiMachine {
                 self.draw_image_clip(true);
                 self.set_result(1);
             }
+            26 | 28 => {
+                let packed = self.register(1);
+                self.draw_image_at(
+                    self.register(0),
+                    signed_coord(packed),
+                    signed_coord(packed >> 16),
+                    index == 28,
+                );
+                self.set_result(1);
+            }
+            27 => {
+                self.draw_image_at(
+                    self.register(0),
+                    signed_coord(self.register(1)),
+                    signed_coord(self.register(2)),
+                    false,
+                );
+                self.set_result(1);
+            }
+            29 | 31 => {
+                self.draw_image_packed(index == 31);
+                self.set_result(1);
+            }
+            30 | 32 => {
+                self.draw_image_full_clip(index == 32);
+                self.set_result(1);
+            }
+            33 | 34 => {
+                let image = self.register(0);
+                let offset = if index == 33 { 4 } else { 6 };
+                let result = self.memory.r16(image + offset) as u32;
+                self.set_result(result);
+            }
+            35 => {
+                let image = self.register(0);
+                if image != 0 {
+                    self.memory.w32(image, 0);
+                    self.set_result(1);
+                } else {
+                    self.set_result(0);
+                }
+            }
+            36 => self.set_result(1),
             49 => {
                 let result = self.create_image_from_stream(self.register(0), self.register(1));
                 self.set_result(result);
             }
+            54..=56 => self.set_result(1),
+            62 => self.set_result(16),
+            90..=92 => self.set_result(0),
             _ => self.set_result(0),
         }
     }
@@ -1211,19 +1994,22 @@ impl NicaiMachine {
             warn!("image stream at 0x{source:08X} is not a CBE resource");
             return 0;
         };
-        let resource = self.resources[resource_index].data.clone();
-        let encoded = match resource.first() {
-            Some(1 | 3) => &resource[1..],
-            Some(_) => resource.as_slice(),
-            None => return 0,
+        self.create_image_from_resource_index(resource_index, output)
+    }
+
+    fn create_image_from_resource_index(&mut self, resource_index: usize, output: u32) -> u32 {
+        let Some(host_resource) = self.resources.get(resource_index) else {
+            return 0;
         };
+        let resource = host_resource.data.clone();
+        let encoded = image_payload(&resource);
         let decoded = match image_decoder::decode_image(encoded) {
             Ok(decoded) => decoded,
             Err(error) => {
                 if service_trace_enabled(4, 49) {
                     eprintln!(
                         "image resource {} decode failed (head={:02X?}): {error:#}",
-                        self.resources[resource_index].name,
+                        host_resource.name,
                         &resource[..resource.len().min(12)]
                     );
                 }
@@ -1271,22 +2057,114 @@ impl NicaiMachine {
     }
 
     fn draw_image_clip(&mut self, transparent: bool) {
-        let mut destination = self.register(0);
+        let destination = self.register(0);
         let source = self.register(1);
-        let mut source_x = signed_coord(self.register(2));
-        let mut source_y = signed_coord(self.register(3));
+        let source_x = signed_coord(self.register(2));
+        let source_y = signed_coord(self.register(3));
         let stack = self.register(reg::SP);
-        let mut width = signed_coord(self.memory.r32(stack));
-        let mut height = signed_coord(self.memory.r32(stack + 4));
-        let mut destination_x = signed_coord(self.memory.r32(stack + 8));
-        let mut destination_y = signed_coord(self.memory.r32(stack + 12));
+        let width = signed_coord(self.memory.r32(stack));
+        let height = signed_coord(self.memory.r32(stack + 4));
+        let destination_x = signed_coord(self.memory.r32(stack + 8));
+        let destination_y = signed_coord(self.memory.r32(stack + 12));
+        self.blit_image(
+            destination,
+            source,
+            source_x,
+            source_y,
+            width,
+            height,
+            destination_x,
+            destination_y,
+            transparent,
+        );
+    }
 
+    fn draw_image_at(&mut self, source: u32, x: i32, y: i32, transparent: bool) {
+        let width = self.memory.r16(source + 4) as i32;
+        let height = self.memory.r16(source + 6) as i32;
+        self.blit_image(
+            SCREEN_IMAGE_STRUCT,
+            source,
+            0,
+            0,
+            width,
+            height,
+            x,
+            y,
+            transparent,
+        );
+    }
+
+    fn draw_image_packed(&mut self, transparent: bool) {
+        let source = self.register(0);
+        let source_start = self.register(1);
+        let destination_start = self.register(2);
+        let destination_end = self.register(3);
+        let source_x = signed_coord(source_start);
+        let source_y = signed_coord(source_start >> 16);
+        let destination_x = signed_coord(destination_start);
+        let destination_y = signed_coord(destination_start >> 16);
+        let width = signed_coord(destination_end) - destination_x + 1;
+        let height = signed_coord(destination_end >> 16) - destination_y + 1;
+        self.blit_image(
+            SCREEN_IMAGE_STRUCT,
+            source,
+            source_x,
+            source_y,
+            width,
+            height,
+            destination_x,
+            destination_y,
+            transparent,
+        );
+    }
+
+    fn draw_image_full_clip(&mut self, transparent: bool) {
+        let source = self.register(0);
+        let source_x = signed_coord(self.register(1));
+        let source_y = signed_coord(self.register(2));
+        let width = signed_coord(self.register(3));
+        let stack = self.register(reg::SP);
+        let height = signed_coord(self.memory.r32(stack));
+        let destination_x = signed_coord(self.memory.r32(stack + 4));
+        let destination_y = signed_coord(self.memory.r32(stack + 8));
+        self.blit_image(
+            SCREEN_IMAGE_STRUCT,
+            source,
+            source_x,
+            source_y,
+            width,
+            height,
+            destination_x,
+            destination_y,
+            transparent,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn blit_image(
+        &mut self,
+        mut destination: u32,
+        source: u32,
+        mut source_x: i32,
+        mut source_y: i32,
+        mut width: i32,
+        mut height: i32,
+        mut destination_x: i32,
+        mut destination_y: i32,
+        transparent: bool,
+    ) {
         let source_pixels = self.memory.r32(source);
         let source_width = self.memory.r16(source + 4) as i32;
         let source_height = self.memory.r16(source + 6) as i32;
         let mut destination_pixels = self.memory.r32(destination);
         let mut destination_width = self.memory.r16(destination + 4) as i32;
         let mut destination_height = self.memory.r16(destination + 6) as i32;
+        if service_trace_enabled(4, if transparent { 26 } else { 25 }) {
+            eprintln!(
+                "draw image dst={destination:08X} src={source:08X} pixels={source_pixels:08X} size={source_width}x{source_height} clip={source_x},{source_y} {width}x{height} at={destination_x},{destination_y}"
+            );
+        }
         if destination == SCREEN_IMAGE_STRUCT
             || destination_pixels == 0
             || destination_width <= 0
@@ -1340,6 +2218,72 @@ impl NicaiMachine {
                     self.memory
                         .w16(destination_pixels + destination_offset, color);
                 }
+            }
+        }
+        let _ = destination;
+    }
+
+    fn draw_rect(&mut self, has_destination: bool, outline: bool) {
+        let (mut destination, mut x, mut y, mut width) = if has_destination {
+            (
+                self.register(0),
+                signed_coord(self.register(1)),
+                signed_coord(self.register(2)),
+                signed_coord(self.register(3)),
+            )
+        } else {
+            (
+                SCREEN_IMAGE_STRUCT,
+                signed_coord(self.register(0)),
+                signed_coord(self.register(1)),
+                signed_coord(self.register(2)),
+            )
+        };
+        let stack = self.register(reg::SP);
+        let mut height = signed_coord(self.memory.r32(stack));
+        let color = self.memory.r16(stack + 4);
+        let mut pixels = self.memory.r32(destination);
+        let mut destination_width = self.memory.r16(destination + 4) as i32;
+        let mut destination_height = self.memory.r16(destination + 6) as i32;
+        if destination == SCREEN_IMAGE_STRUCT
+            || pixels == 0
+            || destination_width <= 0
+            || destination_height <= 0
+            || destination_width > 240
+            || destination_height > 400
+        {
+            destination = SCREEN_IMAGE_STRUCT;
+            pixels = SCREEN_IMAGE;
+            destination_width = 240;
+            destination_height = 400;
+        }
+        let mut source_x = 0;
+        let mut source_y = 0;
+        clip_axis(
+            &mut source_x,
+            &mut width,
+            &mut x,
+            i32::MAX,
+            destination_width,
+        );
+        clip_axis(
+            &mut source_y,
+            &mut height,
+            &mut y,
+            i32::MAX,
+            destination_height,
+        );
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        let pitch = ((destination_width + 3) & !3) as u32;
+        for row in 0..height {
+            for column in 0..width {
+                if outline && row != 0 && row != height - 1 && column != 0 && column != width - 1 {
+                    continue;
+                }
+                let offset = ((y + row) as u32 * pitch + (x + column) as u32) * 2;
+                self.memory.w16(pixels + offset, color);
             }
         }
         let _ = destination;
@@ -1756,8 +2700,125 @@ mod tests {
     use super::*;
 
     #[test]
+    fn machine_memory_honors_guest_endianness() {
+        for big_endian in [false, true] {
+            let mut memory = MachineMemory::new(big_endian);
+            memory.map(0x1000, 16, false);
+            memory.w8(0x1000, 0x12);
+            memory.w16(0x1002, 0x3456);
+            memory.w32(0x1004, 0x789a_bcde);
+            assert_eq!(memory.r8(0x1000), 0x12);
+            assert_eq!(memory.r16(0x1002), 0x3456);
+            assert_eq!(memory.r32(0x1004), 0x789a_bcde);
+        }
+    }
+
+    #[test]
+    fn type_three_image_payload_skips_stream_metadata() {
+        let mut resource = vec![3, 0, 0, 0, 8, 0, 1, 0, 1];
+        resource.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        assert_eq!(image_payload(&resource), b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[test]
+    fn parses_native_data_package_resources() {
+        let mut data = vec![0u8; 39];
+        data[0..4].copy_from_slice(&8u32.to_le_bytes());
+        data[8..12].copy_from_slice(&1u32.to_le_bytes());
+        data[12..16].copy_from_slice(&20u32.to_le_bytes());
+        data[16..20].copy_from_slice(&3u32.to_le_bytes());
+        data[20..24].copy_from_slice(&2u32.to_le_bytes());
+        data[24..28].copy_from_slice(&0u32.to_le_bytes());
+        data[28..32].copy_from_slice(&1u32.to_le_bytes());
+        data[32..36].copy_from_slice(&[1, b'a', 1, b'b']);
+        data[36..39].copy_from_slice(&[0x11, 0x22, 0x33]);
+
+        let resources = native_package_resources(&data, 0);
+        assert_eq!(resources.len(), 2);
+        assert_eq!(resources[0].name, "a");
+        assert_eq!(resources[0].data, [0x11]);
+        assert_eq!(resources[1].name, "b");
+        assert_eq!(resources[1].data, [0x22, 0x33]);
+    }
+
+    #[test]
     fn checksum_ignores_partial_words() {
         assert_eq!(checksum_le(&[1, 0, 0, 0, 9]), 1);
         assert_eq!(checksum_be(&[0, 0, 0, 1, 9]), 1);
+    }
+
+    #[test]
+    fn segment_locator_distinguishes_padding_from_leading_fe_data() {
+        let padded = [
+            0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 1, 0, 0, 0,
+        ];
+        assert_eq!(
+            locate_checked_segment(&padded, 0, 4, 1, None, "test").unwrap(),
+            (9, false)
+        );
+
+        let leading_fe = [
+            0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xb5, 0, 0,
+        ];
+        let expected = checksum_le(&leading_fe[8..12]);
+        assert_eq!(
+            locate_checked_segment(&leading_fe, 0, 4, expected, None, "test").unwrap(),
+            (8, false)
+        );
+    }
+
+    #[test]
+    fn executable_code_follows_variable_header_and_separator() {
+        let variable_header_size = 6usize;
+        let segment_header = 68 + variable_header_size;
+        let header_end = segment_header + 6 * 12;
+        let code = [1u8, 0, 0, 0];
+        let initialized = [2u8, 0, 0, 0];
+        let embedded = [3u8, 0, 0, 0];
+        let mut data = vec![0u8; header_end];
+
+        for index in 0..5 {
+            data[index * 12..index * 12 + 8].fill(0xfe);
+        }
+        data[56..60].copy_from_slice(&(variable_header_size as u32).to_be_bytes());
+        for index in 0..6 {
+            let offset = segment_header + index * 12;
+            data[offset..offset + 8].fill(0xfe);
+        }
+        for (index, value) in [
+            code.len() as u32,
+            checksum_le(&code),
+            initialized.len() as u32,
+            checksum_le(&initialized),
+            embedded.len() as u32,
+            checksum_le(&embedded),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let offset = segment_header + index * 12 + 8;
+            data[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+
+        data.extend_from_slice(&[0xfe; 9]);
+        let code_offset = data.len();
+        data.extend_from_slice(&code);
+        data.extend_from_slice(&[0xfe; 8]);
+        let data_offset = data.len();
+        data.extend_from_slice(&initialized);
+        data.extend_from_slice(&[0xfe; 8]);
+        let embedded_offset = data.len();
+        data.extend_from_slice(&embedded);
+        data.extend_from_slice(&[0xfe; 8]);
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&[0xfe; 8]);
+        let resource_package_offset = data.len();
+
+        let executable = CbeExecutable::parse(&data).unwrap();
+        assert_eq!(executable.code_offset, code_offset);
+        assert_eq!(executable.data_offset, data_offset);
+        assert_eq!(executable.embedded_package_offset, embedded_offset);
+        assert_eq!(executable.resource_package_offset, resource_package_offset);
+        assert!(!executable.big_endian);
     }
 }

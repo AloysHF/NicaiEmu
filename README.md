@@ -4,7 +4,7 @@ NicaiEmu is a Rust emulator for ARM/Thumb CBE applications used by Nicai/MStar m
 
 ## Current capabilities
 
-- CBE executable header, segment, checksum, section, and resource parsing
+- Little- and big-endian CBE executable header, segment, checksum, section, and resource parsing
 - ARM and Thumb guest execution, including Thumb BLX instructions used by CBE applications
 - Firmware-style service tables for memory, resource, display, input, data streams, and formatted strings
 - CBE RGB565 GIF reconstruction and clipped image drawing
@@ -80,7 +80,9 @@ pwsh scripts/batch-screenshots.ps1
 ```
 
 The script builds the standalone `nicaiemu` executable, runs each application
-for 120 frames, and writes available PNG captures to `docs/images`. Use
+for 120 frames, and writes PNG captures to `docs/images`. Headless capture keeps
+the last guest-rendered frame if a later callback stops. Blank frames and
+applications that stop before drawing are reported as failures. Use
 `-Frames`, `-Binary`, `-GameDirectory`, or `-OutputDirectory` to override the
 script defaults.
 

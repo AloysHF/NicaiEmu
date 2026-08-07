@@ -155,6 +155,47 @@ impl CbeArchive {
         checked > 0
     }
 
+    fn looks_like_native_resource_section(buf: &[u8], off: usize) -> bool {
+        if off + 40 > buf.len() || buf[off..off + 8] != CBE_SECTION_SIGNATURE {
+            return false;
+        }
+        let read = |offset: usize| u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap());
+        let marker = read(off + 8);
+        let one = read(off + 12);
+        let data_rel = read(off + 16) as usize;
+        let data_len = read(off + 20) as usize;
+        let count = read(off + 24) as usize;
+        if marker != 4 || one != 1 || !(1..=10_000).contains(&count) {
+            return false;
+        }
+        let Some(data_start) = off
+            .checked_add(data_rel)
+            .and_then(|value| value.checked_add(0x14))
+        else {
+            return false;
+        };
+        if data_start
+            .checked_add(data_len)
+            .is_none_or(|end| end > buf.len())
+        {
+            return false;
+        }
+        let Some(mut name_pos) = (off + 32).checked_add((count - 1) * 4) else {
+            return false;
+        };
+        for _ in 0..count.min(16) {
+            let Some(&length) = buf.get(name_pos) else {
+                return false;
+            };
+            let length = length as usize;
+            if !(1..=96).contains(&length) || name_pos + 1 + length > data_start {
+                return false;
+            }
+            name_pos += 1 + length;
+        }
+        true
+    }
+
     /// Scan the file for CBE sections
     fn scan_sections(data: &[u8]) -> Result<Vec<CbeSection>> {
         let mut sections = Vec::new();
@@ -166,6 +207,12 @@ impl CbeArchive {
 
                 // Parse section header
                 if let Some(section) = Self::parse_section(data, off, section_index) {
+                    sections.push(section);
+                    section_index += 1;
+                }
+            } else if Self::looks_like_native_resource_section(data, off) {
+                debug!("Found native section signature at offset 0x{:X}", off);
+                if let Some(section) = Self::parse_native_section(data, off, section_index) {
                     sections.push(section);
                     section_index += 1;
                 }
@@ -280,6 +327,72 @@ impl CbeArchive {
         };
 
         Some(CbeSection { header, resources })
+    }
+
+    fn parse_native_section(data: &[u8], start_offset: usize, index: usize) -> Option<CbeSection> {
+        let read = |offset: usize| u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+        let marker = read(start_offset + 8);
+        let one = read(start_offset + 12);
+        let data_rel = read(start_offset + 16);
+        let data_len = read(start_offset + 20);
+        let resource_count = read(start_offset + 24);
+        let count = resource_count as usize;
+
+        let mut ends = Vec::with_capacity(count);
+        let mut table_pos = start_offset + 32;
+        for _ in 0..count.saturating_sub(1) {
+            ends.push(read(table_pos) as usize);
+            table_pos += 4;
+        }
+
+        let mut names = Vec::with_capacity(count);
+        let mut name_pos = table_pos;
+        for _ in 0..count {
+            let length = *data.get(name_pos)? as usize;
+            let name_end = name_pos.checked_add(1 + length)?;
+            let name = String::from_utf8_lossy(data.get(name_pos + 1..name_end)?).to_string();
+            names.push(name);
+            name_pos = name_end;
+        }
+
+        let data_start = start_offset
+            .checked_add(data_rel as usize)?
+            .checked_add(0x14)?;
+        let mut resources = Vec::with_capacity(count);
+        for (resource_index, name) in names.into_iter().enumerate() {
+            let start_rel = if resource_index == 0 {
+                0
+            } else {
+                ends[resource_index - 1]
+            };
+            let end_rel = ends
+                .get(resource_index)
+                .copied()
+                .unwrap_or(data_len as usize);
+            if start_rel > end_rel || data_start.checked_add(end_rel)? > data.len() {
+                return None;
+            }
+            resources.push(ResourceEntry::new(
+                name,
+                index,
+                (data_start + start_rel) as u64,
+                (end_rel - start_rel) as u64,
+            ));
+        }
+
+        Some(CbeSection {
+            header: SectionHeader {
+                index,
+                file_offset: start_offset as u64,
+                marker,
+                resource_count,
+                one,
+                data_rel,
+                data_len,
+                data_start: data_start as u64,
+            },
+            resources,
+        })
     }
 
     /// Get the file path
@@ -429,5 +542,29 @@ mod tests {
         assert_eq!(sections[0].resources[0].name, "x");
         assert_eq!(sections[0].resources[0].offset, 38);
         assert_eq!(sections[0].resources[0].size, 1);
+    }
+
+    #[test]
+    fn accepts_native_resource_section_layout() {
+        let mut data = vec![0u8; 43];
+        data[0..8].copy_from_slice(&CBE_SECTION_SIGNATURE);
+        data[8..12].copy_from_slice(&4u32.to_le_bytes());
+        data[12..16].copy_from_slice(&1u32.to_le_bytes());
+        data[16..20].copy_from_slice(&20u32.to_le_bytes());
+        data[20..24].copy_from_slice(&3u32.to_le_bytes());
+        data[24..28].copy_from_slice(&2u32.to_le_bytes());
+        data[32..36].copy_from_slice(&1u32.to_le_bytes());
+        data[36..40].copy_from_slice(&[1, b'a', 1, b'b']);
+        data[40..43].copy_from_slice(&[0x11, 0x22, 0x33]);
+
+        let sections = CbeArchive::scan_sections(&data).unwrap();
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].resources.len(), 2);
+        assert_eq!(sections[0].resources[0].name, "a");
+        assert_eq!(sections[0].resources[0].offset, 40);
+        assert_eq!(sections[0].resources[0].size, 1);
+        assert_eq!(sections[0].resources[1].name, "b");
+        assert_eq!(sections[0].resources[1].offset, 41);
+        assert_eq!(sections[0].resources[1].size, 2);
     }
 }

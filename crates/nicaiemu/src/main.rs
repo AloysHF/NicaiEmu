@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
-use log::info;
+use log::{info, warn};
 use minifb::{Key, ScaleMode, Window, WindowOptions};
 use nicaiemu_core::{CbeArchive, NicaiMachine};
 
@@ -71,19 +71,20 @@ fn main() -> Result<()> {
     }
 
     let mut machine = NicaiMachine::new(&archive).context("failed to create CBE machine")?;
-    machine
-        .boot(cli.instruction_limit)
-        .context("failed to initialize CBE application")?;
+    let boot_result = machine.boot(cli.instruction_limit);
 
     if let Some(path) = &cli.screenshot {
         capture_screenshot(
             &mut machine,
+            boot_result.err(),
             cli.screenshot_frames,
             cli.instruction_limit,
             path,
         )?;
         return Ok(());
     }
+
+    boot_result.context("failed to initialize CBE application")?;
 
     let game_name = cli
         .file
@@ -120,22 +121,36 @@ fn main() -> Result<()> {
 
 fn capture_screenshot(
     machine: &mut NicaiMachine,
+    mut stopped_error: Option<anyhow::Error>,
     frames: u32,
     instruction_limit: u64,
     path: &Path,
 ) -> Result<()> {
-    for frame in 0..frames {
-        machine
-            .run_frame(instruction_limit)
-            .with_context(|| format!("guest screen callback failed at frame {}", frame + 1))?;
+    if stopped_error.is_none() {
+        for frame in 0..frames {
+            if let Err(error) = machine.run_frame(instruction_limit) {
+                warn!(
+                    "CBE screen callback stopped at frame {}: {error:#}",
+                    frame + 1
+                );
+                stopped_error = Some(error);
+                break;
+            }
+        }
     }
 
     let pixels = machine.frame_pixels();
-    let nonzero = pixels.iter().filter(|pixel| **pixel != 0).count();
     let colors = pixels
         .iter()
         .copied()
         .collect::<std::collections::HashSet<_>>();
+    if colors.len() <= 1 {
+        if let Some(error) = stopped_error {
+            return Err(error).context("guest stopped before rendering a screenshot");
+        }
+        bail!("guest did not render a screenshot within {frames} frames");
+    }
+    let nonzero = pixels.iter().filter(|pixel| **pixel != 0).count();
     info!("frame nonzero={nonzero} colors={}", colors.len());
     let rgb: Vec<u8> = pixels
         .iter()
