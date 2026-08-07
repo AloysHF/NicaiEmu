@@ -30,9 +30,16 @@ const MEMORY_BLOCK_PTR: u32 = HEAP_BASE + 0x80_0000;
 const MEMORY_BLOCK_SERVICE: u32 = SERVICE_BASE + 0x6c48;
 const DREAM_FACTORY_PACKAGE_SLOT: u32 = MANAGER_BASE + 0x7ff0;
 const DREAM_FACTORY_MEMORY_BLOCK_SLOT: u32 = MANAGER_BASE + 0x7ff4;
+const DATA_PACKAGE_SIZE: u32 = 108;
 const SCREEN_IMAGE_STRUCT: u32 = MEMORY_BLOCK_PTR + 0x408;
 const SCREEN_IMAGE: u32 = SCREEN_IMAGE_STRUCT + 24;
 const SCREEN_IS_IN_QUIT: u32 = MANAGER_BASE + 0x7fe0;
+const DL_LOAD_MANAGER: u32 = MANAGER_BASE + 0xe_0000;
+const VIDEO_MANAGER: u32 = MANAGER_BASE + 0xe_0400;
+const DL_PAY_MANAGER: u32 = MANAGER_BASE + 0xe_0800;
+const DL_RESOURCE_MANAGER: u32 = MANAGER_BASE + 0xe_0c00;
+const DL_IMAGE_MANAGER: u32 = MANAGER_BASE + 0xe_1000;
+const APP_STORE_MANAGER: u32 = MANAGER_BASE + 0xe_1400;
 
 fn fixed_manager_specs() -> &'static [(u32, u32, u32)] {
     &[
@@ -55,6 +62,30 @@ fn fixed_manager_specs() -> &'static [(u32, u32, u32)] {
         (0x80, 3, 0x27c / 4),
         (0x8c, 19, 0x1c / 4),
     ]
+}
+
+fn manager_initializer_count(index: u32) -> Option<u32> {
+    Some(match index {
+        0 => 30,
+        2 => 95,
+        4 => 10,
+        6 => 21,
+        8 => 27,
+        10 => 38,
+        12 => 12,
+        14 => 43,
+        16 => 11,
+        18 => 115,
+        20 => TABLE_STRIDE / 4,
+        22 => 24,
+        24 => 40,
+        30 => 31,
+        32 => 144,
+        35 => 11,
+        37 => 22,
+        45 => 6,
+        _ => return None,
+    })
 }
 
 /// Executable image metadata stored at the beginning of a CBE file.
@@ -273,6 +304,15 @@ fn checksum_be(data: &[u8]) -> u32 {
 
 fn signed_coord(value: u32) -> i32 {
     value as u16 as i16 as i32
+}
+
+fn arm_blx_immediate_target(pc: u32, instruction: u32) -> Option<u32> {
+    if instruction & 0xfe00_0000 != 0xfa00_0000 {
+        return None;
+    }
+    let offset = ((instruction & 0x00ff_ffff) << 2) | ((instruction >> 23) & 2);
+    let signed_offset = ((offset << 6) as i32) >> 6;
+    Some(pc.wrapping_add(8).wrapping_add(signed_offset as u32))
 }
 
 fn ascii_uppercase(value: u16) -> u16 {
@@ -580,11 +620,15 @@ pub struct NicaiMachine {
     screen_stack: Vec<u32>,
     screen_initialized: bool,
     resource_load_pending: bool,
+    resource_load_screen: u32,
     key_down: u32,
     key_held: u32,
     resources: Vec<HostResource>,
     resource_data: Vec<u32>,
     resource_names: Vec<u32>,
+    app_image_package: u32,
+    inner_image_package: u32,
+    current_image_package: u32,
 }
 
 impl std::fmt::Debug for NicaiMachine {
@@ -652,6 +696,7 @@ impl NicaiMachine {
             screen_stack: Vec::new(),
             screen_initialized: false,
             resource_load_pending: false,
+            resource_load_screen: 0,
             key_down: 0,
             key_held: 0,
             resources: {
@@ -684,6 +729,9 @@ impl NicaiMachine {
             },
             resource_data: Vec::new(),
             resource_names: Vec::new(),
+            app_image_package: 0,
+            inner_image_package: 0,
+            current_image_package: 0,
         };
         machine.initialize_tables();
         machine.initialize_screen();
@@ -709,6 +757,16 @@ impl NicaiMachine {
             }
             self.memory.w32(MANAGER_BASE + 8, FIXED_MANAGER_DIRECTORY);
         }
+        self.initialize_download_managers();
+    }
+
+    fn initialize_download_managers(&mut self) {
+        self.populate_table(DL_LOAD_MANAGER, SERVICE_BASE + TABLE_STRIDE * 22, 11);
+        self.populate_table(VIDEO_MANAGER, SERVICE_BASE + TABLE_STRIDE * 23, 38);
+        self.populate_table(DL_PAY_MANAGER, SERVICE_BASE + TABLE_STRIDE * 24, 16);
+        self.populate_table(DL_RESOURCE_MANAGER, SERVICE_BASE + TABLE_STRIDE * 25, 20);
+        self.populate_table(DL_IMAGE_MANAGER, SERVICE_BASE + TABLE_STRIDE * 26, 12);
+        self.populate_table(APP_STORE_MANAGER, SERVICE_BASE + TABLE_STRIDE * 28, 40);
     }
 
     fn uses_fixed_manager_abi(&self) -> bool {
@@ -787,7 +845,7 @@ impl NicaiMachine {
                 self.handle_service(pc)?;
             } else if self.cpu.thumb_mode() && self.memory.r16(pc) == 0xdfab {
                 self.handle_semihosting(pc)?;
-            } else if self.cpu.thumb_mode() && self.handle_thumb_blx(pc) {
+            } else if self.handle_interworking_branch(pc) {
             } else if self
                 .memory
                 .region(pc, if self.cpu.thumb_mode() { 2 } else { 4 })
@@ -810,6 +868,26 @@ impl NicaiMachine {
 
     fn handle_thumb_blx(&mut self, pc: u32) -> bool {
         self.handle_thumb_blx_register(pc) || self.handle_thumb_blx_immediate(pc)
+    }
+
+    fn handle_interworking_branch(&mut self, pc: u32) -> bool {
+        if self.cpu.thumb_mode() {
+            self.handle_thumb_blx(pc)
+        } else {
+            self.handle_arm_blx_immediate(pc)
+        }
+    }
+
+    fn handle_arm_blx_immediate(&mut self, pc: u32) -> bool {
+        let instruction = self.memory.r32(pc);
+        let Some(target) = arm_blx_immediate_target(pc, instruction) else {
+            return false;
+        };
+        self.cpu.reg_set(Mode::User, reg::LR, pc.wrapping_add(4));
+        self.cpu.reg_set(Mode::User, reg::PC, target & !1);
+        let cpsr = self.register(reg::CPSR) | (1 << 5);
+        self.cpu.reg_set(Mode::User, reg::CPSR, cpsr);
+        true
     }
 
     fn handle_thumb_blx_register(&mut self, pc: u32) -> bool {
@@ -935,7 +1013,30 @@ impl NicaiMachine {
             13 => self.handle_ucs2_service(index),
             14 => self.handle_screen_service(index),
             16 => self.handle_game_lcd_service(index),
+            20 => {
+                if index == 6 {
+                    let descriptor = self.register(0);
+                    let destination = self.memory.r32(descriptor);
+                    let capacity = self.memory.r16(descriptor + 4) as u32;
+                    if destination != 0 {
+                        self.populate_table(
+                            destination,
+                            SERVICE_BASE + TABLE_STRIDE * 28,
+                            (capacity / 4).min(40),
+                        );
+                    }
+                    self.set_result(APP_STORE_MANAGER);
+                } else {
+                    self.set_result(0);
+                }
+            }
             21 => self.handle_data_package_service(index),
+            22 => self.handle_download_service(index),
+            23 => self.set_result(0),
+            24 => self.handle_payment_service(index),
+            25 => self.handle_download_resource_service(index),
+            26 => self.handle_download_image_service(index),
+            28 => self.set_result(u32::from(index == 30)),
             _ => self.set_result(0),
         }
         if trace_service {
@@ -978,6 +1079,69 @@ impl NicaiMachine {
     }
 
     fn handle_root_service(&mut self, index: u32) {
+        match index {
+            34 => {
+                let destination = self.register(0);
+                if destination != 0 {
+                    self.populate_table(destination, SERVICE_BASE, 52);
+                }
+                self.set_result(0);
+                return;
+            }
+            39 => {
+                let destination = self.register(0);
+                if destination != 0 {
+                    self.populate_table(destination, SERVICE_BASE + TABLE_STRIDE * 22, 11);
+                }
+                self.set_result(destination);
+                return;
+            }
+            40 => {
+                self.set_result(DL_LOAD_MANAGER);
+                return;
+            }
+            41 => {
+                self.set_result(DL_RESOURCE_MANAGER);
+                return;
+            }
+            42 => {
+                let destination = self.register(0);
+                if destination != 0 {
+                    self.populate_table(destination, SERVICE_BASE + TABLE_STRIDE * 25, 20);
+                }
+                self.set_result(destination);
+                return;
+            }
+            43 => {
+                self.set_result(DL_IMAGE_MANAGER);
+                return;
+            }
+            44 => {
+                let destination = self.register(0);
+                if destination != 0 {
+                    self.populate_table(destination, SERVICE_BASE + TABLE_STRIDE * 26, 12);
+                }
+                self.set_result(destination);
+                return;
+            }
+            49 => {
+                let destination = self.register(0);
+                if destination != 0 {
+                    self.populate_table(destination, SERVICE_BASE + TABLE_STRIDE * 23, 38);
+                }
+                self.set_result(destination);
+                return;
+            }
+            50 => {
+                self.set_result(VIDEO_MANAGER);
+                return;
+            }
+            51 => {
+                self.set_result(DL_PAY_MANAGER);
+                return;
+            }
+            _ => {}
+        }
         let table_group = match index {
             0 | 1 => Some(5),
             2 | 3 => Some(4),
@@ -1029,7 +1193,15 @@ impl NicaiMachine {
             if is_initializer {
                 let destination = self.register(0);
                 if destination != 0 {
-                    self.populate_table(destination, service, TABLE_STRIDE / 4);
+                    if index == 26 {
+                        self.memory.w32(destination + 8 * 4, service + 8 * 4);
+                        self.memory.w32(destination + 10 * 4, service + 10 * 4);
+                    } else if index == 28 {
+                        self.memory.w32(destination + 60 * 4, service + 60 * 4);
+                    } else {
+                        let count = manager_initializer_count(index).unwrap_or(0);
+                        self.populate_table(destination, service, count);
+                    }
                 }
                 self.set_result(destination);
             } else {
@@ -1425,6 +1597,12 @@ impl NicaiMachine {
                 self.set_result(SCREEN_IS_IN_QUIT);
             }
             1 | 7 | 8 => {
+                let requested = self.register(0);
+                self.resource_load_screen = if requested != 0 {
+                    requested
+                } else {
+                    self.pending_screen
+                };
                 self.resource_load_pending = true;
                 self.set_result(0);
             }
@@ -1550,6 +1728,7 @@ impl NicaiMachine {
                 self.set_result(SCREEN_IS_IN_QUIT);
             }
             61 => {
+                self.resource_load_screen = self.pending_screen;
                 self.resource_load_pending = true;
                 self.set_result(0);
             }
@@ -1749,6 +1928,48 @@ impl NicaiMachine {
         self.memory.w32(package + 24, 0);
         self.memory.w32(package + 96, 0);
         debug!("loaded {count} CBE resources into guest memory");
+    }
+
+    fn ensure_image_package(&mut self, inner: bool) -> u32 {
+        let existing = if inner {
+            self.inner_image_package
+        } else {
+            self.app_image_package
+        };
+        if existing != 0 {
+            return existing;
+        }
+
+        let package = self.allocate(DATA_PACKAGE_SIZE);
+        if inner {
+            self.inner_image_package = package;
+        } else {
+            self.app_image_package = package;
+        }
+        package
+    }
+
+    fn initialize_image_data_page(&mut self, inner: bool) -> u32 {
+        let package = self.ensure_image_package(inner);
+        if package == 0 {
+            return 0;
+        }
+        self.current_image_package = package;
+        self.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, package);
+        let count = self.memory.r16(package + 8) as u32;
+        if count != 0 {
+            return count;
+        }
+        self.initialize_data_package(package, 5);
+        self.load_main_resource_package(package);
+        self.memory.r16(package + 8) as u32
+    }
+
+    fn create_image_from_data_package(&mut self, image_id: u32, package: u32, output: u32) -> u32 {
+        if package == 0 || image_id >= self.memory.r16(package + 8) as u32 {
+            return 0;
+        }
+        self.create_image_from_resource_index(image_id as usize, output)
     }
 
     fn resource_by_id(&self, id: u32) -> u32 {
@@ -1968,11 +2189,50 @@ impl NicaiMachine {
                 }
             }
             36 => self.set_result(1),
+            44 => {
+                let result = self.initialize_image_data_page(false);
+                self.set_result(result);
+            }
+            45 => {
+                let result = self.initialize_image_data_page(true);
+                self.set_result(result);
+            }
+            46 => {
+                self.app_image_package = 0;
+                self.inner_image_package = 0;
+                self.current_image_package = 0;
+                self.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, 0);
+                self.set_result(0);
+            }
+            47 => {
+                let package = self.register(2);
+                if package == 0 {
+                    self.set_result(0);
+                } else {
+                    self.current_image_package = package;
+                    self.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, package);
+                    if self.memory.r16(package + 8) == 0 {
+                        self.initialize_data_package(package, 5);
+                        self.load_main_resource_package(package);
+                    }
+                    let count = self.memory.r16(package + 8) as u32;
+                    self.set_result(count);
+                }
+            }
+            48 => {
+                let result = self.create_image_from_data_package(
+                    self.register(0),
+                    self.register(1),
+                    self.register(2),
+                );
+                self.set_result(result);
+            }
             49 => {
                 let result = self.create_image_from_stream(self.register(0), self.register(1));
                 self.set_result(result);
             }
             54..=56 => self.set_result(1),
+            57 => self.set_result(0),
             62 => self.set_result(16),
             90..=92 => self.set_result(0),
             _ => self.set_result(0),
@@ -2160,7 +2420,9 @@ impl NicaiMachine {
         let mut destination_pixels = self.memory.r32(destination);
         let mut destination_width = self.memory.r16(destination + 4) as i32;
         let mut destination_height = self.memory.r16(destination + 6) as i32;
-        if service_trace_enabled(4, if transparent { 26 } else { 25 }) {
+        if service_trace_enabled(4, 24)
+            || service_trace_enabled(4, if transparent { 26 } else { 25 })
+        {
             eprintln!(
                 "draw image dst={destination:08X} src={source:08X} pixels={source_pixels:08X} size={source_width}x{source_height} clip={source_x},{source_y} {width}x{height} at={destination_x},{destination_y}"
             );
@@ -2398,6 +2660,52 @@ impl NicaiMachine {
         }
     }
 
+    fn handle_download_service(&mut self, index: u32) {
+        if index == 4 {
+            self.set_result(u32::MAX);
+        } else {
+            self.set_result(0);
+        }
+    }
+
+    fn handle_payment_service(&mut self, index: u32) {
+        if index == 7 {
+            let destination = self.register(0);
+            let capacity = self.register(1);
+            let identifier = b"111111111111111\0";
+            let count = capacity.min(identifier.len() as u32);
+            if destination != 0 && count != 0 {
+                self.memory
+                    .write_bytes(destination, &identifier[..count as usize]);
+                self.memory.w8(destination + count - 1, 0);
+            }
+        }
+        self.set_result(0);
+    }
+
+    fn handle_download_resource_service(&mut self, index: u32) {
+        match index {
+            0 => {
+                let package = self.memory.r32(DREAM_FACTORY_PACKAGE_SLOT);
+                self.set_result(package);
+            }
+            10 => {
+                let result = self.create_image_from_stream(self.register(0), self.register(1));
+                self.set_result(result);
+            }
+            _ => self.set_result(0),
+        }
+    }
+
+    fn handle_download_image_service(&mut self, index: u32) {
+        if index == 4 {
+            let pointer = self.allocate(self.register(0));
+            self.set_result(pointer);
+        } else {
+            self.set_result(0);
+        }
+    }
+
     fn read_length_prefixed_string(&mut self, buffer: u32, cursor: u32, wide_length: bool) -> u32 {
         let mut offset = self.memory.r32(cursor);
         let length = if wide_length {
@@ -2587,7 +2895,6 @@ impl NicaiMachine {
         if self.pending_screen != 0 && self.pending_screen != self.active_screen {
             self.active_screen = self.pending_screen;
             self.screen_initialized = false;
-            self.resource_load_pending = false;
         }
         if self.active_screen == 0 {
             bail!("CBE application has no active screen");
@@ -2595,13 +2902,27 @@ impl NicaiMachine {
 
         let screen = self.active_screen;
         let screen_this = self.screen_call_parameter(screen);
+        if std::env::var("CBE_TRACE").is_ok() {
+            eprintln!(
+                "screen callbacks screen={screen:08X} this={screen_this:08X} init={:08X} logic={:08X} render={:08X} load={:08X} pending_load={} sp={:08X}",
+                self.memory.r32(screen),
+                self.memory.r32(screen + 8),
+                self.memory.r32(screen + 12),
+                self.memory.r32(screen + 24),
+                self.resource_load_pending,
+                self.register(reg::SP),
+            );
+        }
         if !self.screen_initialized {
             let init = self.memory.r32(screen);
             self.invoke_callback(init, screen_this, 0, 0, instruction_limit)?;
             self.screen_initialized = true;
         }
-        if self.resource_load_pending {
+        if self.resource_load_pending
+            && (self.resource_load_screen == 0 || self.resource_load_screen == screen)
+        {
             self.resource_load_pending = false;
+            self.resource_load_screen = 0;
             let load_resource = self.memory.r32(screen + 24);
             self.invoke_callback(load_resource, screen_this, 0, 0, instruction_limit)?;
         }
@@ -2711,6 +3032,25 @@ mod tests {
             assert_eq!(memory.r16(0x1002), 0x3456);
             assert_eq!(memory.r32(0x1004), 0x789a_bcde);
         }
+    }
+
+    #[test]
+    fn arm_blx_immediate_switch_target_includes_h_bit() {
+        assert_eq!(
+            arm_blx_immediate_target(0x0102_e6d4, 0xfa00_0004),
+            Some(0x0102_e6ec)
+        );
+        assert_eq!(arm_blx_immediate_target(0x1000, 0xfb00_0000), Some(0x100a));
+        assert_eq!(arm_blx_immediate_target(0x1000, 0xea00_0000), None);
+    }
+
+    #[test]
+    fn manager_initializers_use_firmware_table_lengths() {
+        assert_eq!(manager_initializer_count(0), Some(30));
+        assert_eq!(manager_initializer_count(18), Some(115));
+        assert_eq!(manager_initializer_count(32), Some(144));
+        assert_eq!(manager_initializer_count(45), Some(6));
+        assert_eq!(manager_initializer_count(26), None);
     }
 
     #[test]
