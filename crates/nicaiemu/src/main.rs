@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use log::{info, warn};
 use minifb::{Key, ScaleMode, Window, WindowOptions};
-use nicaiemu_core::{CbeArchive, NicaiMachine};
+use nicaiemu_core::{decode_machine, encode_machine, CbeArchive, NicaiMachine, SERIALIZED_SIZE};
 
 #[derive(Parser)]
 #[command(name = "nicaiemu")]
@@ -40,6 +40,14 @@ struct Cli {
     #[arg(long, default_value_t = 30)]
     screenshot_frames: u32,
 
+    /// Write a save state to this path when the emulator exits.
+    #[arg(long, value_name = "PATH")]
+    save_state: Option<PathBuf>,
+
+    /// Load a save state from this path before running.
+    #[arg(long, value_name = "PATH")]
+    load_state: Option<PathBuf>,
+
     /// Enable verbose logging.
     #[arg(short, long)]
     verbose: bool,
@@ -70,8 +78,14 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let mut machine = NicaiMachine::new(&archive).context("failed to create CBE machine")?;
-    let boot_result = machine.boot(cli.instruction_limit);
+    let mut machine;
+    let mut boot_result = Ok(());
+    if let Some(path) = &cli.load_state {
+        machine = load_machine_state(&archive, path)?;
+    } else {
+        machine = NicaiMachine::new(&archive).context("failed to create CBE machine")?;
+        boot_result = machine.boot(cli.instruction_limit);
+    }
 
     if let Some(path) = &cli.screenshot {
         capture_screenshot(
@@ -81,6 +95,7 @@ fn main() -> Result<()> {
             cli.instruction_limit,
             path,
         )?;
+        write_save_state(&machine, &archive, cli.save_state.as_deref())?;
         return Ok(());
     }
 
@@ -122,6 +137,33 @@ fn main() -> Result<()> {
             .update_with_buffer(&pixels, 240, 400)
             .context("failed to update emulator window")?;
     }
+    write_save_state(&machine, &archive, cli.save_state.as_deref())?;
+    Ok(())
+}
+
+fn load_machine_state(archive: &CbeArchive, path: &Path) -> Result<NicaiMachine> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("failed to read save state: {}", path.display()))?;
+    let content_crc32 = crc32fast::hash(archive.bytes());
+    decode_machine(&bytes, content_crc32)
+        .with_context(|| format!("failed to load save state: {}", path.display()))
+}
+
+fn write_save_state(
+    machine: &NicaiMachine,
+    archive: &CbeArchive,
+    path: Option<&Path>,
+) -> Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let mut buffer = vec![0u8; SERIALIZED_SIZE];
+    let content_crc32 = crc32fast::hash(archive.bytes());
+    encode_machine(machine, content_crc32, &mut buffer)
+        .with_context(|| format!("failed to encode save state: {}", path.display()))?;
+    std::fs::write(path, &buffer)
+        .with_context(|| format!("failed to write save state: {}", path.display()))?;
+    info!("Save state written to: {}", path.display());
     Ok(())
 }
 
@@ -225,5 +267,22 @@ mod tests {
 
         assert_eq!(cli.screenshot, None);
         assert_eq!(cli.screenshot_frames, 30);
+    }
+
+    #[test]
+    fn parses_save_and_load_state_options() {
+        let cli = Cli::try_parse_from([
+            "nicaiemu",
+            "--file",
+            "game.CBE",
+            "--save-state",
+            "game.sav",
+            "--load-state",
+            "old.sav",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.save_state, Some(PathBuf::from("game.sav")));
+        assert_eq!(cli.load_state, Some(PathBuf::from("old.sav")));
     }
 }
