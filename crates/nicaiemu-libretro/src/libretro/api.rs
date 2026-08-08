@@ -7,7 +7,7 @@ use super::callbacks;
 use super::constants::*;
 use super::types::*;
 use nicaiemu_core::{CbeArchive, NicaiMachine};
-use std::ffi::{c_void, CStr};
+use std::ffi::{c_char, c_void, CStr};
 use std::path::Path;
 use std::ptr;
 
@@ -397,6 +397,30 @@ pub extern "C" fn retro_serialize(_data: *mut std::ffi::c_void, _size: usize) ->
 #[no_mangle]
 pub extern "C" fn retro_unserialize(_data: *const std::ffi::c_void, _size: usize) -> bool {
     false
+}
+
+// ============================================================
+// Optional API stubs required for frontend symbol resolution
+// ============================================================
+
+#[no_mangle]
+pub extern "C" fn retro_cheat_reset() {
+    // Cheat slots arrive in a later milestone.
+}
+
+#[no_mangle]
+pub extern "C" fn retro_cheat_set(_index: u32, _enabled: bool, _code: *const c_char) {
+    // Cheat slots arrive in a later milestone.
+}
+
+#[no_mangle]
+pub extern "C" fn retro_get_memory_data(_id: u32) -> *mut c_void {
+    ptr::null_mut()
+}
+
+#[no_mangle]
+pub extern "C" fn retro_get_memory_size(_id: u32) -> usize {
+    0
 }
 
 #[cfg(test)]
