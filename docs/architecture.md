@@ -23,7 +23,8 @@ Native applications receive guest-callable tables whose entries lead to emulator
 - byte- and word-length-prefixed stream reads across both DreamFactory manager table layouts;
 - RGB565 screen and image drawing;
 - GBK text measurement and rendering;
-- phone-key edge and held-state queries;
+- phone-key edge and held-state queries, with auto-repeat for held keys so a
+  press produces one step while holding keeps moving;
 - screen transitions and resource notifications;
 - a bounded subset of C-style formatted strings.
 

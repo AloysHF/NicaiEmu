@@ -730,6 +730,9 @@ pub struct NicaiMachine {
     resource_load_screen: u32,
     key_down: u32,
     key_held: u32,
+    key_held_physical: u32,
+    key_press_frame: [u32; 31],
+    key_frame_counter: u32,
     resources: Vec<HostResource>,
     resource_data: Vec<u32>,
     resource_names: Vec<u32>,
@@ -811,6 +814,9 @@ impl NicaiMachine {
             resource_load_screen: 0,
             key_down: 0,
             key_held: 0,
+            key_held_physical: 0,
+            key_press_frame: [u32::MAX; 31],
+            key_frame_counter: 0,
             resources: {
                 let mut native = native_package_resources(archive.bytes(), resource_package_offset);
                 if native.is_empty() {
@@ -3421,6 +3427,7 @@ impl NicaiMachine {
         if self.state != MachineState::Ready {
             bail!("CBE machine is not ready");
         }
+        self.update_key_state();
         if self.uses_native_dispatch_abi() {
             return self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit);
         }
@@ -3484,6 +3491,71 @@ impl NicaiMachine {
         }
     }
 
+    /// Frames a held key stays visible for one walk step or repeat pulse.
+    const KEY_STEP_FRAMES: u32 = 5;
+    /// Frames a held key is hidden after the initial step before auto-repeat.
+    const KEY_REPEAT_DELAY: u32 = 10;
+    /// Frames an auto-repeat step stays visible while a key stays held.
+    const KEY_REPEAT_ON_FRAMES: u32 = 1;
+    /// Frames between auto-repeat steps while a key stays held.
+    const KEY_REPEAT_OFF_FRAMES: u32 = 14;
+
+    /// Whether a key held for `elapsed` frames is visible to `GAME_isKeyHold`.
+    ///
+    /// The key is visible once at the end of the initial step window (the frame
+    /// where tile-based games complete the first walk step), hidden during the
+    /// repeat delay, then visible again in short auto-repeat pulses so holding
+    /// the key keeps producing discrete walk steps.
+    fn key_visible_in_frame(
+        elapsed: u32,
+        step: u32,
+        delay: u32,
+        repeat_on: u32,
+        repeat_off: u32,
+    ) -> bool {
+        if elapsed == step.saturating_sub(1) {
+            return true;
+        }
+        elapsed
+            .checked_sub(step + delay)
+            .is_some_and(|frames| frames % (repeat_on + repeat_off) < repeat_on)
+    }
+
+    /// Refresh the game-visible held state using feature-phone auto-repeat.
+    ///
+    /// A fresh press exposes the key to `GAME_isKeyHold` for a short step
+    /// window so each press advances exactly one tile.  While the physical key
+    /// stays held, further step windows fire after a delay so holding keeps
+    /// walking instead of flooding the game with one move per frame.
+    fn update_key_state(&mut self) {
+        self.key_frame_counter = self.key_frame_counter.wrapping_add(1);
+        let counter = self.key_frame_counter;
+        let mut visible = 0u32;
+        for (key, press_frame) in self.key_press_frame.iter().enumerate() {
+            if *press_frame == u32::MAX {
+                continue;
+            }
+            let mask = 1u32 << key;
+            let elapsed = counter.wrapping_sub(*press_frame);
+            let physically_held = self.key_held_physical & mask != 0;
+            // A released key stays visible only while its initial step window
+            // is still open, so a very quick tap still completes one step.
+            let within_step_grace = physically_held || elapsed < Self::KEY_STEP_FRAMES;
+            if within_step_grace
+                && Self::key_visible_in_frame(
+                    elapsed,
+                    Self::KEY_STEP_FRAMES,
+                    Self::KEY_REPEAT_DELAY,
+                    Self::KEY_REPEAT_ON_FRAMES,
+                    Self::KEY_REPEAT_OFF_FRAMES,
+                )
+            {
+                visible |= mask;
+            }
+        }
+        self.key_held = visible;
+    }
+
     /// Set a guest key state. Key codes use the platform ABI values (0-20).
     pub fn set_key(&mut self, key: u8, pressed: bool) {
         if key >= 31 {
@@ -3491,12 +3563,24 @@ impl NicaiMachine {
         }
         let mask = 1u32 << key;
         if pressed {
-            if self.key_held & mask == 0 {
+            if self.key_held_physical & mask == 0 {
                 self.key_down |= mask;
+                // Frontends that re-report a held key every frame must not
+                // restart the step window, or the guest never observes the
+                // completed step.  Only a press after the previous step window
+                // started a fresh press.
+                let fresh_press = self.key_press_frame[key as usize] == u32::MAX
+                    || self
+                        .key_frame_counter
+                        .wrapping_sub(self.key_press_frame[key as usize])
+                        >= Self::KEY_STEP_FRAMES;
+                if fresh_press {
+                    self.key_press_frame[key as usize] = self.key_frame_counter;
+                }
             }
-            self.key_held |= mask;
+            self.key_held_physical |= mask;
         } else {
-            self.key_held &= !mask;
+            self.key_held_physical &= !mask;
         }
     }
 
@@ -3604,6 +3688,27 @@ mod tests {
         assert_eq!(game_service_string_uses_wide_length(101), Some(true));
         assert_eq!(game_service_string_uses_wide_length(96), None);
         assert_eq!(game_service_string_uses_wide_length(102), None);
+    }
+
+    #[test]
+    fn key_hold_auto_repeat_produces_bounded_steps() {
+        let (step, delay, on, off) = (5u32, 10u32, 1u32, 14u32);
+        let visible: Vec<u32> = (0..45)
+            .filter(|elapsed| NicaiMachine::key_visible_in_frame(*elapsed, step, delay, on, off))
+            .collect();
+        // One visible frame for the initial step, then a quiet delay, then
+        // single-frame auto-repeat steps while the key stays held.
+        assert_eq!(visible, [4, 15, 30]);
+    }
+
+    #[test]
+    fn key_hold_auto_repeat_hides_between_steps() {
+        let (step, delay, on, off) = (5u32, 10u32, 1u32, 14u32);
+        assert!(!NicaiMachine::key_visible_in_frame(3, step, delay, on, off));
+        assert!(NicaiMachine::key_visible_in_frame(4, step, delay, on, off));
+        assert!(!NicaiMachine::key_visible_in_frame(
+            24, step, delay, on, off
+        ));
     }
 
     #[test]
