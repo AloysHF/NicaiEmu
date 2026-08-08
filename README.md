@@ -15,114 +15,142 @@
   <a href="https://qm.qq.com/q/LAO7DKAWUC"><img src="https://img.shields.io/badge/QQ%E7%BE%A4-Join%20Us-12B7F5?logo=tencent-qq&logoColor=white" alt="QQ Group"></a>
 </p>
 
-NicaiEmu is a Rust emulator for ARM/Thumb CBE applications used by Nicai/MStar mobile phones. It loads the executable and packaged resources directly, runs guest code through a pure-Rust ARM core, and bridges the phone services needed by supported games.
+NicaiEmu is a Rust emulator for ARM/Thumb CBE applications used by Nicai/MStar
+mobile phones. It loads the executable and packaged resources directly, runs
+guest code through a pure-Rust ARM core, and bridges the phone services needed
+by supported games.
 
-## Current capabilities
+## Features
 
-- Little- and big-endian CBE executable header, segment, checksum, section, and resource parsing
-- ARM and Thumb guest execution, including interworking branches and PC-relative jump tables
-- Firmware-style service tables for memory, resource, display, input, data streams, and formatted strings
-- CBE RGB565 GIF and firmware PNG reconstruction with clipped image drawing
-- GBK text decoding with an embedded Unicode bitmap font
-- 240×400 RGB565 framebuffer and a resizable desktop window
-- Scriptable headless execution for deterministic compatibility testing
-- SCE, MAP, and actor resource inspection helpers
+- **CBE format support** — section parsing, resource lookup, image decoding
+- **ARM/Thumb CPU emulation** — little- and big-endian execution, interworking branches
+- **Service bridge** — firmware-style API for memory, resources, display, input, and text
+- **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
+- **Text rendering** — GBK decoding with embedded Unicode bitmap font
+- **240×400 display** — native WQVGA resolution with resizable desktop window
+- **Headless mode** — run without a window for testing and batch processing
+- **Screenshot capture** — automated PNG screenshot generation
+- **Libretro integration** — libretro core scaffold (in progress)
 
-The desktop frontend runs compatible native CBE executables. Libretro integration, audio output, save states, and broad compatibility across every CBE engine revision remain incomplete.
+## Usage
+
+### Standalone Mode
+
+Download the latest binary from the
+[Releases](https://github.com/jiangxincode/NicaiEmu/releases) page and run:
+
+```bash
+nicaiemu --file path/to/game.CBE
+```
+
+See the [Standalone Emulator](docs/Standalone-Emulator.md) guide for
+installation, keyboard controls, headless mode, screenshots, and all
+command-line options.
+
+### RetroArch Mode
+
+Install the core and load a game through RetroArch's **Load Content** menu.
+
+See the [RetroArch Core](docs/RetroArch-Core.md) guide for installation,
+supported platforms, RetroPad mapping, and features.
 
 ## Building
 
-Install a current stable Rust toolchain, then build the desktop frontend:
+Requires [Rust](https://www.rust-lang.org/tools/install) (stable).
+
+### Standalone Mode
 
 ```bash
-cargo build --release -p nicaiemu
+cargo build -p nicaiemu --release
+cargo run -p nicaiemu --release -- --file path/to/game.CBE
 ```
 
-All runtime dependencies are implemented in Rust. Linux desktop builds also require the system libraries used by `minifb`.
-
-## Running a game
+### Libretro Core (for RetroArch)
 
 ```bash
-cargo run --release -p nicaiemu -- --file path/to/game.CBE
+cargo build -p nicaiemu-libretro --release
 ```
 
-Useful options:
+The binary is produced at `target/release/nicaiemu.dll`
+(`libnicaiemu.so` on Linux, `libnicaiemu.dylib` on macOS). Rename it to
+`nicaiemu_libretro.<ext>` before placing it in RetroArch's `cores/`
+directory.
 
-```text
--f, --file <FILE>                 CBE executable to load
--l, --list                        List packaged resources and exit
--w, --width <WIDTH>               Initial window width (default: 480)
--H, --height <HEIGHT>             Initial window height (default: 800)
-    --instruction-limit <COUNT>   Maximum guest instructions per callback
--S, --screenshot <PATH>           Run headlessly, save a PNG screenshot, and exit
-    --screenshot-frames <COUNT>   Frames to run before capture (default: 30)
--v, --verbose                     Enable debug logging
+For Android cross-compilation, see [Android Libretro Core](docs/Android-Libretro-Core.md).
+For iOS, see [iOS Libretro Core](docs/iOS-Libretro-Core.md).
+
+## Architecture
+
+```
+crates/
+├── nicaiemu-core/         # Platform-independent emulator engine (library)
+│   └── src/
+│       ├── lib.rs            # Crate root
+│       ├── machine.rs        # Core machine tying all components together
+│       ├── arm_cpu.rs        # ARM/Thumb CPU emulation
+│       ├── memory.rs         # Sparse memory regions
+│       ├── cbe_archive.rs    # CBE container parser
+│       ├── cbe_executable.rs # CBE executable loader
+│       ├── renderer.rs       # RGB565 → RGB888 framebuffer conversion
+│       ├── services.rs       # Firmware service bridge
+│       ├── text.rs           # GBK text and font rendering
+│       └── ...
+├── nicaiemu/              # Standalone binary (→ nicaiemu)
+│   └── src/
+│       ├── main.rs           # Window loop, CLI, keyboard input
+│       └── ...
+├── nicaiemu-tools/        # Archive analysis and headless diagnostics
+│   └── src/
+│       ├── bin/
+│       │   ├── cbe_boot.rs   # Headless boot tool
+│       │   └── cbe_ls.rs     # Archive listing tool
+│       └── ...
+└── nicaiemu-libretro/     # Libretro integration scaffold
+    └── src/
+        └── ...
 ```
 
-Capture a screenshot after 120 frames without opening a window:
+See [Architecture](docs/architecture.md) for implementation details.
 
-```bash
-cargo run --release -p nicaiemu -- --file path/to/game.CBE \
-  --screenshot frame.png --screenshot-frames 120
-```
+## Key Mappings (Standalone)
 
-Controls:
-
-| Phone input | Keyboard |
+| Phone Input | Keyboard |
 | --- | --- |
 | Direction pad | Arrow keys or WASD |
 | Confirm | Enter or F |
-| Left/right soft keys | Q / E |
+| Left soft key | Q |
+| Right soft key | E |
 | Numeric keypad | 0–9 |
 | Additional keys | N / M |
 | Exit | Escape |
 
-## Headless validation
+## Game Compatibility
 
-The `cbe_boot` tool runs the same machine core without opening a window. A key event uses `FRAME:PHONE_KEY` syntax.
+The emulator supports CBE applications for Nicai/MStar phones with 240×400
+display. 75 out of 75 tested games render startup frames successfully.
 
-```bash
-cargo run --release -p nicaiemu-tools --bin cbe_boot -- \
-  path/to/game.CBE --frames 120 --key-event 1:14 --screenshot frame.png
-```
+| Status | Count |
+|--------|-------|
+| ✅ Pass | 75 |
+| ❌ Fail | 0 |
 
-Set `CBE_TRACE=all` to trace every bridged service, or provide comma-separated service filters such as `CBE_TRACE=4:24,6:3`. Tracing is disabled by default.
-
-To capture every CBE application in the local validation directory, run:
-
-```powershell
-pwsh scripts/batch-screenshots.ps1
-```
-
-The script builds the standalone `nicaiemu` executable, runs each application
-for 120 frames, and writes PNG captures to `docs/images`. Headless capture keeps
-the last guest-rendered frame if a later callback stops. Blank frames and
-applications that stop before drawing are reported as failures. Use
-`-Frames`, `-Binary`, `-GameDirectory`, or `-OutputDirectory` to override the
-script defaults.
-
-## Architecture
-
-The workspace separates the platform-independent machine from its frontends:
-
-```text
-crates/nicaiemu-core/      CBE parser, ARM machine, services, and rendering
-crates/nicaiemu/           Desktop window, input, and frame loop
-crates/nicaiemu-tools/     Archive analysis and headless diagnostics
-crates/nicaiemu-libretro/  Libretro integration scaffold
-```
-
-See [Architecture](docs/architecture.md) and
-[Game Compatibility](docs/Game-Compatibility.md) for implementation details,
-current limitations, and the latest batch results.
+For the full game list with screenshots, see [Game Compatibility](docs/Game-Compatibility.md).
 
 ## Testing
+
+Run the unit tests:
 
 ```bash
 cargo test --workspace --release
 ```
 
 Game files are not included. Supply legally obtained CBE applications separately.
+
+## Contributing
+
+Contributions are welcome! Whether you're interested in fixing bugs, adding
+features, improving documentation, or testing game compatibility, we'd love your
+help. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for details.
 
 ## License
 

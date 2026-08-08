@@ -12,91 +12,91 @@ Validated behavior includes executable initialization, startup and narrative scr
 
 ## Summary
 
-| Capture result | Count |
+| Status | Count |
 | --- | ---: |
-| ✅ Guest-rendered frame | 75 |
-| ❌ No screenshot | 0 |
+| ✅ Pass | 75 |
+| ❌ Fail | 0 |
 | **Total** | **75** |
 
 ## Application List
 
-| # | Application | Screenshot | Capture result |
-| ---: | --- | --- | --- |
-| 1 | 暴打小猪 | <img src="images/暴打小猪.png" width="120"> | ✅ Rendered, 2648 colors |
-| 2 | 暴力摩托 | <img src="images/暴力摩托.png" width="120"> | ✅ Rendered, 119 colors |
-| 3 | 捕鱼猎人 | <img src="images/捕鱼猎人.png" width="120"> | ✅ Rendered, 650 colors |
-| 4 | 打地鼠 | <img src="images/打地鼠.png" width="120"> | ✅ Rendered, 744 colors |
-| 5 | 打火机 | <img src="images/打火机.png" width="120"> | ✅ Rendered, 181 colors |
-| 6 | 大家来数钱 | <img src="images/大家来数钱.png" width="120"> | ✅ Rendered, 6015 colors |
-| 7 | 电子邮件 | <img src="images/电子邮件.png" width="120"> | ✅ Rendered, 182 colors |
-| 8 | 动感骰子 | <img src="images/动感骰子.png" width="120"> | ✅ Rendered, 270 colors |
-| 9 | 恶魔城 | <img src="images/恶魔城.png" width="120"> | ✅ Rendered, 11 colors |
-| 10 | 恶魔城登录版 | <img src="images/恶魔城登录版.png" width="120"> | ✅ Rendered, 6 colors |
-| 11 | 法老祖玛2 | <img src="images/法老祖玛2.png" width="120"> | ✅ Rendered, 62 colors |
-| 12 | 愤怒的小鸟 | <img src="images/愤怒的小鸟.png" width="120"> | ✅ Rendered, 241 colors |
-| 13 | 疯狂捕鸟 | <img src="images/疯狂捕鸟.png" width="120"> | ✅ Rendered, 199 colors |
-| 14 | 疯狂斗地主 | <img src="images/疯狂斗地主.png" width="120"> | ✅ Rendered, 157 colors |
-| 15 | 疯狂企鹅大冒险 | <img src="images/疯狂企鹅大冒险.png" width="120"> | ✅ Rendered, 2 colors |
-| 16 | 割绳子 | <img src="images/割绳子.png" width="120"> | ✅ Rendered, 784 colors |
-| 17 | 割绳子冬季版 | <img src="images/割绳子冬季版.png" width="120"> | ✅ Rendered, 518 colors |
-| 18 | 孤岛 | <img src="images/孤岛.png" width="120"> | ✅ Rendered, 508 colors |
-| 19 | 鬼吹灯 | <img src="images/鬼吹灯.png" width="120"> | ✅ Rendered, 347 colors |
-| 20 | 果蔬连连看 | <img src="images/果蔬连连看.png" width="120"> | ✅ Rendered, 1402 colors |
-| 21 | 皇牌空战 | <img src="images/皇牌空战.png" width="120"> | ✅ Rendered, 266 colors |
-| 22 | 火辣美女视频 | <img src="images/火辣美女视频.png" width="120"> | ✅ Rendered, 445 colors |
-| 23 | 机场指挥部 | <img src="images/机场指挥部.png" width="120"> | ✅ Rendered, 482 colors |
-| 24 | 激情砖块 | <img src="images/激情砖块.png" width="120"> | ✅ Rendered, 5701 colors |
-| 25 | 极品飞车2012 | <img src="images/极品飞车2012.png" width="120"> | ✅ Rendered, 255 colors |
-| 26 | 江湖OL | <img src="images/江湖OL.png" width="120"> | ✅ Rendered, 6 colors |
-| 27 | 江湖Online | <img src="images/江湖Online.png" width="120"> | ✅ Rendered, 6 colors |
-| 28 | 僵尸先生 | <img src="images/僵尸先生.png" width="120"> | ✅ Rendered, 4 colors |
-| 29 | 开心大富翁 | <img src="images/开心大富翁.png" width="120"> | ✅ Rendered, 255 colors |
-| 30 | 雷电 | <img src="images/雷电.png" width="120"> | ✅ Rendered, 503 colors |
-| 31 | 雷霆战机 | <img src="images/雷霆战机.png" width="120"> | ✅ Rendered, 9 colors |
-| 32 | 马戏团 | <img src="images/马戏团.png" width="120"> | ✅ Rendered, 417 colors |
-| 33 | 猫和老鼠 | <img src="images/猫和老鼠.png" width="120"> | ✅ Rendered, 150 colors |
-| 34 | 美女桌球 | <img src="images/美女桌球.png" width="120"> | ✅ Rendered, 331 colors |
-| 35 | 魔鬼理发师 | <img src="images/魔鬼理发师.png" width="120"> | ✅ Rendered, 76 colors |
-| 36 | 魔兽塔防 | <img src="images/魔兽塔防.png" width="120"> | ✅ Rendered, 131 colors |
-| 37 | 魔塔 | <img src="images/魔塔.png" width="120"> | ✅ Rendered, 145 colors |
-| 38 | 牧场物语 | <img src="images/牧场物语.png" width="120"> | ✅ Rendered, 439 colors |
-| 39 | 碰嘭球 | <img src="images/碰嘭球.png" width="120"> | ✅ Rendered, 5855 colors |
-| 40 | 枪之荣誉 | <img src="images/枪之荣誉.png" width="120"> | ✅ Rendered, 406 colors |
-| 41 | 热辣美图 | <img src="images/热辣美图.png" width="120"> | ✅ Rendered, 161 colors |
-| 42 | 忍者跳跃 | <img src="images/忍者跳跃.png" width="120"> | ✅ Rendered, 422 colors |
-| 43 | 三国群殴传 | <img src="images/三国群殴传.png" width="120"> | ✅ Rendered, 9692 colors |
-| 44 | 时间同步 | <img src="images/时间同步.png" width="120"> | ✅ Rendered, 3 colors |
-| 45 | 士兵突袭 | <img src="images/士兵突袭.png" width="120"> | ✅ Rendered, 257 colors |
-| 46 | 世纪佳缘 | <img src="images/世纪佳缘.png" width="120"> | ✅ Rendered, 435 colors |
-| 47 | 水果达人 | <img src="images/水果达人.png" width="120"> | ✅ Rendered, 216 colors |
-| 48 | 天气精灵 | <img src="images/天气精灵.png" width="120"> | ✅ Rendered, 20 colors |
-| 49 | 涂鸦跳跃 | <img src="images/涂鸦跳跃.png" width="120"> | ✅ Rendered, 187 colors |
-| 50 | 歪歪猫发条城历险记V100 | <img src="images/歪歪猫发条城历险记V100.png" width="120"> | ✅ Rendered, 2 colors |
-| 51 | 万年历 | <img src="images/万年历.png" width="120"> | ✅ Rendered, 138 colors |
-| 52 | 武林外传(新品) | <img src="images/武林外传(新品).png" width="120"> | ✅ Rendered, 2 colors |
-| 53 | 武林外传V10 | <img src="images/武林外传V10.png" width="120"> | ✅ Rendered, 3 colors |
-| 54 | 吸血鬼猎人 | <img src="images/吸血鬼猎人.png" width="120"> | ✅ Rendered, 373 colors |
-| 55 | 现代情趣大全 | <img src="images/现代情趣大全.png" width="120"> | ✅ Rendered, 256 colors |
-| 56 | 消息盒子 | <img src="images/消息盒子.png" width="120"> | ✅ Rendered, 481 colors |
-| 57 | 小酷 | <img src="images/小酷.png" width="120"> | ✅ Rendered, 241 colors |
-| 58 | 小鸟愤怒冬季版 | <img src="images/小鸟愤怒冬季版.png" width="120"> | ✅ Rendered, 256 colors |
-| 59 | 笑死人 | <img src="images/笑死人.png" width="120"> | ✅ Rendered, 434 colors |
-| 60 | 新闻 | <img src="images/新闻.png" width="120"> | ✅ Rendered, 65 colors |
-| 61 | 幸运扑克机 | <img src="images/幸运扑克机.png" width="120"> | ✅ Rendered, 664 colors |
-| 62 | 性爱宝典 | <img src="images/性爱宝典.png" width="120"> | ✅ Rendered, 6 colors |
-| 63 | 性爱高手 | <img src="images/性爱高手.png" width="120"> | ✅ Rendered, 3 colors |
-| 64 | 雄霸天下 | <img src="images/雄霸天下.png" width="120"> | ✅ Rendered, 6 colors |
-| 65 | 炫酷音乐彩铃 | <img src="images/炫酷音乐彩铃.png" width="120"> | ✅ Rendered, 444 colors |
-| 66 | 血剑Online | <img src="images/血剑Online.png" width="120"> | ✅ Rendered, 6 colors |
-| 67 | 移淘网 | <img src="images/移淘网.png" width="120"> | ✅ Rendered, 360 colors |
-| 68 | 英汉词典 | <img src="images/英汉词典.png" width="120"> | ✅ Rendered, 336 colors |
-| 69 | 在线书城 | <img src="images/在线书城.png" width="120"> | ✅ Rendered, 156 colors |
-| 70 | 在线音乐 | <img src="images/在线音乐.png" width="120"> | ✅ Rendered, 51 colors |
-| 71 | 战争机器 | <img src="images/战争机器.png" width="120"> | ✅ Rendered, 480 colors |
-| 72 | 众神之战 | <img src="images/众神之战.png" width="120"> | ✅ Rendered, 3 colors |
-| 73 | 钻石迷情3 | <img src="images/钻石迷情3.png" width="120"> | ✅ Rendered, 951 colors |
-| 74 | AppStore | <img src="images/AppStore.png" width="120"> | ✅ Rendered, 173 colors |
-| 75 | Google地图 | <img src="images/Google地图.png" width="120"> | ✅ Rendered, 22 colors |
+| # | Application | File | Screenshot | Status |
+| ---: | --- | --- | --- | --- |
+| 1 | 暴打小猪 | tmp/nicai_game/暴打小猪.CBE | <img src="images/暴打小猪.png" width="120"> | ✅ Pass |
+| 2 | 暴力摩托 | tmp/nicai_game/暴力摩托.CBE | <img src="images/暴力摩托.png" width="120"> | ✅ Pass |
+| 3 | 捕鱼猎人 | tmp/nicai_game/捕鱼猎人.CBE | <img src="images/捕鱼猎人.png" width="120"> | ✅ Pass |
+| 4 | 打地鼠 | tmp/nicai_game/打地鼠.CBE | <img src="images/打地鼠.png" width="120"> | ✅ Pass |
+| 5 | 打火机 | tmp/nicai_game/打火机.CBE | <img src="images/打火机.png" width="120"> | ✅ Pass |
+| 6 | 大家来数钱 | tmp/nicai_game/大家来数钱.CBE | <img src="images/大家来数钱.png" width="120"> | ✅ Pass |
+| 7 | 电子邮件 | tmp/nicai_game/电子邮件.CBE | <img src="images/电子邮件.png" width="120"> | ✅ Pass |
+| 8 | 动感骰子 | tmp/nicai_game/动感骰子.CBE | <img src="images/动感骰子.png" width="120"> | ✅ Pass |
+| 9 | 恶魔城 | tmp/nicai_game/恶魔城.CBE | <img src="images/恶魔城.png" width="120"> | ✅ Pass |
+| 10 | 恶魔城登录版 | tmp/nicai_game/恶魔城登录版.CBE | <img src="images/恶魔城登录版.png" width="120"> | ✅ Pass |
+| 11 | 法老祖玛2 | tmp/nicai_game/法老祖玛2.CBE | <img src="images/法老祖玛2.png" width="120"> | ✅ Pass |
+| 12 | 愤怒的小鸟 | tmp/nicai_game/愤怒的小鸟.CBE | <img src="images/愤怒的小鸟.png" width="120"> | ✅ Pass |
+| 13 | 疯狂捕鸟 | tmp/nicai_game/疯狂捕鸟.CBE | <img src="images/疯狂捕鸟.png" width="120"> | ✅ Pass |
+| 14 | 疯狂斗地主 | tmp/nicai_game/疯狂斗地主.CBE | <img src="images/疯狂斗地主.png" width="120"> | ✅ Pass |
+| 15 | 疯狂企鹅大冒险 | tmp/nicai_game/疯狂企鹅大冒险.CBE | <img src="images/疯狂企鹅大冒险.png" width="120"> | ✅ Pass |
+| 16 | 割绳子 | tmp/nicai_game/割绳子.CBE | <img src="images/割绳子.png" width="120"> | ✅ Pass |
+| 17 | 割绳子冬季版 | tmp/nicai_game/割绳子冬季版.CBE | <img src="images/割绳子冬季版.png" width="120"> | ✅ Pass |
+| 18 | 孤岛 | tmp/nicai_game/孤岛.CBE | <img src="images/孤岛.png" width="120"> | ✅ Pass |
+| 19 | 鬼吹灯 | tmp/nicai_game/鬼吹灯.CBE | <img src="images/鬼吹灯.png" width="120"> | ✅ Pass |
+| 20 | 果蔬连连看 | tmp/nicai_game/果蔬连连看.CBE | <img src="images/果蔬连连看.png" width="120"> | ✅ Pass |
+| 21 | 皇牌空战 | tmp/nicai_game/皇牌空战.CBE | <img src="images/皇牌空战.png" width="120"> | ✅ Pass |
+| 22 | 火辣美女视频 | tmp/nicai_game/火辣美女视频.CBE | <img src="images/火辣美女视频.png" width="120"> | ✅ Pass |
+| 23 | 机场指挥部 | tmp/nicai_game/机场指挥部.CBE | <img src="images/机场指挥部.png" width="120"> | ✅ Pass |
+| 24 | 激情砖块 | tmp/nicai_game/激情砖块.CBE | <img src="images/激情砖块.png" width="120"> | ✅ Pass |
+| 25 | 极品飞车2012 | tmp/nicai_game/极品飞车2012.CBE | <img src="images/极品飞车2012.png" width="120"> | ✅ Pass |
+| 26 | 江湖OL | tmp/nicai_game/江湖OL.CBE | <img src="images/江湖OL.png" width="120"> | ✅ Pass |
+| 27 | 江湖Online | tmp/nicai_game/江湖Online.CBE | <img src="images/江湖Online.png" width="120"> | ✅ Pass |
+| 28 | 僵尸先生 | tmp/nicai_game/僵尸先生.CBE | <img src="images/僵尸先生.png" width="120"> | ✅ Pass |
+| 29 | 开心大富翁 | tmp/nicai_game/开心大富翁.CBE | <img src="images/开心大富翁.png" width="120"> | ✅ Pass |
+| 30 | 雷电 | tmp/nicai_game/雷电.CBE | <img src="images/雷电.png" width="120"> | ✅ Pass |
+| 31 | 雷霆战机 | tmp/nicai_game/雷霆战机.CBE | <img src="images/雷霆战机.png" width="120"> | ✅ Pass |
+| 32 | 马戏团 | tmp/nicai_game/马戏团.CBE | <img src="images/马戏团.png" width="120"> | ✅ Pass |
+| 33 | 猫和老鼠 | tmp/nicai_game/猫和老鼠.CBE | <img src="images/猫和老鼠.png" width="120"> | ✅ Pass |
+| 34 | 美女桌球 | tmp/nicai_game/美女桌球.CBE | <img src="images/美女桌球.png" width="120"> | ✅ Pass |
+| 35 | 魔鬼理发师 | tmp/nicai_game/魔鬼理发师.CBE | <img src="images/魔鬼理发师.png" width="120"> | ✅ Pass |
+| 36 | 魔兽塔防 | tmp/nicai_game/魔兽塔防.CBE | <img src="images/魔兽塔防.png" width="120"> | ✅ Pass |
+| 37 | 魔塔 | tmp/nicai_game/魔塔.CBE | <img src="images/魔塔.png" width="120"> | ✅ Pass |
+| 38 | 牧场物语 | tmp/nicai_game/牧场物语.CBE | <img src="images/牧场物语.png" width="120"> | ✅ Pass |
+| 39 | 碰嘭球 | tmp/nicai_game/碰嘭球.CBE | <img src="images/碰嘭球.png" width="120"> | ✅ Pass |
+| 40 | 枪之荣誉 | tmp/nicai_game/枪之荣誉.CBE | <img src="images/枪之荣誉.png" width="120"> | ✅ Pass |
+| 41 | 热辣美图 | tmp/nicai_game/热辣美图.CBE | <img src="images/热辣美图.png" width="120"> | ✅ Pass |
+| 42 | 忍者跳跃 | tmp/nicai_game/忍者跳跃.CBE | <img src="images/忍者跳跃.png" width="120"> | ✅ Pass |
+| 43 | 三国群殴传 | tmp/nicai_game/三国群殴传.CBE | <img src="images/三国群殴传.png" width="120"> | ✅ Pass |
+| 44 | 时间同步 | tmp/nicai_game/时间同步.CBE | <img src="images/时间同步.png" width="120"> | ✅ Pass |
+| 45 | 士兵突袭 | tmp/nicai_game/士兵突袭.CBE | <img src="images/士兵突袭.png" width="120"> | ✅ Pass |
+| 46 | 世纪佳缘 | tmp/nicai_game/世纪佳缘.CBE | <img src="images/世纪佳缘.png" width="120"> | ✅ Pass |
+| 47 | 水果达人 | tmp/nicai_game/水果达人.CBE | <img src="images/水果达人.png" width="120"> | ✅ Pass |
+| 48 | 天气精灵 | tmp/nicai_game/天气精灵.CBE | <img src="images/天气精灵.png" width="120"> | ✅ Pass |
+| 49 | 涂鸦跳跃 | tmp/nicai_game/涂鸦跳跃.CBE | <img src="images/涂鸦跳跃.png" width="120"> | ✅ Pass |
+| 50 | 歪歪猫发条城历险记V100 | tmp/nicai_game/歪歪猫发条城历险记V100.CBE | <img src="images/歪歪猫发条城历险记V100.png" width="120"> | ✅ Pass |
+| 51 | 万年历 | tmp/nicai_game/万年历.CBE | <img src="images/万年历.png" width="120"> | ✅ Pass |
+| 52 | 武林外传(新品) | tmp/nicai_game/武林外传(新品).CBE | <img src="images/武林外传(新品).png" width="120"> | ✅ Pass |
+| 53 | 武林外传V10 | tmp/nicai_game/武林外传V10.CBE | <img src="images/武林外传V10.png" width="120"> | ✅ Pass |
+| 54 | 吸血鬼猎人 | tmp/nicai_game/吸血鬼猎人.CBE | <img src="images/吸血鬼猎人.png" width="120"> | ✅ Pass |
+| 55 | 现代情趣大全 | tmp/nicai_game/现代情趣大全.CBE | <img src="images/现代情趣大全.png" width="120"> | ✅ Pass |
+| 56 | 消息盒子 | tmp/nicai_game/消息盒子.CBE | <img src="images/消息盒子.png" width="120"> | ✅ Pass |
+| 57 | 小酷 | tmp/nicai_game/小酷.CBE | <img src="images/小酷.png" width="120"> | ✅ Pass |
+| 58 | 小鸟愤怒冬季版 | tmp/nicai_game/小鸟愤怒冬季版.CBE | <img src="images/小鸟愤怒冬季版.png" width="120"> | ✅ Pass |
+| 59 | 笑死人 | tmp/nicai_game/笑死人.CBE | <img src="images/笑死人.png" width="120"> | ✅ Pass |
+| 60 | 新闻 | tmp/nicai_game/新闻.CBE | <img src="images/新闻.png" width="120"> | ✅ Pass |
+| 61 | 幸运扑克机 | tmp/nicai_game/幸运扑克机.CBE | <img src="images/幸运扑克机.png" width="120"> | ✅ Pass |
+| 62 | 性爱宝典 | tmp/nicai_game/性爱宝典.CBE | <img src="images/性爱宝典.png" width="120"> | ✅ Pass |
+| 63 | 性爱高手 | tmp/nicai_game/性爱高手.CBE | <img src="images/性爱高手.png" width="120"> | ✅ Pass |
+| 64 | 雄霸天下 | tmp/nicai_game/雄霸天下.CBE | <img src="images/雄霸天下.png" width="120"> | ✅ Pass |
+| 65 | 炫酷音乐彩铃 | tmp/nicai_game/炫酷音乐彩铃.CBE | <img src="images/炫酷音乐彩铃.png" width="120"> | ✅ Pass |
+| 66 | 血剑Online | tmp/nicai_game/血剑Online.CBE | <img src="images/血剑Online.png" width="120"> | ✅ Pass |
+| 67 | 移淘网 | tmp/nicai_game/移淘网.CBE | <img src="images/移淘网.png" width="120"> | ✅ Pass |
+| 68 | 英汉词典 | tmp/nicai_game/英汉词典.CBE | <img src="images/英汉词典.png" width="120"> | ✅ Pass |
+| 69 | 在线书城 | tmp/nicai_game/在线书城.CBE | <img src="images/在线书城.png" width="120"> | ✅ Pass |
+| 70 | 在线音乐 | tmp/nicai_game/在线音乐.CBE | <img src="images/在线音乐.png" width="120"> | ✅ Pass |
+| 71 | 战争机器 | tmp/nicai_game/战争机器.CBE | <img src="images/战争机器.png" width="120"> | ✅ Pass |
+| 72 | 众神之战 | tmp/nicai_game/众神之战.CBE | <img src="images/众神之战.png" width="120"> | ✅ Pass |
+| 73 | 钻石迷情3 | tmp/nicai_game/钻石迷情3.CBE | <img src="images/钻石迷情3.png" width="120"> | ✅ Pass |
+| 74 | AppStore | tmp/nicai_game/AppStore.CBE | <img src="images/AppStore.png" width="120"> | ✅ Pass |
+| 75 | Google地图 | tmp/nicai_game/Google地图.CBE | <img src="images/Google地图.png" width="120"> | ✅ Pass |
 
 ## Known Limitations
 
