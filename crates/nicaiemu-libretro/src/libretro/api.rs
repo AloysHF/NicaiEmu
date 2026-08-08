@@ -221,6 +221,7 @@ pub extern "C" fn retro_run() {
 
         callbacks::input_poll();
         update_phone_keys(emulator);
+        update_pointer(emulator);
 
         if !emulator.stopped {
             if let Err(error) = emulator.machine.run_frame(emulator.instruction_limit) {
@@ -414,6 +415,25 @@ fn update_phone_keys(emulator: &mut Emulator) {
     emulator
         .machine
         .set_key(13, joypad(RETRO_DEVICE_ID_JOYPAD_Y));
+}
+
+/// Map RetroArch pointer coordinates (-0x7fff..0x7fff) to the 240x400 screen.
+fn pointer_to_screen(value: i32, screen_size: i32) -> i32 {
+    let numerator = (value.saturating_add(0x7fff)) as i64 * screen_size as i64 + 0x7fff;
+    (numerator / 0xFFFF).clamp(0, (screen_size - 1).max(0) as i64) as i32
+}
+
+/// Poll the libretro pointer device (mouse or touchscreen) into the machine.
+fn update_pointer(emulator: &mut Emulator) {
+    let x = callbacks::input_state(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
+    let y = callbacks::input_state(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
+    let pressed =
+        callbacks::input_state(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED) != 0;
+    if x != 0 || y != 0 || pressed {
+        let screen_x = pointer_to_screen(x as i32, 240);
+        let screen_y = pointer_to_screen(y as i32, 400);
+        emulator.machine.set_pointer(screen_x, screen_y, pressed);
+    }
 }
 
 #[no_mangle]
@@ -653,6 +673,15 @@ mod tests {
         );
         assert_eq!(descriptors[9].device, RETRO_DEVICE_NONE);
         assert!(descriptors[9].description.is_null());
+    }
+
+    #[test]
+    fn pointer_coordinates_map_to_the_screen() {
+        assert_eq!(pointer_to_screen(0, 240), 120);
+        assert_eq!(pointer_to_screen(-0x7fff, 240), 0);
+        assert_eq!(pointer_to_screen(0x7fff, 240), 239);
+        assert_eq!(pointer_to_screen(0, 400), 200);
+        assert_eq!(pointer_to_screen(0x7fff, 400), 399);
     }
 
     #[test]
