@@ -116,9 +116,3 @@ Build for simulator (Apple Silicon Mac):
 ```bash
 cargo build -p nicaiemu-libretro --release --target aarch64-apple-ios-sim
 ```
-
-## Current Limitations
-
-- iOS support is experimental
-- Core options are not yet available
-- File-based MP3 control is not implemented yet
