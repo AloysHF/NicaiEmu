@@ -37,9 +37,12 @@ by supported games.
   (standalone `R` key and libretro `retro_reset`)
 - **Guest memory exposure** — libretro exposes the guest heap and screen
   framebuffer to frontend memory tools
-- **Audio** — WAV/MP3 decoding, stereo mixing, volume control, and 44.1 kHz
-  output through the libretro sample callback and the standalone device sink
-  (guest MIDI synthesis and file-based MP3 control are planned follow-ups)
+- **Audio** — WAV/MP3 decoding and MIDI synthesis, stereo mixing, volume
+  control, and 44.1 kHz output through the libretro sample callback and the
+  standalone device sink (file-based MP3 control is a planned follow-up)
+- **Touch input** — the guest touchscreen responds to mouse clicks in the
+  standalone frontend and to pointer devices (mouse or touchscreen) in
+  RetroArch
 - **Libretro integration** — playable libretro core with RGB888 video output,
   RetroPad input, content loading, save states, reset, and memory exposure
   (core options are planned for a later milestone)
