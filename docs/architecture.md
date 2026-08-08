@@ -2,29 +2,6 @@
 
 NicaiEmu executes native CBE applications instead of replacing their game logic with a scene preview. The core is platform-independent and exposes a framebuffer plus phone-key input to frontends.
 
-## Module layout
-
-`crates/nicaiemu-core/src` is organized by responsibility:
-
-- `machine/mod.rs` — `CbeExecutable` parsing, machine construction and boot,
-  the per-frame loop, key/pointer input state, and frontend-facing getters;
-- `machine/memory.rs` — checked sparse guest memory regions with
-  byte-order-aware read/write access;
-- `machine/packages.rs` — native, flat, and grouped guest resource-package
-  parsing;
-- `machine/cpu_bridge.rs` — the ARM/Thumb execution loop, interworking
-  branches, semihosting, and the firmware service dispatch entry;
-- `machine/drawing.rs` — framebuffer drawing: LCD services, image creation
-  and blits, rectangles, and GBK text rendering;
-- `machine/services/` — firmware service handlers grouped by manager
-  (audio, data packages, download/payment, game, memory, screen, stdio,
-  system, timer, and UCS2);
-- `audio_engine.rs` — WAV/MP3/MIDI decoding, mixing, and volume;
-- `image_decoder.rs` — CBE GIF and firmware PNG image decoding;
-- `save_state.rs` — the versioned, checksummed machine snapshot codec;
-- `runtime.rs` — a crate-internal scene-level HLE experiment not wired to
-  any frontend.
-
 ## Boot flow
 
 1. `CbeArchive` scans flat, grouped, and nested resource-package sections and records resource names and ranges.
