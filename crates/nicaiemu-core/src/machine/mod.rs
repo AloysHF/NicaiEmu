@@ -1,4 +1,11 @@
-//! ARM/Thumb execution and firmware service bridge.
+//! CBE machine root: executable parsing, boot, frame loop, and input state.
+//!
+//! The machine is split across submodules by responsibility:
+//! - [`memory`]: sparse guest memory regions and endian-aware access
+//! - [`packages`]: native/flat/grouped guest resource package parsing
+//! - [`cpu_bridge`]: execution loop, interworking branches, service dispatch
+//! - [`drawing`]: framebuffer drawing, blits, rects, and text
+//! - [`services`]: firmware service handlers grouped by manager
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
