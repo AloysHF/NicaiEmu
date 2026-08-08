@@ -41,6 +41,8 @@ frontend can display the core metadata and supported features.
 - Video output using the RGB888 pixel format
 - RetroPad input handling
 - `.CBE` content loading
+- Reset support that rebuilds the emulator state
+- Input descriptors for frontend button labeling
 
 ## RetroPad Button Mapping
 
@@ -51,8 +53,8 @@ frontend can display the core metadata and supported features.
 | D-Pad Left | Left |
 | D-Pad Right | Right |
 | A (SNES East) | Confirm |
-| B (SNES South) | Cancel |
-| Start | — |
+| B (SNES South) | Confirm |
+| Start | Confirm |
 | Select | — |
 | X (SNES North) | Left soft key |
 | Y (SNES West) | Right soft key |
