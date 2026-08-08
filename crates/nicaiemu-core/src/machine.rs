@@ -31,6 +31,9 @@ const NATIVE_DISPATCH_SERVICE: u32 = SERVICE_BASE + 0xf000;
 const NATIVE_SYSTEM_TIME_SERVICE: u32 = SERVICE_BASE + 0xf100;
 
 const TABLE_STRIDE: u32 = 0x400;
+const MAX_TIMERS: usize = 20;
+const TIMER_BASE_ID: u32 = 100;
+const TIMER_FRAME_MS: u32 = 100;
 const MEMORY_BLOCK_POOL: u32 = HEAP_BASE + 0x40_0000;
 const MEMORY_BLOCK_PTR: u32 = HEAP_BASE + 0x80_0000;
 const MEMORY_BLOCK_SERVICE: u32 = SERVICE_BASE + 0x6c48;
@@ -422,6 +425,15 @@ struct PointerState {
     press_y: i32,
 }
 
+/// One scheduled guest timer callback.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct GuestTimer {
+    active: bool,
+    callback: u32,
+    context: u32,
+    remaining_frames: u32,
+}
+
 impl PointerState {
     fn new() -> Self {
         Self {
@@ -789,6 +801,7 @@ pub struct NicaiMachine {
     service_calls: HashMap<(u32, u32), u64>,
     recent_services: VecDeque<(u32, u32, u32, u32)>,
     instruction_count: u64,
+    frame_count: u64,
     last_pc: u32,
     recent_pcs: VecDeque<u32>,
     pending_screen: u32,
@@ -803,6 +816,7 @@ pub struct NicaiMachine {
     key_press_frame: [u32; 31],
     key_frame_counter: u32,
     pointer: PointerState,
+    timers: Vec<GuestTimer>,
     resources: Vec<HostResource>,
     resource_data: Vec<u32>,
     resource_names: Vec<u32>,
@@ -875,6 +889,7 @@ impl NicaiMachine {
             service_calls: HashMap::new(),
             recent_services: VecDeque::with_capacity(16),
             instruction_count: 0,
+            frame_count: 0,
             last_pc: 0,
             recent_pcs: VecDeque::with_capacity(32),
             pending_screen: 0,
@@ -889,6 +904,15 @@ impl NicaiMachine {
             key_press_frame: [u32::MAX; 31],
             key_frame_counter: 0,
             pointer: PointerState::new(),
+            timers: vec![
+                GuestTimer {
+                    active: false,
+                    callback: 0,
+                    context: 0,
+                    remaining_frames: 0,
+                };
+                MAX_TIMERS
+            ],
             resources: {
                 let mut native = native_package_resources(archive.bytes(), resource_package_offset);
                 if native.is_empty() {
@@ -1851,12 +1875,68 @@ impl NicaiMachine {
 
     fn handle_timer_service(&mut self, index: u32) {
         match index {
-            0 => self.set_result(self.register(0)),
-            1 | 5 => self.set_result(0),
-            2 => self.set_result((self.instruction_count / 10_000) as u32),
-            3 | 4 => self.set_result(1_786_080_000 + (self.instruction_count / 10_000) as u32),
+            // vMStartTimer(delay_ms, callback, context) -> timer handle.
+            0 => {
+                let delay_ms = self.register(0);
+                let callback = self.register(1);
+                let context = self.register(2);
+                if callback == 0 {
+                    self.set_result(0);
+                    return;
+                }
+                let frames = delay_ms.saturating_add(TIMER_FRAME_MS - 1) / TIMER_FRAME_MS;
+                let handle = self.timers.iter().position(|timer| !timer.active);
+                match handle {
+                    Some(slot) => {
+                        self.timers[slot] = GuestTimer {
+                            active: true,
+                            callback,
+                            context,
+                            remaining_frames: frames.max(1),
+                        };
+                        self.set_result(TIMER_BASE_ID + slot as u32);
+                    }
+                    None => self.set_result(0),
+                }
+            }
+            // vMStopTimer(handle).
+            1 => {
+                let handle = self.register(0);
+                if handle >= TIMER_BASE_ID && (handle - TIMER_BASE_ID) < MAX_TIMERS as u32 {
+                    self.timers[(handle - TIMER_BASE_ID) as usize].active = false;
+                }
+                self.set_result(0);
+            }
+            // vMGetTickCount() -> milliseconds since the frame counter started.
+            2 => self.set_result((self.frame_count * TIMER_FRAME_MS as u64) as u32),
+            // vMGetTotalSeconds / vMGetCurrentTime -> synthetic epoch seconds.
+            3 | 4 => self.set_result(
+                1_786_080_000u32
+                    .wrapping_add((self.frame_count * TIMER_FRAME_MS as u64 / 1000) as u32),
+            ),
+            // vMSysSleep.
+            5 => self.set_result(0),
             _ => self.set_result(0),
         }
+    }
+
+    /// Advance scheduled timers by one frame and fire due callbacks.
+    fn dispatch_timers(&mut self, instruction_limit: u64) -> Result<()> {
+        let mut due = Vec::new();
+        for timer in &mut self.timers {
+            if !timer.active {
+                continue;
+            }
+            timer.remaining_frames = timer.remaining_frames.saturating_sub(1);
+            if timer.remaining_frames == 0 {
+                timer.active = false;
+                due.push((timer.callback, timer.context));
+            }
+        }
+        for (callback, context) in due {
+            self.invoke_callback(callback, context, 0, 0, instruction_limit)?;
+        }
+        Ok(())
     }
 
     fn handle_ucs2_service(&mut self, index: u32) {
@@ -3648,6 +3728,8 @@ impl NicaiMachine {
             bail!("CBE machine is not ready");
         }
         self.update_key_state();
+        self.frame_count = self.frame_count.wrapping_add(1);
+        self.dispatch_timers(instruction_limit)?;
         if self.uses_native_dispatch_abi() {
             return self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit);
         }
@@ -4107,6 +4189,27 @@ mod tests {
         assert!(
             diagnostics.decoded_frames > 0,
             "guest MIDI audio never reached the engine"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_uses_timer_services_without_error() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("魔塔.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(5_000_000).unwrap();
+        for _ in 0..60 {
+            machine.run_frame(5_000_000).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert!(
+            machine.service_calls().get(&(6, 3)).copied().unwrap_or(0) > 0,
+            "game never used the timer service"
         );
     }
 
