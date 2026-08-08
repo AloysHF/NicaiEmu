@@ -6,6 +6,7 @@ pub const RETRO_API_VERSION: u32 = 1;
 /// Device types.
 pub const RETRO_DEVICE_NONE: u32 = 0;
 pub const RETRO_DEVICE_JOYPAD: u32 = 1;
+pub const RETRO_DEVICE_POINTER: u32 = 6;
 
 /// RetroPad button identifiers.
 pub const RETRO_DEVICE_ID_JOYPAD_B: u32 = 0;
@@ -20,6 +21,12 @@ pub const RETRO_DEVICE_ID_JOYPAD_A: u32 = 8;
 pub const RETRO_DEVICE_ID_JOYPAD_X: u32 = 9;
 pub const RETRO_DEVICE_ID_JOYPAD_L: u32 = 10;
 pub const RETRO_DEVICE_ID_JOYPAD_R: u32 = 11;
+
+/// Pointer device identifiers.
+pub const RETRO_DEVICE_ID_POINTER_X: u32 = 0;
+pub const RETRO_DEVICE_ID_POINTER_Y: u32 = 1;
+pub const RETRO_DEVICE_ID_POINTER_PRESSED: u32 = 2;
+pub const RETRO_DEVICE_ID_POINTER_RELEASED: u32 = 3;
 
 /// Environment callback commands used by this core.
 pub const RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL: u32 = 8;

@@ -73,6 +73,9 @@ nicaiemu --file path/to/game.CBE --list
 | Reset | R |
 | Exit | Escape |
 
+The window also accepts mouse clicks as touch input on the 240×400 screen,
+which touch-driven games (such as 魔塔) use for menus and in-game controls.
+
 ## Headless Mode
 
 Run the emulator without a window — useful for automated testing and batch
@@ -151,7 +154,6 @@ nicaiemu --file path/to/game.CBE --verbose
 
 ## Audio
 
-The standalone emulator plays guest WAV/MP3 audio at 44.1 kHz stereo through
+The standalone emulator plays guest WAV/MP3/MIDI audio at 44.1 kHz stereo through
 the default system output device. If no device is available the emulator
-continues silently and logs a warning. Guest MIDI playback is not implemented
-yet; games that submit MIDI data currently skip it and keep running.
+continues silently and logs a warning.

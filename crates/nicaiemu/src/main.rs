@@ -131,6 +131,12 @@ fn main() -> Result<()> {
     info!("Controls: arrows/WASD move, Enter/F confirms, Q/E soft keys, R resets, Esc exits");
     while window.is_open() && !window.is_key_down(Key::Escape) {
         update_keys(&window, &mut machine);
+        if let Some((mouse_x, mouse_y)) = window.get_mouse_pos(minifb::MouseMode::Clamp) {
+            let x = (mouse_x * 240.0 / cli.width as f32) as i32;
+            let y = (mouse_y * 400.0 / cli.height as f32) as i32;
+            let down = window.get_mouse_down(minifb::MouseButton::Left);
+            machine.set_pointer(x, y, down);
+        }
         if window.is_key_pressed(Key::R, minifb::KeyRepeat::No) {
             if let Some(audio) = &audio_output {
                 audio.clear();

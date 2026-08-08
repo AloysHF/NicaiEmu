@@ -410,6 +410,58 @@ pub struct MemoryRegionInfo {
     pub read_only: bool,
 }
 
+/// Guest touch/pointer state with press and release edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+struct PointerState {
+    held: bool,
+    down: bool,
+    up: bool,
+    x: i32,
+    y: i32,
+    press_x: i32,
+    press_y: i32,
+}
+
+impl PointerState {
+    fn new() -> Self {
+        Self {
+            held: false,
+            down: false,
+            up: false,
+            x: 0,
+            y: 0,
+            press_x: 0,
+            press_y: 0,
+        }
+    }
+
+    /// Update the pointer from a frontend source; edges are derived here.
+    fn set(&mut self, x: i32, y: i32, down: bool) {
+        self.x = x.clamp(0, 239);
+        self.y = y.clamp(0, 399);
+        if down && !self.held {
+            self.down = true;
+            self.press_x = self.x;
+            self.press_y = self.y;
+        }
+        if !down && self.held {
+            self.up = true;
+        }
+        self.held = down;
+    }
+
+    /// Clear per-frame edges after the guest frame consumed them.
+    fn end_frame(&mut self) {
+        self.down = false;
+        self.up = false;
+    }
+
+    /// A held pointer that moved away from its press position.
+    fn dragging(&self) -> bool {
+        self.held && (self.x != self.press_x || self.y != self.press_y)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Region {
     base: u32,
@@ -750,6 +802,7 @@ pub struct NicaiMachine {
     key_held_physical: u32,
     key_press_frame: [u32; 31],
     key_frame_counter: u32,
+    pointer: PointerState,
     resources: Vec<HostResource>,
     resource_data: Vec<u32>,
     resource_names: Vec<u32>,
@@ -835,6 +888,7 @@ impl NicaiMachine {
             key_held_physical: 0,
             key_press_frame: [u32::MAX; 31],
             key_frame_counter: 0,
+            pointer: PointerState::new(),
             resources: {
                 let mut native = native_package_resources(archive.bytes(), resource_package_offset);
                 if native.is_empty() {
@@ -1379,30 +1433,24 @@ impl NicaiMachine {
         }
     }
 
-    /// Read guest audio bytes and queue decoded PCM when the format is known.
+    /// Read a CBE audio resource from guest memory and queue decoded PCM.
+    ///
+    /// `repeats` is the firmware's loop count for `vMAudioPlayByData`.
     fn play_guest_audio(&mut self, pointer: u32, length: u32) {
         const MAX_AUDIO_BYTES: u32 = 4 * 1024 * 1024;
-        let length = length.min(MAX_AUDIO_BYTES);
-        if length == 0 {
-            log::warn!("Audio play call without a length argument (ABI not recovered)");
-            self.set_result(0);
-            return;
-        }
-        let prefix: [u8; 4] = [
+        let header: [u8; 5] = [
             self.memory.r8(pointer),
             self.memory.r8(pointer.wrapping_add(1)),
             self.memory.r8(pointer.wrapping_add(2)),
             self.memory.r8(pointer.wrapping_add(3)),
+            self.memory.r8(pointer.wrapping_add(4)),
         ];
-        if &prefix == b"MThd" {
-            log::warn!("Guest MIDI playback is not implemented yet");
-            self.set_result(0);
-            return;
-        }
-        let bytes: Vec<u8> = (0..length)
+        let payload_len = ((header[2] as u32) << 16) | ((header[3] as u32) << 8) | header[4] as u32;
+        let total = 5u32.saturating_add(payload_len).min(MAX_AUDIO_BYTES);
+        let bytes: Vec<u8> = (0..total)
             .map(|offset| self.memory.r8(pointer.wrapping_add(offset)))
             .collect();
-        match self.audio.play_bytes(&bytes) {
+        match self.audio.play_bytes_repeats(&bytes, length) {
             Ok(()) => log::debug!("Guest audio queued ({} bytes)", bytes.len()),
             Err(error) => log::warn!("Guest audio rejected: {error:#}"),
         }
@@ -2164,7 +2212,12 @@ impl NicaiMachine {
                 self.resource_load_pending = true;
                 self.set_result(0);
             }
-            62..=65 => self.set_result(0),
+            62 => self.set_result(u32::from(self.pointer.held)),
+            63 => self.set_result(u32::from(self.pointer.down)),
+            64 => self.set_result(u32::from(self.pointer.up)),
+            65 => self.set_result(u32::from(self.pointer.dragging())),
+            66 => self.set_result(self.pointer.x as u32),
+            67 => self.set_result(self.pointer.y as u32),
             68 => self.set_result(self.key_down),
             75 if self.uses_fixed_manager_abi() => {
                 let object = self.register(0);
@@ -3634,6 +3687,7 @@ impl NicaiMachine {
         }
         if self.pending_screen != 0 && self.pending_screen != screen {
             self.key_down = 0;
+            self.pointer.end_frame();
             return Ok(());
         }
 
@@ -3647,6 +3701,7 @@ impl NicaiMachine {
             self.invoke_callback(render, screen_this, 0, 0, instruction_limit)?;
         }
         self.key_down = 0;
+        self.pointer.end_frame();
         Ok(())
     }
 
@@ -3749,6 +3804,11 @@ impl NicaiMachine {
         } else {
             self.key_held_physical &= !mask;
         }
+    }
+
+    /// Set the guest touch/pointer state in screen coordinates.
+    pub fn set_pointer(&mut self, x: i32, y: i32, down: bool) {
+        self.pointer.set(x, y, down);
     }
 
     /// Copy the current 240x400 RGB565 screen into 0x00RRGGBB pixels.
@@ -4021,13 +4081,13 @@ mod tests {
     #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
     fn real_content_reaches_audio_services() {
         let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
-        let game_path = std::path::PathBuf::from(game_dir).join("打地鼠.CBE");
+        let game_path = std::path::PathBuf::from(game_dir).join("激情砖块.CBE");
         assert!(game_path.is_file(), "missing {}", game_path.display());
 
         let archive = CbeArchive::load(&game_path).unwrap();
         let mut machine = NicaiMachine::new(&archive).unwrap();
         machine.boot(5_000_000).unwrap();
-        for _ in 0..60 {
+        for _ in 0..20 {
             let _ = machine.run_frame(5_000_000);
         }
 
@@ -4044,5 +4104,41 @@ mod tests {
             diagnostics.sample_rate,
             crate::audio_engine::AUDIO_SAMPLE_RATE
         );
+        assert!(
+            diagnostics.decoded_frames > 0,
+            "guest MIDI audio never reached the engine"
+        );
+    }
+
+    #[test]
+    fn pointer_press_holds_drag_and_release_edges() {
+        let mut pointer = PointerState::new();
+        assert!(!pointer.held && !pointer.down && !pointer.up);
+
+        pointer.set(120, 200, true);
+        assert!(pointer.held);
+        assert!(pointer.down);
+        assert!(!pointer.up);
+        assert!(!pointer.dragging());
+
+        pointer.end_frame();
+        assert!(!pointer.down);
+
+        pointer.set(140, 210, true);
+        assert!(!pointer.down);
+        assert!(pointer.dragging());
+
+        pointer.set(140, 210, false);
+        assert!(!pointer.held);
+        assert!(pointer.up);
+    }
+
+    #[test]
+    fn pointer_coordinates_are_clamped_to_the_screen() {
+        let mut pointer = PointerState::new();
+        pointer.set(-50, 500, true);
+        assert_eq!((pointer.x, pointer.y), (0, 399));
+        pointer.set(1000, -10, true);
+        assert_eq!((pointer.x, pointer.y), (239, 0));
     }
 }

@@ -18,6 +18,8 @@ struct Cli {
     press_frame: Vec<u32>,
     #[arg(long, value_parser = parse_key_event)]
     key_event: Vec<(u32, u8)>,
+    #[arg(long, value_parser = parse_pointer_event)]
+    pointer_event: Vec<(u32, i32, i32)>,
     #[arg(long)]
     screenshot: Option<PathBuf>,
 }
@@ -33,6 +35,23 @@ fn parse_key_event(value: &str) -> Result<(u32, u8), String> {
         .parse()
         .map_err(|_| "key event key must be an unsigned byte".to_owned())?;
     Ok((frame, key))
+}
+
+fn parse_pointer_event(value: &str) -> Result<(u32, i32, i32), String> {
+    let parts: Vec<&str> = value.split(':').collect();
+    if parts.len() != 3 {
+        return Err("pointer event must use FRAME:X:Y syntax".to_string());
+    }
+    let frame = parts[0]
+        .parse()
+        .map_err(|_| "pointer event frame must be an unsigned integer".to_string())?;
+    let x = parts[1]
+        .parse()
+        .map_err(|_| "pointer event x must be an integer".to_string())?;
+    let y = parts[2]
+        .parse()
+        .map_err(|_| "pointer event y must be an integer".to_string())?;
+    Ok((frame, x, y))
 }
 
 fn main() -> Result<()> {
@@ -55,6 +74,11 @@ fn main() -> Result<()> {
             for key in &event_keys {
                 machine.set_key(*key, true);
             }
+            for &(event_frame, x, y) in &cli.pointer_event {
+                if event_frame == frame {
+                    machine.set_pointer(x, y, true);
+                }
+            }
             result = machine.run_frame(cli.instruction_limit);
             if cli.press_frame.contains(&frame) {
                 if let Some(key) = cli.press_key {
@@ -63,6 +87,11 @@ fn main() -> Result<()> {
             }
             for key in event_keys {
                 machine.set_key(key, false);
+            }
+            for &(event_frame, x, y) in &cli.pointer_event {
+                if event_frame == frame {
+                    machine.set_pointer(x, y, false);
+                }
             }
         }
     }
