@@ -1,5 +1,7 @@
 //! NicaiEmu desktop frontend.
 
+mod standalone;
+
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -7,10 +9,11 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use log::{info, warn};
-use minifb::{Key, ScaleMode, Window, WindowOptions};
+use minifb::{Key, Window, WindowOptions};
 use nicaiemu_core::{
     decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, SERIALIZED_SIZE,
 };
+use standalone::scaler::{DisplayScaler, ScaleFilter};
 
 #[derive(Parser)]
 #[command(name = "nicaiemu")]
@@ -31,6 +34,10 @@ struct Cli {
     /// Initial window height.
     #[arg(short = 'H', long, default_value_t = 800)]
     height: usize,
+
+    /// Pixel scaling filter for display output.
+    #[arg(long, value_enum, default_value_t = ScaleFilter::Nearest)]
+    filter: ScaleFilter,
 
     /// Maximum guest instructions per callback.
     #[arg(long, default_value_t = 5_000_000)]
@@ -117,7 +124,7 @@ fn main() -> Result<()> {
         cli.height,
         WindowOptions {
             resize: true,
-            scale_mode: ScaleMode::AspectRatioStretch,
+            scale_mode: minifb::ScaleMode::Stretch,
             ..WindowOptions::default()
         },
     )
@@ -129,6 +136,7 @@ fn main() -> Result<()> {
     }
 
     info!("Controls: arrows/WASD move, Enter/F confirms, Q/E soft keys, R resets, Esc exits");
+    let mut display_scaler = DisplayScaler::new(cli.filter);
     while window.is_open() && !window.is_key_down(Key::Escape) {
         update_keys(&window, &mut machine);
         if let Some((mouse_x, mouse_y)) = window.get_mouse_pos(minifb::MouseMode::Clamp) {
@@ -153,8 +161,10 @@ fn main() -> Result<()> {
             audio.push(machine.take_audio_samples(2048));
         }
         let pixels = machine.frame_pixels();
+        let (window_width, window_height) = window.get_size();
+        let buffer = display_scaler.render(&pixels, 240, 400, window_width, window_height);
         window
-            .update_with_buffer(&pixels, 240, 400)
+            .update_with_buffer(buffer, window_width.max(1), window_height.max(1))
             .context("failed to update emulator window")?;
     }
     write_save_state(&machine, &archive, cli.save_state.as_deref())?;
@@ -376,5 +386,26 @@ mod tests {
 
         assert_eq!(cli.save_state, Some(PathBuf::from("game.sav")));
         assert_eq!(cli.load_state, Some(PathBuf::from("old.sav")));
+    }
+
+    #[test]
+    fn parses_every_display_filter() {
+        for (name, expected) in [
+            ("nearest", ScaleFilter::Nearest),
+            ("bilinear", ScaleFilter::Bilinear),
+            ("bicubic", ScaleFilter::Bicubic),
+            ("xbrz", ScaleFilter::Xbrz),
+        ] {
+            let cli =
+                Cli::try_parse_from(["nicaiemu", "--file", "game.CBE", "--filter", name]).unwrap();
+            assert_eq!(cli.filter, expected);
+        }
+    }
+
+    #[test]
+    fn display_filter_defaults_to_nearest() {
+        let cli = Cli::try_parse_from(["nicaiemu", "--file", "game.CBE"]).unwrap();
+
+        assert_eq!(cli.filter, ScaleFilter::Nearest);
     }
 }
