@@ -13,6 +13,7 @@ use minifb::{Key, Window, WindowOptions};
 use nicaiemu_core::{
     decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, SERIALIZED_SIZE,
 };
+use standalone::input::{KeyboardMapper, RemapSpec};
 use standalone::scaler::{DisplayScaler, ScaleFilter};
 
 #[derive(Parser)]
@@ -38,6 +39,10 @@ struct Cli {
     /// Pixel scaling filter for display output.
     #[arg(long, value_enum, default_value_t = ScaleFilter::Nearest)]
     filter: ScaleFilter,
+
+    /// Remap a guest key in GUEST_KEY:KEY format.
+    #[arg(long = "remap", value_name = "GUEST_KEY:KEY")]
+    remappings: Vec<RemapSpec>,
 
     /// Maximum guest instructions per callback.
     #[arg(long, default_value_t = 5_000_000)]
@@ -137,8 +142,9 @@ fn main() -> Result<()> {
 
     info!("Controls: arrows/WASD move, Enter/F confirms, Q/E soft keys, R resets, Esc exits");
     let mut display_scaler = DisplayScaler::new(cli.filter);
+    let keyboard = KeyboardMapper::new(&cli.remappings);
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        update_keys(&window, &mut machine);
+        keyboard.apply(&window, &mut machine);
         if let Some((mouse_x, mouse_y)) = window.get_mouse_pos(minifb::MouseMode::Clamp) {
             let x = (mouse_x * 240.0 / cli.width as f32) as i32;
             let y = (mouse_y * 400.0 / cli.height as f32) as i32;
@@ -312,36 +318,6 @@ fn capture_screenshot(
     Ok(())
 }
 
-fn update_keys(window: &Window, machine: &mut NicaiMachine) {
-    const KEY_MAP: &[(u8, &[Key])] = &[
-        (0, &[Key::Key0]),
-        (1, &[Key::Key1]),
-        (2, &[Key::Key2]),
-        (3, &[Key::Key3]),
-        (4, &[Key::Key4]),
-        (5, &[Key::Key5]),
-        (6, &[Key::Key6]),
-        (7, &[Key::Key7]),
-        (8, &[Key::Key8]),
-        (9, &[Key::Key9]),
-        (12, &[Key::Q]),
-        (13, &[Key::E]),
-        (14, &[Key::Enter, Key::F]),
-        (15, &[Key::Left, Key::A]),
-        (16, &[Key::Right, Key::D]),
-        (17, &[Key::Up, Key::W]),
-        (18, &[Key::Down, Key::S]),
-        (19, &[Key::N]),
-        (20, &[Key::M]),
-    ];
-    for &(guest_key, host_keys) in KEY_MAP {
-        machine.set_key(
-            guest_key,
-            host_keys.iter().any(|key| window.is_key_down(*key)),
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,5 +383,30 @@ mod tests {
         let cli = Cli::try_parse_from(["nicaiemu", "--file", "game.CBE"]).unwrap();
 
         assert_eq!(cli.filter, ScaleFilter::Nearest);
+    }
+
+    #[test]
+    fn parses_key_remappings() {
+        let cli = Cli::try_parse_from([
+            "nicaiemu",
+            "--file",
+            "game.CBE",
+            "--remap",
+            "enter:space",
+            "--remap",
+            "up:w",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.remappings.len(), 2);
+        assert_eq!(cli.remappings[0].to_string(), "enter:space");
+    }
+
+    #[test]
+    fn rejects_invalid_key_remappings() {
+        assert!(Cli::try_parse_from(
+            ["nicaiemu", "--file", "game.CBE", "--remap", "enter:escape",]
+        )
+        .is_err());
     }
 }
