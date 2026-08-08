@@ -3888,6 +3888,11 @@ impl NicaiMachine {
         }
     }
 
+    /// Bitmask of guest keys physically held down (key code as bit index).
+    pub fn held_keys(&self) -> u32 {
+        self.key_held_physical
+    }
+
     /// Set the guest touch/pointer state in screen coordinates.
     pub fn set_pointer(&mut self, x: i32, y: i32, down: bool) {
         self.pointer.set(x, y, down);

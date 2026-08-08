@@ -13,6 +13,7 @@ use minifb::{Key, Window, WindowOptions};
 use nicaiemu_core::{
     decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, SERIALIZED_SIZE,
 };
+use standalone::gamepad_overlay::GamepadOverlay;
 use standalone::input::{KeyboardMapper, RemapSpec};
 use standalone::scaler::{DisplayScaler, ScaleFilter};
 
@@ -43,6 +44,10 @@ struct Cli {
     /// Remap a guest key in GUEST_KEY:KEY format.
     #[arg(long = "remap", value_name = "GUEST_KEY:KEY")]
     remappings: Vec<RemapSpec>,
+
+    /// Show a virtual gamepad overlay over the game frame.
+    #[arg(long)]
+    show_gamepad: bool,
 
     /// Maximum guest instructions per callback.
     #[arg(long, default_value_t = 5_000_000)]
@@ -166,7 +171,10 @@ fn main() -> Result<()> {
         if let Some(audio) = &audio_output {
             audio.push(machine.take_audio_samples(2048));
         }
-        let pixels = machine.frame_pixels();
+        let mut pixels = machine.frame_pixels();
+        if cli.show_gamepad {
+            GamepadOverlay::draw(&mut pixels, 240, 400, machine.held_keys());
+        }
         let (window_width, window_height) = window.get_size();
         let buffer = display_scaler.render(&pixels, 240, 400, window_width, window_height);
         window
