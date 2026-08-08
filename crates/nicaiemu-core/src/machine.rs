@@ -6,6 +6,7 @@ use anyhow::{bail, Context, Result};
 use armv4t_emu::{reg, Cpu, Memory, Mode};
 use encoding_rs::GBK;
 use log::{debug, warn};
+use serde::{Deserialize, Serialize};
 
 use crate::cbe::CbeArchive;
 use crate::image_decoder;
@@ -101,7 +102,7 @@ fn game_service_string_uses_wide_length(index: u32) -> Option<bool> {
 }
 
 /// Executable image metadata stored at the beginning of a CBE file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CbeExecutable {
     pub preferred_code_address: u32,
     pub code_image_size: u32,
@@ -388,7 +389,7 @@ fn service_trace_enabled(group: u32, index: u32) -> bool {
     value.split(',').any(|filter| filter.trim() == service)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MachineState {
     Created,
     Initializing,
@@ -397,12 +398,14 @@ pub enum MachineState {
     Faulted,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Region {
     base: u32,
     data: Vec<u8>,
     read_only: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct MachineMemory {
     regions: Vec<Region>,
     bad_accesses: BTreeSet<u32>,
@@ -511,7 +514,7 @@ impl MachineMemory {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct HostResource {
     name: String,
     data: Vec<u8>,
@@ -709,6 +712,7 @@ impl Memory for MachineMemory {
 }
 
 /// A platform-independent ARM machine for executable CBE games.
+#[derive(Serialize, Deserialize)]
 pub struct NicaiMachine {
     cpu: Cpu,
     memory: MachineMemory,
