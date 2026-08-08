@@ -180,6 +180,9 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
                     stopped: false,
                     content_crc32,
                 });
+                if let Some(emulator) = EMULATOR.as_mut() {
+                    register_memory_maps(emulator);
+                }
                 true
             }
             Err(error) => {
@@ -330,6 +333,56 @@ fn register_input_descriptors() {
     );
 }
 
+fn register_memory_maps(emulator: &mut Emulator) {
+    let regions = emulator.machine.memory_regions();
+    let mut descriptors: Vec<retro_memory_descriptor> = Vec::with_capacity(regions.len() + 1);
+    for region in &regions {
+        let Some(ptr) = emulator.machine.memory_pointer(region.base) else {
+            continue;
+        };
+        let mut flags = 0u64;
+        if region.base == NicaiMachine::system_ram_base() {
+            flags |= RETRO_MEMDESC_SYSTEM_RAM;
+        }
+        if region.base == NicaiMachine::video_ram_base() {
+            flags |= RETRO_MEMDESC_VIDEO_RAM;
+        }
+        descriptors.push(retro_memory_descriptor {
+            flags,
+            ptr: ptr.cast(),
+            offset: 0,
+            start: region.base as usize,
+            select: 0,
+            disconnect: 0,
+            len: region.size,
+            addrspace: c"Nicai".as_ptr(),
+        });
+    }
+    descriptors.push(retro_memory_descriptor {
+        flags: 0,
+        ptr: ptr::null_mut(),
+        offset: 0,
+        start: 0,
+        select: 0,
+        disconnect: 0,
+        len: 0,
+        addrspace: ptr::null(),
+    });
+
+    let map = retro_memory_map {
+        descriptors: descriptors.as_ptr(),
+        num_descriptors: descriptors.len() as u32,
+    };
+    if callbacks::environment(
+        RETRO_ENVIRONMENT_SET_MEMORY_MAPS,
+        &map as *const _ as *mut c_void,
+    ) {
+        log::info!("Registered guest memory descriptors");
+    } else {
+        log::warn!("Frontend did not accept guest memory descriptors");
+    }
+}
+
 /// Map RetroPad buttons to phone keypad ABI key codes.
 fn update_phone_keys(emulator: &mut Emulator) {
     let joypad = |id: u32| callbacks::input_state(0, RETRO_DEVICE_JOYPAD, 0, id) != 0;
@@ -457,13 +510,39 @@ pub extern "C" fn retro_cheat_set(_index: u32, _enabled: bool, _code: *const c_c
 }
 
 #[no_mangle]
-pub extern "C" fn retro_get_memory_data(_id: u32) -> *mut c_void {
-    ptr::null_mut()
+pub extern "C" fn retro_get_memory_data(id: u32) -> *mut c_void {
+    unsafe {
+        let Some(emulator) = EMULATOR.as_mut() else {
+            return ptr::null_mut();
+        };
+        match id & RETRO_MEMORY_MASK {
+            RETRO_MEMORY_SYSTEM_RAM => emulator
+                .machine
+                .system_ram_pointer()
+                .unwrap_or(ptr::null_mut())
+                .cast(),
+            RETRO_MEMORY_VIDEO_RAM => emulator
+                .machine
+                .video_ram_pointer()
+                .unwrap_or(ptr::null_mut())
+                .cast(),
+            _ => ptr::null_mut(),
+        }
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn retro_get_memory_size(_id: u32) -> usize {
-    0
+pub extern "C" fn retro_get_memory_size(id: u32) -> usize {
+    unsafe {
+        if EMULATOR.is_none() {
+            return 0;
+        }
+        match id & RETRO_MEMORY_MASK {
+            RETRO_MEMORY_SYSTEM_RAM => NicaiMachine::system_ram_size(),
+            RETRO_MEMORY_VIDEO_RAM => NicaiMachine::video_ram_size(),
+            _ => 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -483,6 +562,7 @@ mod tests {
             RETRO_ENVIRONMENT_SET_PIXEL_FORMAT
                 | RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS
                 | RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL
+                | RETRO_ENVIRONMENT_SET_MEMORY_MAPS
         )
     }
 
@@ -617,7 +697,7 @@ mod tests {
         assert!(core_info.contains("savestate = \"true\""));
         assert!(core_info.contains("cheats = \"false\""));
         assert!(core_info.contains("input_descriptors = \"true\""));
-        assert!(core_info.contains("memory_descriptors = \"false\""));
+        assert!(core_info.contains("memory_descriptors = \"true\""));
         assert!(core_info.contains("core_options = \"false\""));
     }
 
@@ -656,6 +736,16 @@ mod tests {
             "failed to load {}",
             game_path.to_string_lossy()
         );
+        assert_eq!(
+            retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM),
+            NicaiMachine::system_ram_size()
+        );
+        assert_eq!(
+            retro_get_memory_size(RETRO_MEMORY_VIDEO_RAM),
+            NicaiMachine::video_ram_size()
+        );
+        assert!(!retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM).is_null());
+        assert!(!retro_get_memory_data(RETRO_MEMORY_VIDEO_RAM).is_null());
 
         for _ in 0..120 {
             retro_run();
@@ -685,6 +775,8 @@ mod tests {
         assert!(LAST_VIDEO.lock().unwrap().is_some());
 
         retro_unload_game();
+        assert!(retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM).is_null());
+        assert_eq!(retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM), 0);
         retro_deinit();
     }
 }

@@ -76,6 +76,26 @@ pub struct retro_input_descriptor {
     pub description: *const c_char,
 }
 
+/// One directly accessible region in the emulated address space.
+#[repr(C)]
+pub struct retro_memory_descriptor {
+    pub flags: u64,
+    pub ptr: *mut c_void,
+    pub offset: usize,
+    pub start: usize,
+    pub select: usize,
+    pub disconnect: usize,
+    pub len: usize,
+    pub addrspace: *const c_char,
+}
+
+/// A frontend-visible list of emulated memory regions.
+#[repr(C)]
+pub struct retro_memory_map {
+    pub descriptors: *const retro_memory_descriptor,
+    pub num_descriptors: u32,
+}
+
 /// Log callback type.
 pub type retro_log_printf_t = unsafe extern "C" fn(level: retro_log_level, fmt: *const c_char);
 

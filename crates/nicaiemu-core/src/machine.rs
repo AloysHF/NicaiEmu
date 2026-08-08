@@ -398,6 +398,17 @@ pub enum MachineState {
     Faulted,
 }
 
+/// Public snapshot of one mapped guest memory region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryRegionInfo {
+    /// Guest base address of the region.
+    pub base: u32,
+    /// Size of the region in bytes.
+    pub size: usize,
+    /// Whether guest writes to the region are rejected.
+    pub read_only: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Region {
     base: u32,
@@ -985,6 +996,59 @@ impl NicaiMachine {
         rebuilt.boot(instruction_limit)?;
         *self = rebuilt;
         Ok(())
+    }
+
+    /// Base address of the guest heap, exposed as system RAM to frontends.
+    pub fn system_ram_base() -> u32 {
+        HEAP_BASE
+    }
+
+    /// Size of the guest heap in bytes.
+    pub fn system_ram_size() -> usize {
+        HEAP_SIZE
+    }
+
+    /// Base address of the guest screen framebuffer, exposed as video RAM.
+    pub fn video_ram_base() -> u32 {
+        SCREEN_IMAGE
+    }
+
+    /// Size of the guest screen framebuffer in bytes.
+    pub fn video_ram_size() -> usize {
+        240 * 400 * 2
+    }
+
+    /// Snapshot of the mapped guest memory regions for frontend memory maps.
+    pub fn memory_regions(&self) -> Vec<MemoryRegionInfo> {
+        self.memory
+            .regions
+            .iter()
+            .map(|region| MemoryRegionInfo {
+                base: region.base,
+                size: region.data.len(),
+                read_only: region.read_only,
+            })
+            .collect()
+    }
+
+    /// Mutable pointer to guest memory at a mapped address, if any.
+    ///
+    /// Region backing buffers are allocated once at map time, so the pointer
+    /// stays valid for the lifetime of the machine.
+    pub fn memory_pointer(&mut self, address: u32) -> Option<*mut u8> {
+        let region = self.memory.region_mut(address, 1)?;
+        let offset = address.checked_sub(region.base)? as usize;
+        Some(unsafe { region.data.as_mut_ptr().add(offset) })
+    }
+
+    /// Mutable pointer to the guest heap, or null if it is not mapped.
+    pub fn system_ram_pointer(&mut self) -> Option<*mut u8> {
+        self.memory_pointer(Self::system_ram_base())
+    }
+
+    /// Mutable pointer to the guest screen framebuffer, or null if unmapped.
+    pub fn video_ram_pointer(&mut self) -> Option<*mut u8> {
+        self.memory_pointer(Self::video_ram_base())
     }
 
     fn run_until_return(&mut self, instruction_limit: u64) -> Result<()> {
