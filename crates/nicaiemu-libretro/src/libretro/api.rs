@@ -6,7 +6,7 @@
 use super::callbacks;
 use super::constants::*;
 use super::types::*;
-use nicaiemu_core::{CbeArchive, NicaiMachine};
+use nicaiemu_core::{decode_machine, encode_machine, CbeArchive, NicaiMachine, SERIALIZED_SIZE};
 use std::ffi::{c_char, c_void, CStr};
 use std::path::Path;
 use std::ptr;
@@ -23,6 +23,7 @@ struct Emulator {
     machine: NicaiMachine,
     instruction_limit: u64,
     stopped: bool,
+    content_crc32: u32,
 }
 
 /// Global emulator instance.
@@ -171,12 +172,17 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
                     return false;
                 }
                 log::info!("Game loaded: {path}");
+                let content_crc32 = crc32fast::hash(archive.bytes());
                 EMULATOR = Some(Emulator {
                     archive,
                     machine,
                     instruction_limit: DEFAULT_INSTRUCTION_LIMIT,
                     stopped: false,
+                    content_crc32,
                 });
+                if let Some(emulator) = EMULATOR.as_mut() {
+                    register_memory_maps(emulator);
+                }
                 true
             }
             Err(error) => {
@@ -327,6 +333,56 @@ fn register_input_descriptors() {
     );
 }
 
+fn register_memory_maps(emulator: &mut Emulator) {
+    let regions = emulator.machine.memory_regions();
+    let mut descriptors: Vec<retro_memory_descriptor> = Vec::with_capacity(regions.len() + 1);
+    for region in &regions {
+        let Some(ptr) = emulator.machine.memory_pointer(region.base) else {
+            continue;
+        };
+        let mut flags = 0u64;
+        if region.base == NicaiMachine::system_ram_base() {
+            flags |= RETRO_MEMDESC_SYSTEM_RAM;
+        }
+        if region.base == NicaiMachine::video_ram_base() {
+            flags |= RETRO_MEMDESC_VIDEO_RAM;
+        }
+        descriptors.push(retro_memory_descriptor {
+            flags,
+            ptr: ptr.cast(),
+            offset: 0,
+            start: region.base as usize,
+            select: 0,
+            disconnect: 0,
+            len: region.size,
+            addrspace: c"Nicai".as_ptr(),
+        });
+    }
+    descriptors.push(retro_memory_descriptor {
+        flags: 0,
+        ptr: ptr::null_mut(),
+        offset: 0,
+        start: 0,
+        select: 0,
+        disconnect: 0,
+        len: 0,
+        addrspace: ptr::null(),
+    });
+
+    let map = retro_memory_map {
+        descriptors: descriptors.as_ptr(),
+        num_descriptors: descriptors.len() as u32,
+    };
+    if callbacks::environment(
+        RETRO_ENVIRONMENT_SET_MEMORY_MAPS,
+        &map as *const _ as *mut c_void,
+    ) {
+        log::info!("Registered guest memory descriptors");
+    } else {
+        log::warn!("Frontend did not accept guest memory descriptors");
+    }
+}
+
 /// Map RetroPad buttons to phone keypad ABI key codes.
 fn update_phone_keys(emulator: &mut Emulator) {
     let joypad = |id: u32| callbacks::input_state(0, RETRO_DEVICE_JOYPAD, 0, id) != 0;
@@ -361,12 +417,11 @@ pub extern "C" fn retro_reset() {
             log::warn!("retro_reset called before loading a game");
             return;
         };
-        match NicaiMachine::new(&emulator.archive).and_then(|mut machine| {
-            machine.boot(emulator.instruction_limit)?;
-            Ok(machine)
-        }) {
-            Ok(machine) => {
-                emulator.machine = machine;
+        match emulator
+            .machine
+            .reset(&emulator.archive, emulator.instruction_limit)
+        {
+            Ok(()) => {
                 emulator.stopped = false;
                 log::info!("Game reset");
             }
@@ -386,17 +441,58 @@ pub extern "C" fn retro_get_region() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn retro_serialize_size() -> usize {
-    0
+    unsafe {
+        if EMULATOR.is_none() {
+            0
+        } else {
+            SERIALIZED_SIZE
+        }
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn retro_serialize(_data: *mut std::ffi::c_void, _size: usize) -> bool {
-    false
+pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
+    unsafe {
+        let Some(emulator) = EMULATOR.as_ref() else {
+            return false;
+        };
+        if data.is_null() || size < SERIALIZED_SIZE {
+            return false;
+        }
+        let buffer = std::slice::from_raw_parts_mut(data as *mut u8, SERIALIZED_SIZE);
+        match encode_machine(&emulator.machine, emulator.content_crc32, buffer) {
+            Ok(()) => true,
+            Err(error) => {
+                log::error!("Failed to serialize game state: {error:#}");
+                false
+            }
+        }
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn retro_unserialize(_data: *const std::ffi::c_void, _size: usize) -> bool {
-    false
+pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
+    unsafe {
+        let Some(emulator) = EMULATOR.as_mut() else {
+            return false;
+        };
+        if data.is_null() || size == 0 {
+            return false;
+        }
+        let buffer = std::slice::from_raw_parts(data as *const u8, size);
+        match decode_machine(buffer, emulator.content_crc32) {
+            Ok(machine) => {
+                emulator.machine = machine;
+                emulator.stopped = false;
+                log::info!("Game state restored");
+                true
+            }
+            Err(error) => {
+                log::error!("Failed to restore game state: {error:#}");
+                false
+            }
+        }
+    }
 }
 
 // ============================================================
@@ -414,13 +510,39 @@ pub extern "C" fn retro_cheat_set(_index: u32, _enabled: bool, _code: *const c_c
 }
 
 #[no_mangle]
-pub extern "C" fn retro_get_memory_data(_id: u32) -> *mut c_void {
-    ptr::null_mut()
+pub extern "C" fn retro_get_memory_data(id: u32) -> *mut c_void {
+    unsafe {
+        let Some(emulator) = EMULATOR.as_mut() else {
+            return ptr::null_mut();
+        };
+        match id & RETRO_MEMORY_MASK {
+            RETRO_MEMORY_SYSTEM_RAM => emulator
+                .machine
+                .system_ram_pointer()
+                .unwrap_or(ptr::null_mut())
+                .cast(),
+            RETRO_MEMORY_VIDEO_RAM => emulator
+                .machine
+                .video_ram_pointer()
+                .unwrap_or(ptr::null_mut())
+                .cast(),
+            _ => ptr::null_mut(),
+        }
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn retro_get_memory_size(_id: u32) -> usize {
-    0
+pub extern "C" fn retro_get_memory_size(id: u32) -> usize {
+    unsafe {
+        if EMULATOR.is_none() {
+            return 0;
+        }
+        match id & RETRO_MEMORY_MASK {
+            RETRO_MEMORY_SYSTEM_RAM => NicaiMachine::system_ram_size(),
+            RETRO_MEMORY_VIDEO_RAM => NicaiMachine::video_ram_size(),
+            _ => 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -440,6 +562,7 @@ mod tests {
             RETRO_ENVIRONMENT_SET_PIXEL_FORMAT
                 | RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS
                 | RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL
+                | RETRO_ENVIRONMENT_SET_MEMORY_MAPS
         )
     }
 
@@ -571,10 +694,10 @@ mod tests {
         assert!(workspace_manifest.contains("\"crates/nicaiemu-libretro\""));
         assert!(buildbot_config.contains("CORENAME: nicaiemu"));
         assert!(core_info.contains("corename = \"nicaiemu\""));
-        assert!(core_info.contains("savestate = \"false\""));
+        assert!(core_info.contains("savestate = \"true\""));
         assert!(core_info.contains("cheats = \"false\""));
         assert!(core_info.contains("input_descriptors = \"true\""));
-        assert!(core_info.contains("memory_descriptors = \"false\""));
+        assert!(core_info.contains("memory_descriptors = \"true\""));
         assert!(core_info.contains("core_options = \"false\""));
     }
 
@@ -613,6 +736,16 @@ mod tests {
             "failed to load {}",
             game_path.to_string_lossy()
         );
+        assert_eq!(
+            retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM),
+            NicaiMachine::system_ram_size()
+        );
+        assert_eq!(
+            retro_get_memory_size(RETRO_MEMORY_VIDEO_RAM),
+            NicaiMachine::video_ram_size()
+        );
+        assert!(!retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM).is_null());
+        assert!(!retro_get_memory_data(RETRO_MEMORY_VIDEO_RAM).is_null());
 
         for _ in 0..120 {
             retro_run();
@@ -631,7 +764,19 @@ mod tests {
         }
         assert!(LAST_VIDEO.lock().unwrap().is_some());
 
+        let state_size = retro_serialize_size();
+        assert_eq!(state_size, SERIALIZED_SIZE);
+        let mut state = vec![0u8; state_size];
+        assert!(retro_serialize(state.as_mut_ptr().cast(), state.len()));
+        assert!(retro_unserialize(state.as_ptr().cast(), state.len()));
+        for _ in 0..5 {
+            retro_run();
+        }
+        assert!(LAST_VIDEO.lock().unwrap().is_some());
+
         retro_unload_game();
+        assert!(retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM).is_null());
+        assert_eq!(retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM), 0);
         retro_deinit();
     }
 }

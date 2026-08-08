@@ -26,6 +26,17 @@ pub const RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL: u32 = 8;
 pub const RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: u32 = 10;
 pub const RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS: u32 = 11;
 pub const RETRO_ENVIRONMENT_GET_LOG_INTERFACE: u32 = 27;
+pub const RETRO_ENVIRONMENT_SET_MEMORY_MAPS: u32 = 36 | 0x1_0000;
 
 /// Region identifiers.
 pub const RETRO_REGION_NTSC: u32 = 0;
+
+/// Memory types.
+pub const RETRO_MEMORY_MASK: u32 = 0xFF;
+pub const RETRO_MEMORY_SAVE_RAM: u32 = 0;
+pub const RETRO_MEMORY_SYSTEM_RAM: u32 = 2;
+pub const RETRO_MEMORY_VIDEO_RAM: u32 = 3;
+
+/// Memory descriptor flags.
+pub const RETRO_MEMDESC_SYSTEM_RAM: u64 = 1 << 2;
+pub const RETRO_MEMDESC_VIDEO_RAM: u64 = 1 << 4;

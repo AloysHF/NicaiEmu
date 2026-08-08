@@ -14,3 +14,4 @@ path = "src/lib.rs"
 nicaiemu-core.workspace = true
 anyhow.workspace = true
 log.workspace = true
+crc32fast.workspace = true

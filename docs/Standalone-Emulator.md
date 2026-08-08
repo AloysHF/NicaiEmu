@@ -41,6 +41,8 @@ nicaiemu [OPTIONS] --file <GAME_PATH>
 | `--instruction-limit <COUNT>` | integer | — | Maximum guest instructions per callback. |
 | `-S, --screenshot <PATH>` | path | — | Run headlessly, save a PNG screenshot, and exit. |
 | `--screenshot-frames <COUNT>` | integer | `30` | Frames to run before capture. |
+| `--save-state <PATH>` | path | — | Write a save state to this path when the emulator exits. |
+| `--load-state <PATH>` | path | — | Load a save state from this path before running. |
 | `-v, --verbose` | flag | off | Enable debug logging. |
 
 ## Loading Games
@@ -68,6 +70,7 @@ nicaiemu --file path/to/game.CBE --list
 | Right soft key | E |
 | Numeric keypad | 0–9 |
 | Additional keys | N / M |
+| Reset | R |
 | Exit | Escape |
 
 ## Headless Mode
@@ -132,6 +135,12 @@ nicaiemu --file path/to/game.CBE --width 600 --height 1000
 
 # Take a screenshot and exit
 nicaiemu --file path/to/game.CBE --screenshot shot.png --screenshot-frames 120
+
+# Run and write a save state when the window closes
+nicaiemu --file path/to/game.CBE --save-state game.sav
+
+# Resume from a save state
+nicaiemu --file path/to/game.CBE --load-state game.sav
 
 # List archive contents
 nicaiemu --file path/to/game.CBE --list
