@@ -46,7 +46,7 @@ impl ResourceType {
             "actor" => Self::Actor,
             "xse" => Self::Script,
             "gif" => Self::Image,
-            "mp3" | "wav" | "amr" => Self::Audio,
+            "mp3" | "wav" | "amr" | "mid" | "midi" | "ogg" => Self::Audio,
             _ => Self::Unknown,
         }
     }
@@ -113,6 +113,11 @@ impl ResourceEntry {
     pub fn is_script(&self) -> bool {
         self.resource_type == ResourceType::Script
     }
+
+    /// Check if this is an audio resource
+    pub fn is_audio(&self) -> bool {
+        self.resource_type == ResourceType::Audio
+    }
 }
 
 impl fmt::Display for ResourceEntry {
@@ -122,5 +127,24 @@ impl fmt::Display for ResourceEntry {
             "[{}] {} (section={}, offset=0x{:X}, size={})",
             self.resource_type, self.name, self.section_index, self.offset, self.size
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_audio_extensions() {
+        for extension in ["mp3", "wav", "amr", "mid", "midi", "ogg"] {
+            assert_eq!(ResourceType::from_extension(extension), ResourceType::Audio);
+        }
+    }
+
+    #[test]
+    fn audio_entry_predicate() {
+        let entry = ResourceEntry::new("song.mp3".to_string(), 0, 0, 10);
+        assert!(entry.is_audio());
+        assert_eq!(entry.resource_type, ResourceType::Audio);
     }
 }

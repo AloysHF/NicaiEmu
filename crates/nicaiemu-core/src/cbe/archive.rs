@@ -438,6 +438,11 @@ impl CbeArchive {
         self.resources_by_type(ResourceType::Script)
     }
 
+    /// Get all audio resources
+    pub fn audio_resources(&self) -> Vec<&ResourceEntry> {
+        self.resources_by_type(ResourceType::Audio)
+    }
+
     /// Read raw bytes for a resource
     pub fn read_resource_bytes(&self, entry: &ResourceEntry) -> Result<&[u8]> {
         let start = entry.offset as usize;
@@ -508,10 +513,27 @@ mod tests {
         assert_eq!(ResourceType::from_extension("actor"), ResourceType::Actor);
         assert_eq!(ResourceType::from_extension("xse"), ResourceType::Script);
         assert_eq!(ResourceType::from_extension("gif"), ResourceType::Image);
+        assert_eq!(ResourceType::from_extension("mp3"), ResourceType::Audio);
+        assert_eq!(ResourceType::from_extension("wav"), ResourceType::Audio);
         assert_eq!(
             ResourceType::from_extension("unknown"),
             ResourceType::Unknown
         );
+    }
+
+    #[test]
+    fn audio_resources_filter_audio_entries() {
+        let archive = CbeArchive {
+            path: PathBuf::from("game.CBE"),
+            data: Vec::new(),
+            sections: Vec::new(),
+            all_resources: vec![
+                ResourceEntry::new("song.mp3".to_string(), 0, 0, 10),
+                ResourceEntry::new("clip.wav".to_string(), 0, 0, 10),
+                ResourceEntry::new("scene.sce".to_string(), 0, 0, 10),
+            ],
+        };
+        assert_eq!(archive.audio_resources().len(), 2);
     }
 
     #[test]

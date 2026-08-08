@@ -148,3 +148,10 @@ nicaiemu --file path/to/game.CBE --list
 # Verbose logging
 nicaiemu --file path/to/game.CBE --verbose
 ```
+
+## Audio
+
+The standalone emulator plays guest WAV/MP3 audio at 44.1 kHz stereo through
+the default system output device. If no device is available the emulator
+continues silently and logs a warning. Guest MIDI playback is not implemented
+yet; games that submit MIDI data currently skip it and keep running.
