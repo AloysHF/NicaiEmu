@@ -1,124 +1,262 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NicaiEmu - Nicai/MStar CBE Game Emulator</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            color: #fff;
-        }
-
-        .container {
-            text-align: center;
-            padding: 2rem;
-        }
-
-        .logo {
-            font-size: 4rem;
-            font-weight: bold;
-            margin-bottom: 1rem;
-            background: linear-gradient(90deg, #e94560, #f39c12);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        .subtitle {
-            font-size: 1.2rem;
-            color: #a0a0a0;
-            margin-bottom: 2rem;
-        }
-
-        .status {
-            font-size: 1.5rem;
-            margin-bottom: 1rem;
-            color: #f39c12;
-        }
-
-        .message {
-            font-size: 1.1rem;
-            color: #ccc;
-            margin-bottom: 2rem;
-        }
-
-        .progress {
-            width: 300px;
-            height: 6px;
-            background: #333;
-            border-radius: 3px;
-            overflow: hidden;
-            margin: 0 auto 2rem;
-        }
-
-        .progress-bar {
-            height: 100%;
-            background: linear-gradient(90deg, #e94560, #f39c12);
-            width: 30%;
-            animation: pulse 2s ease-in-out infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 0.6; }
-            50% { opacity: 1; }
-        }
-
-        .links {
-            display: flex;
-            gap: 1rem;
-            justify-content: center;
-        }
-
-        .links a {
-            color: #e94560;
-            text-decoration: none;
-            padding: 0.5rem 1rem;
-            border: 1px solid #e94560;
-            border-radius: 4px;
-            transition: all 0.3s;
-        }
-
-        .links a:hover {
-            background: #e94560;
-            color: #fff;
-        }
-
-        .footer {
-            position: fixed;
-            bottom: 1rem;
-            color: #666;
-            font-size: 0.9rem;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NicaiEmu — 让 MStar 手机游戏在桌面重生</title>
+  <meta name="description" content="用 Rust 编写的 Nicai/MStar CBE 手机游戏模拟器，真实执行 ARM/Thumb 客机代码，支持 75 款本地语料、双前端与音频。">
+  <link rel="icon" type="image/png" href="../res/logo.png">
+  <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+
+  <!-- ====== NAV ====== -->
+  <nav id="navbar">
+    <div class="nav-inner">
+      <a href="#top" class="nav-brand">
+        <img src="../res/logo-banner.png" alt="NicaiEmu" height="28">
+      </a>
+      <div class="nav-links">
+        <a href="#features" data-i18n="nav.features">核心特性</a>
+        <a href="#gallery" data-i18n="nav.gallery">游戏画廊</a>
+        <a href="#architecture" data-i18n="nav.arch">技术架构</a>
+        <a href="#quickstart" data-i18n="nav.quickstart">快速开始</a>
+        <button id="lang-toggle" class="lang-toggle" aria-label="Switch language">EN</button>
+        <a class="nav-github" href="https://github.com/jiangxincode/NicaiEmu" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+      <button class="nav-burger" aria-label="Toggle menu"><span></span><span></span></button>
+    </div>
+  </nav>
+
+  <!-- ====== HERO ====== -->
+  <section id="top" class="hero">
+    <div class="hero-glow" aria-hidden="true"></div>
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="pulse"></span> NICAI / MSTAR CBE EMULATOR</p>
+        <h1>让尘封的<span class="accent">手机游戏</span><br>在现代设备上重生</h1>
+        <p class="lead" data-i18n="hero.lead">
+          NicaiEmu 用 Rust 真实执行 CBE 应用的 ARM/Thumb 代码，并桥接固件服务。
+          同一套核心同时驱动桌面窗口与 RetroArch 前端。
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="https://github.com/jiangxincode/NicaiEmu/releases/latest" target="_blank" rel="noopener" data-i18n="hero.download">下载 Release</a>
+          <a class="button secondary" href="https://github.com/jiangxincode/NicaiEmu" target="_blank" rel="noopener" data-i18n="hero.source">查看源码 ↗</a>
+        </div>
+        <div class="hero-badges">
+          <img src="https://img.shields.io/github/v/release/jiangxincode/NicaiEmu?style=for-the-badge" alt="Release">
+          <img src="https://img.shields.io/badge/license-BSD%203--Clause-blue?style=for-the-badge" alt="License">
+          <img src="https://img.shields.io/github/downloads/jiangxincode/NicaiEmu/total?style=for-the-badge&label=downloads" alt="Downloads">
+        </div>
+      </div>
+      <div class="hero-phone" aria-label="Emulator screenshot">
+        <div class="phone-shell">
+          <div class="phone-notch"></div>
+          <div class="phone-screen">
+            <img id="hero-shot" src="" alt="NicaiEmu running a game">
+            <span class="screen-tag">240×400 · WQVGA</span>
+          </div>
+          <div class="phone-keys"><i></i><i></i><i></i></div>
+        </div>
+        <p class="phone-note" data-i18n="hero.note">NicaiEmu 实际运行画面</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== ABOUT ====== -->
+  <section id="about" class="section">
     <div class="container">
-        <div class="logo">NicaiEmu</div>
-        <div class="subtitle">Nicai/MStar CBE Game Emulator</div>
-        <div class="status">Under Development</div>
-        <div class="message">Coming Soon - Stay Tuned!</div>
-        <div class="progress">
-            <div class="progress-bar"></div>
+      <h2 class="section-title" data-i18n="about.title">什么是 Nicai / MStar 游戏？</h2>
+      <div class="about-grid">
+        <p class="about-text" data-i18n="about.p1">
+          Nicai（尼采）是 MStar 时代功能手机的游戏平台。游戏以 <strong>.CBE</strong>
+          容器打包，内含 ARM/Thumb 可执行代码与场景、地图、图片、音频等资源，
+          通过厂商固件服务与硬件交互。这类游戏一度只能在特定手机上运行。
+        </p>
+        <div class="about-flow">
+          <div class="flow-node"><span>📱</span><b>MStar 手机</b><small>功能机 SoC</small></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><span>🎮</span><b>.CBE 游戏</b><small>ARM 代码 + 资源包</small></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node highlight"><span>🦀</span><b>NicaiEmu</b><small>Rust 模拟器</small></div>
         </div>
-        <div class="links">
-            <a href="https://github.com/AloysCFD/NicaiEmu">GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== STATS ====== -->
+  <section id="stats" class="section section-alt">
+    <div class="container stats-grid">
+      <div class="stat">
+        <div class="stat-num" data-count="75">0</div>
+        <div class="stat-label" data-i18n="stats.games">语料验证</div>
+        <div class="stat-sub" data-i18n="stats.gamesSub">启动帧 100% 出图</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num" data-count="240" data-suffix="×400">0</div>
+        <div class="stat-label" data-i18n="stats.display">原生分辨率</div>
+        <div class="stat-sub" data-i18n="stats.displaySub">WQVGA 竖屏</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num" data-count="2">0</div>
+        <div class="stat-label" data-i18n="stats.frontends">运行前端</div>
+        <div class="stat-sub" data-i18n="stats.frontendsSub">Standalone + RetroArch</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num" data-count="3">0</div>
+        <div class="stat-label" data-i18n="stats.audio">音频通路</div>
+        <div class="stat-sub" data-i18n="stats.audioSub">WAV / MP3 / MIDI</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== FEATURES ====== -->
+  <section id="features" class="section">
+    <div class="container">
+      <h2 class="section-title" data-i18n="features.title">核心特性</h2>
+      <p class="section-sub" data-i18n="features.sub">真实执行，而非资源预览</p>
+      <div class="features-grid">
+        <article class="feature-card">
+          <div class="feature-icon">🧠</div>
+          <h3 data-i18n="features.cpu">真实 ARM 执行</h3>
+          <p data-i18n="features.cpuDesc">大小端 ARM/Thumb 解释执行，含 interworking 分支与编译器跳转表，运行真实客机代码。</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon">🔌</div>
+          <h3 data-i18n="features.bridge">固件服务桥</h3>
+          <p data-i18n="features.bridgeDesc">内存、屏幕、输入、定时器、UCS2 文本、下载/支付等 20+ 服务组，逐调用可追踪。</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon">🎵</div>
+          <h3 data-i18n="features.audio">音频引擎</h3>
+          <p data-i18n="features.audioDesc">WAV/MP3 解码与 MIDI 合成，44.1 kHz 立体声混音，音量可调并输出确定性诊断。</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon">💾</div>
+          <h3 data-i18n="features.savestate">存档与内存</h3>
+          <p data-i18n="features.savestateDesc">校验和存档、共享重置，并通过 libretro 向前端暴露客机内存与屏幕缓冲。</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon">🕹️</div>
+          <h3 data-i18n="features.frontend">桌面体验</h3>
+          <p data-i18n="features.frontendDesc">4 种缩放滤镜、按键重映射、虚拟手柄 overlay、全屏/音量/headless。</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon">🧩</div>
+          <h3 data-i18n="features.libretro">RetroArch 核心</h3>
+          <p data-i18n="features.libretroDesc">RGB888 输出、RetroPad 映射、指针/触摸输入、音频与存档，即插即用。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== GALLERY ====== -->
+  <section id="gallery" class="section section-alt">
+    <div class="container">
+      <h2 class="section-title" data-i18n="gallery.title">游戏画廊</h2>
+      <p class="section-sub" data-i18n="gallery.sub">75 款本地语料 · 每帧都由客机真实渲染</p>
+      <div id="gallery-grid" class="gallery-grid"></div>
+      <p class="gallery-more" data-i18n="gallery.more">完整列表见 Game Compatibility 文档</p>
+    </div>
+  </section>
+
+  <!-- ====== ARCHITECTURE ====== -->
+  <section id="architecture" class="section">
+    <div class="container">
+      <h2 class="section-title" data-i18n="arch.title">技术架构</h2>
+      <p class="section-sub" data-i18n="arch.sub">平台无关核心，双前端共享同一模拟逻辑</p>
+      <div class="arch-diagram">
+        <div class="arch-layer">
+          <div class="arch-label" data-i18n="arch.frontends">前端</div>
+          <div class="arch-boxes">
+            <div class="arch-box"><strong>nicaiemu</strong><small data-i18n="arch.standalone">桌面窗口 · minifb / rodio</small></div>
+            <div class="arch-box"><strong>nicaiemu-libretro</strong><small data-i18n="arch.libretro">cdylib · RetroArch</small></div>
+          </div>
         </div>
+        <div class="arch-connector">▼</div>
+        <div class="arch-layer">
+          <div class="arch-label" data-i18n="arch.core">核心引擎</div>
+          <div class="arch-box core-box">
+            <strong>nicaiemu-core</strong>
+            <div class="core-modules">
+              <span>ARM/Thumb</span><span>Service Bridge</span><span>Memory</span>
+              <span>Drawing</span><span>Audio</span><span>Save State</span>
+              <span>Image Decoder</span><span>Packages</span>
+            </div>
+          </div>
+        </div>
+        <div class="arch-connector">▼</div>
+        <div class="arch-layer">
+          <div class="arch-label" data-i18n="arch.platforms">目标平台</div>
+          <div class="arch-boxes">
+            <div class="arch-box small">Windows</div>
+            <div class="arch-box small">macOS</div>
+            <div class="arch-box small">Linux</div>
+            <div class="arch-box small">Android / iOS</div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="footer">
-        &copy; 2024 NicaiEmu. Built with Rust.
+  </section>
+
+  <!-- ====== QUICKSTART ====== -->
+  <section id="quickstart" class="section section-alt">
+    <div class="container">
+      <h2 class="section-title" data-i18n="qs.title">快速开始</h2>
+      <div class="qs-grid">
+        <article class="qs-card">
+          <h3>🖥️ <span data-i18n="qs.standalone">桌面运行</span></h3>
+          <ol>
+            <li data-i18n="qs.s1">从 Releases 下载对应平台二进制</li>
+            <li><code>nicaiemu --file game.CBE</code></li>
+            <li data-i18n="qs.s3">方向键移动 · Enter 确认 · Q/E 软键 · R 重置</li>
+          </ol>
+        </article>
+        <article class="qs-card">
+          <h3>🎮 <span data-i18n="qs.retro">RetroArch</span></h3>
+          <ol>
+            <li data-i18n="qs.r1">下载 libretro 核心并放入 cores/</li>
+            <li data-i18n="qs.r2">放入 nicaiemu_libretro.info 到 info/</li>
+            <li><code>Load Core → Load Content</code></li>
+          </ol>
+        </article>
+        <article class="qs-card">
+          <h3>🔨 <span data-i18n="qs.build">从源码编译</span></h3>
+          <ol>
+            <li><code>git clone https://github.com/jiangxincode/NicaiEmu.git</code></li>
+            <li><code>cargo build -p nicaiemu --release</code></li>
+            <li><code>cargo build -p nicaiemu-libretro --release</code></li>
+          </ol>
+        </article>
+      </div>
     </div>
+  </section>
+
+  <!-- ====== FOOTER ====== -->
+  <footer>
+    <div class="container footer-grid">
+      <div class="footer-brand">
+        <img src="../res/logo-banner.png" alt="NicaiEmu" height="28">
+        <p data-i18n="footer.desc">用 Rust 编写的 Nicai/MStar CBE 游戏模拟器</p>
+      </div>
+      <div class="footer-col">
+        <h4 data-i18n="footer.project">项目</h4>
+        <a href="https://github.com/jiangxincode/NicaiEmu" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/jiangxincode/NicaiEmu/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/jiangxincode/NicaiEmu/blob/master/docs/CONTRIBUTING.md" target="_blank" rel="noopener" data-i18n="footer.contrib">贡献指南</a>
+      </div>
+      <div class="footer-col">
+        <h4 data-i18n="footer.docs">文档</h4>
+        <a href="https://github.com/jiangxincode/NicaiEmu/blob/master/docs/Standalone-Emulator.md" target="_blank" rel="noopener" data-i18n="footer.standalone">独立模拟器</a>
+        <a href="https://github.com/jiangxincode/NicaiEmu/blob/master/docs/RetroArch-Core.md" target="_blank" rel="noopener" data-i18n="footer.retro">RetroArch 核心</a>
+        <a href="https://github.com/jiangxincode/NicaiEmu/blob/master/docs/Game-Compatibility.md" target="_blank" rel="noopener" data-i18n="footer.gamelist">游戏兼容性</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>BSD 3-Clause License © 2026 Aloys. Built with 🦀 Rust.</p>
+    </div>
+  </footer>
+
+  <script src="js/main.js"></script>
 </body>
 </html>
