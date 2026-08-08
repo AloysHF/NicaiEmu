@@ -1,12 +1,16 @@
 //! NicaiEmu desktop frontend.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use log::{info, warn};
 use minifb::{Key, ScaleMode, Window, WindowOptions};
-use nicaiemu_core::{decode_machine, encode_machine, CbeArchive, NicaiMachine, SERIALIZED_SIZE};
+use nicaiemu_core::{
+    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, SERIALIZED_SIZE,
+};
 
 #[derive(Parser)]
 #[command(name = "nicaiemu")]
@@ -119,11 +123,18 @@ fn main() -> Result<()> {
     )
     .context("failed to create emulator window")?;
     window.set_target_fps(30);
+    let audio_output = StandaloneAudio::try_new();
+    if audio_output.is_none() {
+        warn!("Audio output unavailable; running without sound");
+    }
 
     info!("Controls: arrows/WASD move, Enter/F confirms, Q/E soft keys, R resets, Esc exits");
     while window.is_open() && !window.is_key_down(Key::Escape) {
         update_keys(&window, &mut machine);
         if window.is_key_pressed(Key::R, minifb::KeyRepeat::No) {
+            if let Some(audio) = &audio_output {
+                audio.clear();
+            }
             machine
                 .reset(&archive, cli.instruction_limit)
                 .context("failed to reset CBE application")?;
@@ -132,6 +143,9 @@ fn main() -> Result<()> {
         machine
             .run_frame(cli.instruction_limit)
             .context("guest screen callback failed")?;
+        if let Some(audio) = &audio_output {
+            audio.push(machine.take_audio_samples(2048));
+        }
         let pixels = machine.frame_pixels();
         window
             .update_with_buffer(&pixels, 240, 400)
@@ -139,6 +153,78 @@ fn main() -> Result<()> {
     }
     write_save_state(&machine, &archive, cli.save_state.as_deref())?;
     Ok(())
+}
+
+/// Ring-buffered stereo audio output backed by rodio.
+struct StandaloneAudio {
+    _sink: rodio::MixerDeviceSink,
+    _player: rodio::Player,
+    ring: Arc<Mutex<VecDeque<f32>>>,
+}
+
+impl StandaloneAudio {
+    /// Create the output device, or return None when no device is available.
+    fn try_new() -> Option<Self> {
+        let sink = rodio::DeviceSinkBuilder::open_default_sink().ok()?;
+        let ring = Arc::new(Mutex::new(VecDeque::new()));
+        let player = rodio::Player::connect_new(sink.mixer());
+        player.append(RingSource { ring: ring.clone() });
+        Some(Self {
+            _sink: sink,
+            _player: player,
+            ring,
+        })
+    }
+
+    fn push(&self, samples: Vec<i16>) {
+        if samples.is_empty() {
+            return;
+        }
+        let mut ring = self.ring.lock().unwrap();
+        ring.extend(samples.into_iter().map(|sample| sample as f32 / 32768.0));
+        let overflow = ring.len().saturating_sub(MAX_RING_SAMPLES);
+        if overflow > 0 {
+            ring.drain(..overflow);
+        }
+    }
+
+    fn clear(&self) {
+        self.ring.lock().unwrap().clear();
+    }
+}
+
+/// Two seconds of stereo samples at 44.1 kHz.
+const MAX_RING_SAMPLES: usize = AUDIO_SAMPLE_RATE as usize * 2 * 2;
+
+/// Pull-style source that reads from the shared ring buffer.
+struct RingSource {
+    ring: Arc<Mutex<VecDeque<f32>>>,
+}
+
+impl Iterator for RingSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        Some(self.ring.lock().unwrap().pop_front().unwrap_or(0.0))
+    }
+}
+
+impl rodio::Source for RingSource {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> rodio::ChannelCount {
+        rodio::ChannelCount::new(2).unwrap()
+    }
+
+    fn sample_rate(&self) -> rodio::SampleRate {
+        rodio::SampleRate::new(AUDIO_SAMPLE_RATE).unwrap()
+    }
+
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        None
+    }
 }
 
 fn load_machine_state(archive: &CbeArchive, path: &Path) -> Result<NicaiMachine> {

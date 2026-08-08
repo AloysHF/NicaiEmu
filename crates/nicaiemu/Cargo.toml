@@ -18,3 +18,4 @@ minifb.workspace = true
 env_logger.workspace = true
 image.workspace = true
 crc32fast.workspace = true
+rodio.workspace = true
