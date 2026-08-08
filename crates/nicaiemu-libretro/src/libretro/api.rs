@@ -6,7 +6,9 @@
 use super::callbacks;
 use super::constants::*;
 use super::types::*;
-use nicaiemu_core::{decode_machine, encode_machine, CbeArchive, NicaiMachine, SERIALIZED_SIZE};
+use nicaiemu_core::{
+    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, SERIALIZED_SIZE,
+};
 use std::ffi::{c_char, c_void, CStr};
 use std::path::Path;
 use std::ptr;
@@ -118,8 +120,7 @@ pub extern "C" fn retro_get_system_av_info(info: *mut retro_system_av_info) {
             },
             timing: retro_system_timing {
                 fps: DISPLAY_FPS,
-                // Audio output arrives in a later milestone.
-                sample_rate: 0.0,
+                sample_rate: AUDIO_SAMPLE_RATE as f64,
             },
         };
     }
@@ -241,6 +242,11 @@ pub extern "C" fn retro_run() {
             DISPLAY_HEIGHT,
             (DISPLAY_WIDTH * 4) as usize,
         );
+
+        let samples = emulator.machine.take_audio_samples(2048);
+        if !samples.is_empty() {
+            callbacks::audio_sample_batch(samples.as_ptr(), samples.len() / 2);
+        }
     }
 }
 
@@ -621,7 +627,7 @@ mod tests {
             (av.geometry.aspect_ratio - DISPLAY_WIDTH as f32 / DISPLAY_HEIGHT as f32).abs() < 1e-6
         );
         assert_eq!(av.timing.fps, DISPLAY_FPS);
-        assert_eq!(av.timing.sample_rate, 0.0);
+        assert_eq!(av.timing.sample_rate, AUDIO_SAMPLE_RATE as f64);
     }
 
     #[test]
