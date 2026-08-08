@@ -46,6 +46,7 @@ frontend can display the core metadata and supported features.
 - Save states with content-identity and checksum validation
 - Guest memory exposure: the heap is reported as system RAM and the screen
   framebuffer as video RAM
+- Audio output at 44.1 kHz stereo through the sample batch callback
 
 ## RetroPad Button Mapping
 
@@ -64,6 +65,6 @@ frontend can display the core metadata and supported features.
 
 ## Current Limitations
 
-- Audio output is not implemented
 - Core options are not yet available
+- Guest MIDI playback and file-based MP3 control are not implemented yet
 - Compatibility is limited to a subset of CBE applications
