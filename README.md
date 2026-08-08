@@ -30,9 +30,16 @@ by supported games.
 - **240×400 display** — native WQVGA resolution with resizable desktop window
 - **Headless mode** — run without a window for testing and batch processing
 - **Screenshot capture** — automated PNG screenshot generation
+- **Save states** — versioned, checksummed snapshots of the full machine state
+  through the libretro API and the standalone `--save-state` / `--load-state`
+  options
+- **Reset** — rebuilds the emulator runtime state from the loaded archive
+  (standalone `R` key and libretro `retro_reset`)
+- **Guest memory exposure** — libretro exposes the guest heap and screen
+  framebuffer to frontend memory tools
 - **Libretro integration** — playable libretro core with RGB888 video output,
-  RetroPad input, and content loading (audio, save states, and core options
-  are planned for later milestones)
+  RetroPad input, content loading, save states, reset, and memory exposure
+  (audio and core options are planned for later milestones)
 
 ## Usage
 

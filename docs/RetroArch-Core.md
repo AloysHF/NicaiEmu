@@ -43,6 +43,9 @@ frontend can display the core metadata and supported features.
 - `.CBE` content loading
 - Reset support that rebuilds the emulator state
 - Input descriptors for frontend button labeling
+- Save states with content-identity and checksum validation
+- Guest memory exposure: the heap is reported as system RAM and the screen
+  framebuffer as video RAM
 
 ## RetroPad Button Mapping
 
@@ -62,6 +65,5 @@ frontend can display the core metadata and supported features.
 ## Current Limitations
 
 - Audio output is not implemented
-- Save states are not implemented
 - Core options are not yet available
 - Compatibility is limited to a subset of CBE applications
