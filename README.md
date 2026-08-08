@@ -108,26 +108,28 @@ For iOS, see [iOS Libretro Core](docs/iOS-Libretro-Core.md).
 crates/
 ├── nicaiemu-core/         # Platform-independent emulator engine (library)
 │   └── src/
-│       ├── lib.rs            # Crate root
-│       ├── machine.rs        # Core machine tying all components together
-│       ├── arm_cpu.rs        # ARM/Thumb CPU emulation
-│       ├── memory.rs         # Sparse memory regions
-│       ├── cbe_archive.rs    # CBE container parser
-│       ├── cbe_executable.rs # CBE executable loader
-│       ├── renderer.rs       # RGB565 → RGB888 framebuffer conversion
-│       ├── services.rs       # Firmware service bridge
-│       ├── text.rs           # GBK text and font rendering
-│       └── ...
+│       ├── lib.rs            # Crate root and public re-exports
+│       ├── machine/          # Guest machine (NicaiMachine)
+│       │   ├── mod.rs        # Executable parsing, boot, frame loop, input
+│       │   ├── memory.rs     # Sparse guest memory regions
+│       │   ├── packages.rs   # Guest resource package parsing
+│       │   ├── cpu_bridge.rs # Execution loop and service dispatch
+│       │   ├── drawing.rs    # Framebuffer drawing, blits, and text
+│       │   └── services/     # Firmware service handlers by manager
+│       ├── audio_engine.rs   # WAV/MP3/MIDI decoding and mixing
+│       ├── image_decoder.rs  # CBE GIF and firmware PNG decoding
+│       ├── save_state.rs     # Versioned, checksummed save-state codec
+│       └── runtime.rs        # Scene-level HLE (crate-internal, experimental)
 ├── nicaiemu/              # Standalone binary (→ nicaiemu)
 │   └── src/
-│       ├── main.rs           # Window loop, CLI, keyboard input
-│       └── ...
+│       ├── main.rs           # Window loop, CLI, input, audio output
+│       └── standalone/       # Display scalers, gamepad overlay, key mapper
 ├── nicaiemu-tools/        # Archive analysis and headless diagnostics
 │   └── src/
 │       ├── bin/
 │       │   ├── cbe_boot.rs   # Headless boot tool
-│       │   └── cbe_ls.rs     # Archive listing tool
-│       └── ...
+│       │   ├── cbe_analyze.rs # Archive analysis tool
+│       │   └── cbe_disasm.rs # ARM/Thumb disassembly tool
 └── nicaiemu-libretro/     # Libretro cdylib (→ nicaiemu_libretro.{dll,so,dylib})
     ├── nicaiemu_libretro.info   # RetroArch core metadata
     └── src/
