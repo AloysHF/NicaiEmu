@@ -18,6 +18,7 @@ const DEFAULT_INSTRUCTION_LIMIT: u64 = 5_000_000;
 
 /// Loaded emulator state shared by the libretro entry points.
 struct Emulator {
+    archive: CbeArchive,
     machine: NicaiMachine,
     instruction_limit: u64,
     stopped: bool,
@@ -161,13 +162,14 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
         );
 
         match load_machine(Path::new(path)) {
-            Ok(mut machine) => {
+            Ok((archive, mut machine)) => {
                 if let Err(error) = machine.boot(DEFAULT_INSTRUCTION_LIMIT) {
                     log::error!("Failed to boot CBE application: {error:#}");
                     return false;
                 }
                 log::info!("Game loaded: {path}");
                 EMULATOR = Some(Emulator {
+                    archive,
                     machine,
                     instruction_limit: DEFAULT_INSTRUCTION_LIMIT,
                     stopped: false,
@@ -233,10 +235,10 @@ pub extern "C" fn retro_run() {
     }
 }
 
-fn load_machine(path: &Path) -> anyhow::Result<NicaiMachine> {
+fn load_machine(path: &Path) -> anyhow::Result<(CbeArchive, NicaiMachine)> {
     let archive = CbeArchive::load(path)?;
     let machine = NicaiMachine::new(&archive)?;
-    Ok(machine)
+    Ok((archive, machine))
 }
 
 /// Map RetroPad buttons to phone keypad ABI key codes.
@@ -268,7 +270,23 @@ fn update_phone_keys(emulator: &mut Emulator) {
 
 #[no_mangle]
 pub extern "C" fn retro_reset() {
-    log::warn!("retro_reset called without loaded content");
+    unsafe {
+        let Some(emulator) = EMULATOR.as_mut() else {
+            log::warn!("retro_reset called before loading a game");
+            return;
+        };
+        match NicaiMachine::new(&emulator.archive).and_then(|mut machine| {
+            machine.boot(emulator.instruction_limit)?;
+            Ok(machine)
+        }) {
+            Ok(machine) => {
+                emulator.machine = machine;
+                emulator.stopped = false;
+                log::info!("Game reset");
+            }
+            Err(error) => log::error!("Failed to reset game: {error:#}"),
+        }
+    }
 }
 
 #[no_mangle]
