@@ -7,6 +7,10 @@ use super::callbacks;
 use super::constants::*;
 use super::types::*;
 
+const DISPLAY_WIDTH: u32 = 240;
+const DISPLAY_HEIGHT: u32 = 400;
+const DISPLAY_FPS: f64 = 30.0;
+
 // ============================================================
 // Callback registration
 // ============================================================
@@ -65,6 +69,39 @@ pub extern "C" fn retro_init() {
 #[no_mangle]
 pub extern "C" fn retro_deinit() {
     log::info!("NicaiEmu libretro core deinitialized");
+}
+
+#[no_mangle]
+pub extern "C" fn retro_get_system_info(info: *mut retro_system_info) {
+    unsafe {
+        (*info) = retro_system_info {
+            library_name: c"NicaiEmu".as_ptr(),
+            library_version: c"0.1.0".as_ptr(),
+            valid_extensions: c"cbe".as_ptr(),
+            need_fullpath: true,
+            block_extract: false,
+        };
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn retro_get_system_av_info(info: *mut retro_system_av_info) {
+    unsafe {
+        (*info) = retro_system_av_info {
+            geometry: retro_game_geometry {
+                base_width: DISPLAY_WIDTH,
+                base_height: DISPLAY_HEIGHT,
+                max_width: DISPLAY_WIDTH,
+                max_height: DISPLAY_HEIGHT,
+                aspect_ratio: DISPLAY_WIDTH as f32 / DISPLAY_HEIGHT as f32,
+            },
+            timing: retro_system_timing {
+                fps: DISPLAY_FPS,
+                // Audio output arrives in a later milestone.
+                sample_rate: 0.0,
+            },
+        };
+    }
 }
 
 // ============================================================
