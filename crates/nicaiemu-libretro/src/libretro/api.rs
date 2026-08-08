@@ -6,7 +6,7 @@
 use super::callbacks;
 use super::constants::*;
 use super::types::*;
-use nicaiemu_core::{CbeArchive, NicaiMachine};
+use nicaiemu_core::{decode_machine, encode_machine, CbeArchive, NicaiMachine, SERIALIZED_SIZE};
 use std::ffi::{c_char, c_void, CStr};
 use std::path::Path;
 use std::ptr;
@@ -23,6 +23,7 @@ struct Emulator {
     machine: NicaiMachine,
     instruction_limit: u64,
     stopped: bool,
+    content_crc32: u32,
 }
 
 /// Global emulator instance.
@@ -171,11 +172,13 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
                     return false;
                 }
                 log::info!("Game loaded: {path}");
+                let content_crc32 = crc32fast::hash(archive.bytes());
                 EMULATOR = Some(Emulator {
                     archive,
                     machine,
                     instruction_limit: DEFAULT_INSTRUCTION_LIMIT,
                     stopped: false,
+                    content_crc32,
                 });
                 true
             }
@@ -386,17 +389,58 @@ pub extern "C" fn retro_get_region() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn retro_serialize_size() -> usize {
-    0
+    unsafe {
+        if EMULATOR.is_none() {
+            0
+        } else {
+            SERIALIZED_SIZE
+        }
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn retro_serialize(_data: *mut std::ffi::c_void, _size: usize) -> bool {
-    false
+pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
+    unsafe {
+        let Some(emulator) = EMULATOR.as_ref() else {
+            return false;
+        };
+        if data.is_null() || size < SERIALIZED_SIZE {
+            return false;
+        }
+        let buffer = std::slice::from_raw_parts_mut(data as *mut u8, SERIALIZED_SIZE);
+        match encode_machine(&emulator.machine, emulator.content_crc32, buffer) {
+            Ok(()) => true,
+            Err(error) => {
+                log::error!("Failed to serialize game state: {error:#}");
+                false
+            }
+        }
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn retro_unserialize(_data: *const std::ffi::c_void, _size: usize) -> bool {
-    false
+pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
+    unsafe {
+        let Some(emulator) = EMULATOR.as_mut() else {
+            return false;
+        };
+        if data.is_null() || size == 0 {
+            return false;
+        }
+        let buffer = std::slice::from_raw_parts(data as *const u8, size);
+        match decode_machine(buffer, emulator.content_crc32) {
+            Ok(machine) => {
+                emulator.machine = machine;
+                emulator.stopped = false;
+                log::info!("Game state restored");
+                true
+            }
+            Err(error) => {
+                log::error!("Failed to restore game state: {error:#}");
+                false
+            }
+        }
+    }
 }
 
 // ============================================================
@@ -571,7 +615,7 @@ mod tests {
         assert!(workspace_manifest.contains("\"crates/nicaiemu-libretro\""));
         assert!(buildbot_config.contains("CORENAME: nicaiemu"));
         assert!(core_info.contains("corename = \"nicaiemu\""));
-        assert!(core_info.contains("savestate = \"false\""));
+        assert!(core_info.contains("savestate = \"true\""));
         assert!(core_info.contains("cheats = \"false\""));
         assert!(core_info.contains("input_descriptors = \"true\""));
         assert!(core_info.contains("memory_descriptors = \"false\""));
@@ -626,6 +670,16 @@ mod tests {
         drop(last);
 
         retro_reset();
+        for _ in 0..5 {
+            retro_run();
+        }
+        assert!(LAST_VIDEO.lock().unwrap().is_some());
+
+        let state_size = retro_serialize_size();
+        assert_eq!(state_size, SERIALIZED_SIZE);
+        let mut state = vec![0u8; state_size];
+        assert!(retro_serialize(state.as_mut_ptr().cast(), state.len()));
+        assert!(retro_unserialize(state.as_ptr().cast(), state.len()));
         for _ in 0..5 {
             retro_run();
         }
