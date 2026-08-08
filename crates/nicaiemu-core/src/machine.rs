@@ -8,6 +8,7 @@ use encoding_rs::GBK;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 
+use crate::audio_engine::{AudioDiagnostics, AudioEngine};
 use crate::cbe::CbeArchive;
 use crate::image_decoder;
 
@@ -727,6 +728,7 @@ impl Memory for MachineMemory {
 pub struct NicaiMachine {
     cpu: Cpu,
     memory: MachineMemory,
+    audio: AudioEngine,
     executable: CbeExecutable,
     state: MachineState,
     heap_cursor: u32,
@@ -811,6 +813,7 @@ impl NicaiMachine {
         let mut machine = Self {
             cpu: Cpu::new(),
             memory,
+            audio: AudioEngine::new(),
             executable,
             state: MachineState::Created,
             heap_cursor: HEAP_BASE,
@@ -1288,6 +1291,7 @@ impl NicaiMachine {
             13 => self.handle_ucs2_service(index),
             14 => self.handle_screen_service(index),
             16 => self.handle_game_lcd_service(index),
+            18 => self.handle_audio_service(index),
             20 => {
                 if index == 6 {
                     let descriptor = self.register(0);
@@ -1319,6 +1323,90 @@ impl NicaiMachine {
         }
         self.return_from_service();
         Ok(())
+    }
+
+    fn handle_audio_service(&mut self, index: u32) {
+        match index {
+            // vMAudioSetVolume(volume)
+            0 => {
+                self.audio.set_volume(self.register(0));
+                self.set_result(0);
+            }
+            // vMAudioPlayByData(pointer, length)
+            1 => self.play_guest_audio(self.register(0), self.register(1)),
+            // vMAudioPlayWithDataPackage: data-package ABI not recovered yet.
+            2 => self.set_result(0),
+            // vMAudioPlayForGame / vMAudioPlayForApp.
+            3 | 4 => self.set_result(0),
+            // vMAudioPause.
+            5 => {
+                self.audio.pause();
+                self.set_result(0);
+            }
+            // vMAudioResume.
+            6 => {
+                self.audio.resume();
+                self.set_result(0);
+            }
+            // vMAudioStop.
+            7 => {
+                self.audio.stop();
+                self.set_result(0);
+            }
+            // vMAduioGetState.
+            8 => self.set_result(self.audio.state()),
+            // vm_mp3PlayBystream(pointer, length).
+            9 => self.play_guest_audio(self.register(0), self.register(1)),
+            // vm_mp3PauseByStream.
+            10 => {
+                self.audio.pause();
+                self.set_result(0);
+            }
+            // vm_mp3ResumeByStream.
+            11 => {
+                self.audio.resume();
+                self.set_result(0);
+            }
+            // vm_mp3StopBystream.
+            12 => {
+                self.audio.stop();
+                self.set_result(0);
+            }
+            // File-based MP3 control and progress remain neutral until the
+            // file-service ABI is recovered.
+            13..=17 => self.set_result(0),
+            _ => self.set_result(0),
+        }
+    }
+
+    /// Read guest audio bytes and queue decoded PCM when the format is known.
+    fn play_guest_audio(&mut self, pointer: u32, length: u32) {
+        const MAX_AUDIO_BYTES: u32 = 4 * 1024 * 1024;
+        let length = length.min(MAX_AUDIO_BYTES);
+        if length == 0 {
+            log::warn!("Audio play call without a length argument (ABI not recovered)");
+            self.set_result(0);
+            return;
+        }
+        let prefix: [u8; 4] = [
+            self.memory.r8(pointer),
+            self.memory.r8(pointer.wrapping_add(1)),
+            self.memory.r8(pointer.wrapping_add(2)),
+            self.memory.r8(pointer.wrapping_add(3)),
+        ];
+        if &prefix == b"MThd" {
+            log::warn!("Guest MIDI playback is not implemented yet");
+            self.set_result(0);
+            return;
+        }
+        let bytes: Vec<u8> = (0..length)
+            .map(|offset| self.memory.r8(pointer.wrapping_add(offset)))
+            .collect();
+        match self.audio.play_bytes(&bytes) {
+            Ok(()) => log::debug!("Guest audio queued ({} bytes)", bytes.len()),
+            Err(error) => log::warn!("Guest audio rejected: {error:#}"),
+        }
+        self.set_result(0);
     }
 
     fn handle_system_service(&mut self, index: u32) {
@@ -3676,6 +3764,16 @@ impl NicaiMachine {
         pixels
     }
 
+    /// Pull up to `max_frames` stereo frames of guest audio.
+    pub fn take_audio_samples(&mut self, max_frames: usize) -> Vec<i16> {
+        self.audio.pull_samples(max_frames)
+    }
+
+    /// Deterministic evidence about guest audio playback.
+    pub fn audio_diagnostics(&self) -> AudioDiagnostics {
+        self.audio.diagnostics()
+    }
+
     pub fn state(&self) -> MachineState {
         self.state
     }
@@ -3917,5 +4015,34 @@ mod tests {
         assert_eq!(executable.embedded_package_offset, embedded_offset);
         assert_eq!(executable.resource_package_offset, resource_package_offset);
         assert!(!executable.big_endian);
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_reaches_audio_services() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("打地鼠.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(5_000_000).unwrap();
+        for _ in 0..60 {
+            let _ = machine.run_frame(5_000_000);
+        }
+
+        assert!(
+            machine
+                .service_calls()
+                .keys()
+                .any(|(group, _)| *group == 18),
+            "game never called the audio manager"
+        );
+        let diagnostics = machine.audio_diagnostics();
+        assert_eq!(diagnostics.channels, 2);
+        assert_eq!(
+            diagnostics.sample_rate,
+            crate::audio_engine::AUDIO_SAMPLE_RATE
+        );
     }
 }
