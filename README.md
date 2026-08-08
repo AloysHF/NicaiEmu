@@ -109,6 +109,13 @@ crates/
 ├── nicaiemu-core/         # Platform-independent emulator engine (library)
 │   └── src/
 │       ├── lib.rs            # Crate root and public re-exports
+│       ├── cbe/              # CBE container parsing
+│       │   ├── mod.rs        # Archive and resource-type definitions
+│       │   ├── archive.rs    # Section/resource scanning and loading
+│       │   ├── sce.rs        # Scene resource decoder
+│       │   ├── map.rs        # Map resource decoder
+│       │   ├── actor.rs      # Actor resource decoder
+│       │   └── resource.rs   # Resource entry helpers
 │       ├── machine/          # Guest machine (NicaiMachine)
 │       │   ├── mod.rs        # Executable parsing, boot, frame loop, input
 │       │   ├── memory.rs     # Sparse guest memory regions

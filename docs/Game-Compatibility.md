@@ -98,9 +98,9 @@ Validated behavior includes executable initialization, startup and narrative scr
 
 ## Known Limitations
 
-- Audio and MIDI playback are not implemented.
-- Save states and persistent storage are not implemented.
-- Libretro exports are still a scaffold and are not a usable frontend.
+- Persistent guest file storage is not implemented.
+- Core options are not yet available.
+- File-based MP3 control is not implemented yet.
 - The full 75-application validation corpus produces usable guest-rendered startup frames.
 - Fixed-address big-endian lifecycle and less frequently used firmware services remain partial.
 - Some successful captures contain only an early loading screen, dialog, or minimal startup UI.

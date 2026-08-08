@@ -51,10 +51,3 @@ cargo ndk -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 --platform 21 \
 
 Each ABI produces `libnicaiemu.so`; rename it to
 `nicaiemu_libretro_android.so` when installing into RetroArch on Android.
-
-## Current Limitations
-
-- Android support is experimental
-- The libretro core is still in scaffold stage
-- Audio output is not implemented
-- Save states are not implemented
