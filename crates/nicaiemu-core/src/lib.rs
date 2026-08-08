@@ -12,9 +12,11 @@ pub mod cbe;
 pub mod image_decoder;
 pub mod machine;
 pub mod runtime;
+pub mod save_state;
 
 // Re-export commonly used types
 pub use cbe::{CbeArchive, ResourceEntry, ResourceType};
 pub use image_decoder::DecodedImage;
 pub use machine::{CbeExecutable, MachineState, NicaiMachine};
 pub use runtime::NicaiRuntime;
+pub use save_state::{decode_machine, encode_machine, SERIALIZED_SIZE};
