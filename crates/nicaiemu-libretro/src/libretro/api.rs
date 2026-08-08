@@ -398,3 +398,214 @@ pub extern "C" fn retro_serialize(_data: *mut std::ffi::c_void, _size: usize) ->
 pub extern "C" fn retro_unserialize(_data: *const std::ffi::c_void, _size: usize) -> bool {
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::sync::Mutex;
+
+    /// Captured video frame: width, height, pitch, and raw XRGB8888 bytes.
+    type VideoFrame = (u32, u32, usize, Vec<u8>);
+
+    static LAST_VIDEO: Mutex<Option<VideoFrame>> = Mutex::new(None);
+
+    unsafe extern "C" fn test_environment(cmd: u32, _data: *mut c_void) -> bool {
+        matches!(
+            cmd,
+            RETRO_ENVIRONMENT_SET_PIXEL_FORMAT
+                | RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS
+                | RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL
+        )
+    }
+
+    unsafe extern "C" fn test_video_refresh(
+        data: *const c_void,
+        width: u32,
+        height: u32,
+        pitch: usize,
+    ) {
+        let bytes = if data.is_null() {
+            Vec::new()
+        } else {
+            let len = pitch.saturating_mul(height as usize).min(240 * 400 * 4);
+            std::slice::from_raw_parts(data as *const u8, len).to_vec()
+        };
+        *LAST_VIDEO.lock().unwrap() = Some((width, height, pitch, bytes));
+    }
+
+    unsafe extern "C" fn test_input_poll() {}
+
+    unsafe extern "C" fn test_input_state(_port: u32, _device: u32, _index: u32, _id: u32) -> i16 {
+        0
+    }
+
+    #[test]
+    fn system_info_reports_metadata_and_cbe_extensions() {
+        let mut info = std::mem::MaybeUninit::<retro_system_info>::zeroed();
+        retro_get_system_info(info.as_mut_ptr());
+        let info = unsafe { info.assume_init() };
+        assert_eq!(
+            unsafe { CStr::from_ptr(info.library_name) }
+                .to_str()
+                .unwrap(),
+            "NicaiEmu"
+        );
+        assert_eq!(
+            unsafe { CStr::from_ptr(info.valid_extensions) }
+                .to_str()
+                .unwrap(),
+            "cbe"
+        );
+        assert!(info.need_fullpath);
+        assert!(!info.block_extract);
+    }
+
+    #[test]
+    fn av_info_reports_native_display_and_timing() {
+        let mut av = std::mem::MaybeUninit::<retro_system_av_info>::zeroed();
+        retro_get_system_av_info(av.as_mut_ptr());
+        let av = unsafe { av.assume_init() };
+        assert_eq!(av.geometry.base_width, DISPLAY_WIDTH);
+        assert_eq!(av.geometry.base_height, DISPLAY_HEIGHT);
+        assert_eq!(av.geometry.max_width, DISPLAY_WIDTH);
+        assert_eq!(av.geometry.max_height, DISPLAY_HEIGHT);
+        assert!(
+            (av.geometry.aspect_ratio - DISPLAY_WIDTH as f32 / DISPLAY_HEIGHT as f32).abs() < 1e-6
+        );
+        assert_eq!(av.timing.fps, DISPLAY_FPS);
+        assert_eq!(av.timing.sample_rate, 0.0);
+    }
+
+    #[test]
+    fn input_descriptors_cover_retropad_mapping() {
+        let descriptors = input_descriptors();
+        let ids: Vec<u32> = descriptors[..9]
+            .iter()
+            .map(|descriptor| descriptor.id)
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                RETRO_DEVICE_ID_JOYPAD_UP,
+                RETRO_DEVICE_ID_JOYPAD_DOWN,
+                RETRO_DEVICE_ID_JOYPAD_LEFT,
+                RETRO_DEVICE_ID_JOYPAD_RIGHT,
+                RETRO_DEVICE_ID_JOYPAD_A,
+                RETRO_DEVICE_ID_JOYPAD_B,
+                RETRO_DEVICE_ID_JOYPAD_X,
+                RETRO_DEVICE_ID_JOYPAD_Y,
+                RETRO_DEVICE_ID_JOYPAD_START,
+            ]
+        );
+        assert_eq!(descriptors[9].device, RETRO_DEVICE_NONE);
+        assert!(descriptors[9].description.is_null());
+    }
+
+    #[test]
+    fn load_game_rejects_null_and_missing_paths() {
+        retro_set_environment(test_environment);
+        assert!(!retro_load_game(ptr::null()));
+
+        let missing = CString::new("does-not-exist.CBE").unwrap();
+        let info = retro_game_info {
+            path: missing.as_ptr(),
+            data: ptr::null(),
+            size: 0,
+            meta: ptr::null(),
+        };
+        assert!(!retro_load_game(&info));
+        unsafe {
+            assert!(EMULATOR.is_none());
+        }
+    }
+
+    #[test]
+    fn lifecycle_without_content_is_safe() {
+        retro_set_environment(test_environment);
+        retro_set_video_refresh(test_video_refresh);
+        retro_set_input_poll(test_input_poll);
+        retro_set_input_state(test_input_state);
+        retro_init();
+        retro_run();
+        retro_reset();
+        assert_eq!(retro_serialize_size(), 0);
+        assert!(!retro_serialize(ptr::null_mut(), 0));
+        assert!(!retro_unserialize(ptr::null(), 0));
+        retro_deinit();
+    }
+
+    #[test]
+    fn metadata_manifests_match_implemented_features() {
+        let core_info = include_str!("../../nicaiemu_libretro.info");
+        let libretro_manifest = include_str!("../../Cargo.toml");
+        let workspace_manifest = include_str!("../../../../Cargo.toml");
+
+        assert!(libretro_manifest.contains("name = \"nicaiemu-libretro\""));
+        assert!(libretro_manifest.contains("name = \"nicaiemu\""));
+        assert!(workspace_manifest.contains("\"crates/nicaiemu-libretro\""));
+        assert!(core_info.contains("corename = \"nicaiemu\""));
+        assert!(core_info.contains("savestate = \"false\""));
+        assert!(core_info.contains("cheats = \"false\""));
+        assert!(core_info.contains("input_descriptors = \"true\""));
+        assert!(core_info.contains("memory_descriptors = \"false\""));
+        assert!(core_info.contains("core_options = \"false\""));
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_boots_and_renders_frames() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let mut candidates: Vec<std::path::PathBuf> = std::fs::read_dir(&game_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("cbe"))
+            })
+            .collect();
+        candidates.sort();
+        let game_path = candidates
+            .first()
+            .expect("no .CBE file found in NICAI_GAME_DIR");
+        let game_path = CString::new(game_path.to_string_lossy().as_bytes()).unwrap();
+
+        retro_set_environment(test_environment);
+        retro_set_video_refresh(test_video_refresh);
+        retro_set_input_poll(test_input_poll);
+        retro_set_input_state(test_input_state);
+        retro_init();
+
+        let info = retro_game_info {
+            path: game_path.as_ptr(),
+            data: ptr::null(),
+            size: 0,
+            meta: ptr::null(),
+        };
+        assert!(
+            retro_load_game(&info),
+            "failed to load {}",
+            game_path.to_string_lossy()
+        );
+
+        for _ in 0..120 {
+            retro_run();
+        }
+
+        let last = LAST_VIDEO.lock().unwrap();
+        let (width, height, _, bytes) = last.as_ref().expect("video refresh was never called");
+        assert_eq!(*width, DISPLAY_WIDTH);
+        assert_eq!(*height, DISPLAY_HEIGHT);
+        assert_eq!(bytes.len(), (DISPLAY_WIDTH * DISPLAY_HEIGHT * 4) as usize);
+        drop(last);
+
+        retro_reset();
+        for _ in 0..5 {
+            retro_run();
+        }
+        assert!(LAST_VIDEO.lock().unwrap().is_some());
+
+        retro_unload_game();
+        retro_deinit();
+    }
+}
