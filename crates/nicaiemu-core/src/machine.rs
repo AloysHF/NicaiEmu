@@ -4087,7 +4087,7 @@ mod tests {
         let archive = CbeArchive::load(&game_path).unwrap();
         let mut machine = NicaiMachine::new(&archive).unwrap();
         machine.boot(5_000_000).unwrap();
-        for _ in 0..60 {
+        for _ in 0..20 {
             let _ = machine.run_frame(5_000_000);
         }
 

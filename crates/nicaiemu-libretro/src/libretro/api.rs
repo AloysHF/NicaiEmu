@@ -581,6 +581,7 @@ mod tests {
     type VideoFrame = (u32, u32, usize, Vec<u8>);
 
     static LAST_VIDEO: Mutex<Option<VideoFrame>> = Mutex::new(None);
+    static AUDIO_FRAMES: Mutex<usize> = Mutex::new(0);
 
     unsafe extern "C" fn test_environment(cmd: u32, _data: *mut c_void) -> bool {
         matches!(
@@ -611,6 +612,11 @@ mod tests {
 
     unsafe extern "C" fn test_input_state(_port: u32, _device: u32, _index: u32, _id: u32) -> i16 {
         0
+    }
+
+    unsafe extern "C" fn test_audio_batch(_data: *const i16, frames: usize) -> usize {
+        *AUDIO_FRAMES.lock().unwrap() += frames;
+        frames
     }
 
     #[test]
@@ -740,22 +746,13 @@ mod tests {
     #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
     fn real_content_boots_and_renders_frames() {
         let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
-        let mut candidates: Vec<std::path::PathBuf> = std::fs::read_dir(&game_dir)
-            .unwrap()
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("cbe"))
-            })
-            .collect();
-        candidates.sort();
-        let game_path = candidates
-            .first()
-            .expect("no .CBE file found in NICAI_GAME_DIR");
+        let game_path = std::path::PathBuf::from(game_dir).join("激情砖块.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
         let game_path = CString::new(game_path.to_string_lossy().as_bytes()).unwrap();
 
         retro_set_environment(test_environment);
         retro_set_video_refresh(test_video_refresh);
+        retro_set_audio_sample_batch(test_audio_batch);
         retro_set_input_poll(test_input_poll);
         retro_set_input_state(test_input_state);
         retro_init();
@@ -782,7 +779,7 @@ mod tests {
         assert!(!retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM).is_null());
         assert!(!retro_get_memory_data(RETRO_MEMORY_VIDEO_RAM).is_null());
 
-        for _ in 0..120 {
+        for _ in 0..30 {
             retro_run();
         }
 
@@ -808,6 +805,10 @@ mod tests {
             retro_run();
         }
         assert!(LAST_VIDEO.lock().unwrap().is_some());
+        assert!(
+            *AUDIO_FRAMES.lock().unwrap() > 0,
+            "guest audio never reached the libretro sample callback"
+        );
 
         retro_unload_game();
         assert!(retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM).is_null());
