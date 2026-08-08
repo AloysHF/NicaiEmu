@@ -124,6 +124,9 @@ See [Architecture](docs/architecture.md) for implementation details.
 | Additional keys | N / M |
 | Exit | Escape |
 
+Direction presses advance one step; holding a direction key auto-repeats so
+the character keeps moving while the key stays down.
+
 ## Game Compatibility
 
 The emulator supports CBE applications for Nicai/MStar phones with 240×400
