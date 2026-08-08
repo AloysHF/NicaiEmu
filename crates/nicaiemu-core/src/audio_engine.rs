@@ -376,14 +376,17 @@ fn decode_midi(data: &[u8]) -> Result<Vec<i16>> {
         time
     };
 
+    // Feature-phone melodies are low-fi, so render at 8 kHz and resample to
+    // the shared 44.1 kHz output; this keeps headless tests fast.
+    const MIDI_RENDER_RATE: f64 = 8_000.0;
     let total_seconds = tick_time(end_tick).clamp(0.05, 120.0);
-    let total_samples = (total_seconds * AUDIO_SAMPLE_RATE as f64) as usize;
+    let total_samples = (total_seconds * MIDI_RENDER_RATE) as usize;
     let mut samples = vec![0.0f32; total_samples];
     let mut active: Vec<(f64, f64, f64, f32)> = Vec::new(); // (frequency, start, end, amplitude)
     let mut event_index = 0usize;
 
     for (sample_index, output) in samples.iter_mut().enumerate() {
-        let time = sample_index as f64 / AUDIO_SAMPLE_RATE as f64;
+        let time = sample_index as f64 / MIDI_RENDER_RATE;
         while event_index < events.len() {
             let event = events[event_index];
             let event_time = tick_time(event.tick);
@@ -418,13 +421,12 @@ fn decode_midi(data: &[u8]) -> Result<Vec<i16>> {
         *output = value.clamp(-1.0, 1.0);
     }
 
-    let mut output = Vec::with_capacity(samples.len() * 2);
-    for sample in samples {
-        let value = (sample * 32767.0) as i16;
-        output.push(value);
-        output.push(value);
-    }
-    Ok(output)
+    Ok(resample_to_stereo(
+        &samples,
+        1,
+        MIDI_RENDER_RATE as u32,
+        AUDIO_SAMPLE_RATE,
+    ))
 }
 
 fn read_varint(data: &[u8]) -> Result<(u64, usize)> {
