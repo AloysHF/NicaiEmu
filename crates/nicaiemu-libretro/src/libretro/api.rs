@@ -9,6 +9,7 @@ use super::types::*;
 use nicaiemu_core::{CbeArchive, NicaiMachine};
 use std::ffi::{c_void, CStr};
 use std::path::Path;
+use std::ptr;
 
 const DISPLAY_WIDTH: u32 = 240;
 const DISPLAY_HEIGHT: u32 = 400;
@@ -156,6 +157,8 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
             return false;
         }
 
+        register_input_descriptors();
+
         callbacks::environment(
             RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL,
             &PERFORMANCE_LEVEL as *const _ as *mut c_void,
@@ -239,6 +242,89 @@ fn load_machine(path: &Path) -> anyhow::Result<(CbeArchive, NicaiMachine)> {
     let archive = CbeArchive::load(path)?;
     let machine = NicaiMachine::new(&archive)?;
     Ok((archive, machine))
+}
+
+fn input_descriptors() -> [retro_input_descriptor; 10] {
+    [
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_UP,
+            description: c"D-Pad Up".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_DOWN,
+            description: c"D-Pad Down".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_LEFT,
+            description: c"D-Pad Left".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_RIGHT,
+            description: c"D-Pad Right".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_A,
+            description: c"Confirm".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_B,
+            description: c"Confirm".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_X,
+            description: c"Left Soft Key".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_Y,
+            description: c"Right Soft Key".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_START,
+            description: c"Confirm".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_NONE,
+            index: 0,
+            id: 0,
+            description: ptr::null(),
+        },
+    ]
+}
+
+fn register_input_descriptors() {
+    let descriptors = input_descriptors();
+    callbacks::environment(
+        RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS,
+        descriptors.as_ptr() as *mut c_void,
+    );
 }
 
 /// Map RetroPad buttons to phone keypad ABI key codes.
