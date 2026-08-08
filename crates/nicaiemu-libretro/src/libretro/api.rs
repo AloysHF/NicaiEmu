@@ -6,10 +6,25 @@
 use super::callbacks;
 use super::constants::*;
 use super::types::*;
+use nicaiemu_core::{CbeArchive, NicaiMachine};
+use std::ffi::{c_void, CStr};
+use std::path::Path;
 
 const DISPLAY_WIDTH: u32 = 240;
 const DISPLAY_HEIGHT: u32 = 400;
 const DISPLAY_FPS: f64 = 30.0;
+const PERFORMANCE_LEVEL: u32 = 3;
+const DEFAULT_INSTRUCTION_LIMIT: u64 = 5_000_000;
+
+/// Loaded emulator state shared by the libretro entry points.
+struct Emulator {
+    machine: NicaiMachine,
+    instruction_limit: u64,
+    stopped: bool,
+}
+
+/// Global emulator instance.
+static mut EMULATOR: Option<Emulator> = None;
 
 // ============================================================
 // Callback registration
@@ -68,6 +83,9 @@ pub extern "C" fn retro_init() {
 
 #[no_mangle]
 pub extern "C" fn retro_deinit() {
+    unsafe {
+        EMULATOR = None;
+    }
     log::info!("NicaiEmu libretro core deinitialized");
 }
 
@@ -105,13 +123,63 @@ pub extern "C" fn retro_get_system_av_info(info: *mut retro_system_av_info) {
 }
 
 // ============================================================
-// Content lifecycle (implemented in later milestones)
+// Content lifecycle
 // ============================================================
 
 #[no_mangle]
-pub extern "C" fn retro_load_game(_info: *const retro_game_info) -> bool {
-    log::error!("retro_load_game is not implemented yet");
-    false
+pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
+    unsafe {
+        if info.is_null() {
+            log::error!("Game info is null");
+            return false;
+        }
+        let game_info = &*info;
+        if game_info.path.is_null() {
+            log::error!("Game path is null");
+            return false;
+        }
+        let path = match CStr::from_ptr(game_info.path).to_str() {
+            Ok(path) => path,
+            Err(error) => {
+                log::error!("Invalid game path: {error}");
+                return false;
+            }
+        };
+
+        let pixel_format = retro_pixel_format::RETRO_PIXEL_FORMAT_XRGB8888;
+        if !callbacks::environment(
+            RETRO_ENVIRONMENT_SET_PIXEL_FORMAT,
+            &pixel_format as *const _ as *mut c_void,
+        ) {
+            log::error!("Failed to set pixel format");
+            return false;
+        }
+
+        callbacks::environment(
+            RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL,
+            &PERFORMANCE_LEVEL as *const _ as *mut c_void,
+        );
+
+        match load_machine(Path::new(path)) {
+            Ok(mut machine) => {
+                if let Err(error) = machine.boot(DEFAULT_INSTRUCTION_LIMIT) {
+                    log::error!("Failed to boot CBE application: {error:#}");
+                    return false;
+                }
+                log::info!("Game loaded: {path}");
+                EMULATOR = Some(Emulator {
+                    machine,
+                    instruction_limit: DEFAULT_INSTRUCTION_LIMIT,
+                    stopped: false,
+                });
+                true
+            }
+            Err(error) => {
+                log::error!("Failed to load game: {error:#}");
+                false
+            }
+        }
+    }
 }
 
 #[no_mangle]
@@ -125,12 +193,77 @@ pub extern "C" fn retro_load_game_special(
 
 #[no_mangle]
 pub extern "C" fn retro_unload_game() {
+    unsafe {
+        EMULATOR = None;
+    }
     log::info!("Game unloaded");
 }
 
 #[no_mangle]
 pub extern "C" fn retro_run() {
-    log::warn!("retro_run called without loaded content");
+    unsafe {
+        let Some(emulator) = EMULATOR.as_mut() else {
+            log::warn!("retro_run called before loading a game");
+            return;
+        };
+
+        callbacks::input_poll();
+        update_phone_keys(emulator);
+
+        if !emulator.stopped {
+            if let Err(error) = emulator.machine.run_frame(emulator.instruction_limit) {
+                log::warn!("CBE frame callback stopped: {error:#}");
+                emulator.stopped = true;
+            }
+        }
+
+        // Present the last valid guest framebuffer even after a stop.
+        let pixels: Vec<u32> = emulator
+            .machine
+            .frame_pixels()
+            .into_iter()
+            .map(|pixel| 0xFF00_0000 | pixel)
+            .collect();
+        callbacks::video_refresh(
+            pixels.as_ptr() as *const c_void,
+            DISPLAY_WIDTH,
+            DISPLAY_HEIGHT,
+            (DISPLAY_WIDTH * 4) as usize,
+        );
+    }
+}
+
+fn load_machine(path: &Path) -> anyhow::Result<NicaiMachine> {
+    let archive = CbeArchive::load(path)?;
+    let machine = NicaiMachine::new(&archive)?;
+    Ok(machine)
+}
+
+/// Map RetroPad buttons to phone keypad ABI key codes.
+fn update_phone_keys(emulator: &mut Emulator) {
+    let joypad = |id: u32| callbacks::input_state(0, RETRO_DEVICE_JOYPAD, 0, id) != 0;
+    emulator
+        .machine
+        .set_key(17, joypad(RETRO_DEVICE_ID_JOYPAD_UP));
+    emulator
+        .machine
+        .set_key(18, joypad(RETRO_DEVICE_ID_JOYPAD_DOWN));
+    emulator
+        .machine
+        .set_key(15, joypad(RETRO_DEVICE_ID_JOYPAD_LEFT));
+    emulator
+        .machine
+        .set_key(16, joypad(RETRO_DEVICE_ID_JOYPAD_RIGHT));
+    let confirm = joypad(RETRO_DEVICE_ID_JOYPAD_A)
+        || joypad(RETRO_DEVICE_ID_JOYPAD_B)
+        || joypad(RETRO_DEVICE_ID_JOYPAD_START);
+    emulator.machine.set_key(14, confirm);
+    emulator
+        .machine
+        .set_key(12, joypad(RETRO_DEVICE_ID_JOYPAD_X));
+    emulator
+        .machine
+        .set_key(13, joypad(RETRO_DEVICE_ID_JOYPAD_Y));
 }
 
 #[no_mangle]
