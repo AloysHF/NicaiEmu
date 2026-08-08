@@ -30,11 +30,13 @@ lz4_flex = "0.14"         # Save-state payload compression
 crc32fast = "1"           # Save-state integrity and content checksums
 image = { version = "0.25", default-features = false, features = ["gif", "png"] }  # Image processing (GIF palette fixup)
 armv4t_emu = { version = "0.1.3", features = ["serde-serialize"] }  # Pure Rust ARMv4T/Thumb interpreter with register serialization
+symphonia = { version = "0.6.0", default-features = false, features = ["mp3"] }  # Pure-Rust MP3 decoding
 encoding_rs = "0.8.35"     # GBK text decoding
 unifont = "1.1"            # Embedded Unicode bitmap font
 unarm = "2.1"              # ARM/Thumb diagnostics
 clap = { version = "4", features = ["derive"] }  # CLI argument parsing (standalone)
 minifb = "0.28"           # Window creation and pixel rendering (standalone)
+rodio = "0.22"            # Audio output (standalone)
 env_logger = "0.11"       # Log output to stderr (standalone)
 
 [profile.release]

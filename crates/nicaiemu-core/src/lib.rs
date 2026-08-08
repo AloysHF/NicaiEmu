@@ -8,6 +8,7 @@
 //! - Runtime and framebuffer state management
 //! - Image decoding
 
+pub mod audio_engine;
 pub mod cbe;
 pub mod image_decoder;
 pub mod machine;
@@ -15,6 +16,7 @@ pub mod runtime;
 pub mod save_state;
 
 // Re-export commonly used types
+pub use audio_engine::{AudioDiagnostics, AudioEngine, AUDIO_SAMPLE_RATE};
 pub use cbe::{CbeArchive, ResourceEntry, ResourceType};
 pub use image_decoder::DecodedImage;
 pub use machine::{CbeExecutable, MachineState, NicaiMachine};

@@ -16,6 +16,7 @@ lz4_flex.workspace = true
 crc32fast.workspace = true
 image.workspace = true
 armv4t_emu.workspace = true
+symphonia.workspace = true
 encoding_rs.workspace = true
 unifont.workspace = true
 
