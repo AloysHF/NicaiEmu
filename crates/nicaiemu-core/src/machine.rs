@@ -393,6 +393,18 @@ fn service_trace_enabled(group: u32, index: u32) -> bool {
     value.split(',').any(|filter| filter.trim() == service)
 }
 
+fn default_key_repeat_delay() -> u32 {
+    10
+}
+
+fn default_key_repeat_on() -> u32 {
+    1
+}
+
+fn default_key_repeat_off() -> u32 {
+    14
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MachineState {
     Created,
@@ -815,6 +827,13 @@ pub struct NicaiMachine {
     key_held_physical: u32,
     key_press_frame: [u32; 31],
     key_frame_counter: u32,
+    // Frontend configuration; deliberately excluded from save states.
+    #[serde(skip, default = "default_key_repeat_delay")]
+    key_repeat_delay: u32,
+    #[serde(skip, default = "default_key_repeat_on")]
+    key_repeat_on: u32,
+    #[serde(skip, default = "default_key_repeat_off")]
+    key_repeat_off: u32,
     pointer: PointerState,
     timers: Vec<GuestTimer>,
     resources: Vec<HostResource>,
@@ -903,6 +922,9 @@ impl NicaiMachine {
             key_held_physical: 0,
             key_press_frame: [u32::MAX; 31],
             key_frame_counter: 0,
+            key_repeat_delay: Self::KEY_REPEAT_DELAY,
+            key_repeat_on: Self::KEY_REPEAT_ON_FRAMES,
+            key_repeat_off: Self::KEY_REPEAT_OFF_FRAMES,
             pointer: PointerState::new(),
             timers: vec![
                 GuestTimer {
@@ -1073,7 +1095,15 @@ impl NicaiMachine {
     /// Frontends use this for reset so a game restarts from a clean runtime
     /// state without reloading the file from disk.
     pub fn reset(&mut self, archive: &CbeArchive, instruction_limit: u64) -> Result<()> {
+        let key_repeat_delay = self.key_repeat_delay;
+        let key_repeat_on = self.key_repeat_on;
+        let key_repeat_off = self.key_repeat_off;
+        let volume = self.audio.volume();
         let mut rebuilt = NicaiMachine::new(archive)?;
+        rebuilt.key_repeat_delay = key_repeat_delay;
+        rebuilt.key_repeat_on = key_repeat_on;
+        rebuilt.key_repeat_off = key_repeat_off;
+        rebuilt.audio.set_volume(volume);
         rebuilt.boot(instruction_limit)?;
         *self = rebuilt;
         Ok(())
@@ -3797,11 +3827,11 @@ impl NicaiMachine {
 
     /// Frames a held key stays visible for one walk step or repeat pulse.
     const KEY_STEP_FRAMES: u32 = 5;
-    /// Frames a held key is hidden after the initial step before auto-repeat.
+    /// Default frames a held key is hidden after the initial step before auto-repeat.
     const KEY_REPEAT_DELAY: u32 = 10;
-    /// Frames an auto-repeat step stays visible while a key stays held.
+    /// Default frames an auto-repeat step stays visible while a key stays held.
     const KEY_REPEAT_ON_FRAMES: u32 = 1;
-    /// Frames between auto-repeat steps while a key stays held.
+    /// Default frames between auto-repeat steps while a key stays held.
     const KEY_REPEAT_OFF_FRAMES: u32 = 14;
 
     /// Whether a key held for `elapsed` frames is visible to `GAME_isKeyHold`.
@@ -3849,15 +3879,22 @@ impl NicaiMachine {
                 && Self::key_visible_in_frame(
                     elapsed,
                     Self::KEY_STEP_FRAMES,
-                    Self::KEY_REPEAT_DELAY,
-                    Self::KEY_REPEAT_ON_FRAMES,
-                    Self::KEY_REPEAT_OFF_FRAMES,
+                    self.key_repeat_delay,
+                    self.key_repeat_on,
+                    self.key_repeat_off,
                 )
             {
                 visible |= mask;
             }
         }
         self.key_held = visible;
+    }
+
+    /// Configure held-key auto-repeat (delay before repeating, repeat period).
+    pub fn set_key_auto_repeat(&mut self, delay: u32, period: u32) {
+        self.key_repeat_delay = delay;
+        self.key_repeat_on = 1;
+        self.key_repeat_off = period.saturating_sub(1).max(1);
     }
 
     /// Set a guest key state. Key codes use the platform ABI values (0-20).
@@ -3886,6 +3923,16 @@ impl NicaiMachine {
         } else {
             self.key_held_physical &= !mask;
         }
+    }
+
+    /// Bitmask of guest keys physically held down (key code as bit index).
+    pub fn held_keys(&self) -> u32 {
+        self.key_held_physical
+    }
+
+    /// Set the playback volume, clamped to 0-100.
+    pub fn set_volume(&mut self, volume: u32) {
+        self.audio.set_volume(volume);
     }
 
     /// Set the guest touch/pointer state in screen coordinates.

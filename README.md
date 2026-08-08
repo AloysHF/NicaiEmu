@@ -28,7 +28,15 @@ by supported games.
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
 - **Text rendering** — GBK decoding with embedded Unicode bitmap font
 - **240×400 display** — native WQVGA resolution with resizable desktop window
-- **Headless mode** — run without a window for testing and batch processing
+- **Display scaling** — nearest, bilinear, bicubic, and xbrz filters with
+  aspect-ratio-preserving centering (`--filter`)
+- **Key remapping** — rebind any guest key to any host key (`--remap`)
+- **Virtual gamepad overlay** — visual phone keypad over the game frame
+  (`--show-gamepad`)
+- **Fullscreen and volume** — borderless fullscreen and 0–100 playback volume
+  (`--fullscreen`, `--volume`)
+- **Headless mode** — run N frames without a window for testing and batch
+  processing (`--headless --frames`)
 - **Screenshot capture** — automated PNG screenshot generation
 - **Save states** — versioned, checksummed snapshots of the full machine state
   through the libretro API and the standalone `--save-state` / `--load-state`

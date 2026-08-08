@@ -1,5 +1,7 @@
 //! NicaiEmu desktop frontend.
 
+mod standalone;
+
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -7,14 +9,18 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use log::{info, warn};
-use minifb::{Key, ScaleMode, Window, WindowOptions};
+use minifb::{Key, Window, WindowOptions};
 use nicaiemu_core::{
     decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, SERIALIZED_SIZE,
 };
+use standalone::gamepad_overlay::GamepadOverlay;
+use standalone::input::{KeyboardMapper, RemapSpec};
+use standalone::scaler::{DisplayScaler, ScaleFilter};
 
 #[derive(Parser)]
 #[command(name = "nicaiemu")]
 #[command(about = "A desktop emulator for Nicai/MStar CBE games")]
+#[command(version)]
 struct Cli {
     /// Path to the CBE executable.
     #[arg(short, long)]
@@ -31,6 +37,42 @@ struct Cli {
     /// Initial window height.
     #[arg(short = 'H', long, default_value_t = 800)]
     height: usize,
+
+    /// Pixel scaling filter for display output.
+    #[arg(long, value_enum, default_value_t = ScaleFilter::Nearest)]
+    filter: ScaleFilter,
+
+    /// Remap a guest key in GUEST_KEY:KEY format.
+    #[arg(long = "remap", value_name = "GUEST_KEY:KEY")]
+    remappings: Vec<RemapSpec>,
+
+    /// Show a virtual gamepad overlay over the game frame.
+    #[arg(long)]
+    show_gamepad: bool,
+
+    /// Run in fullscreen mode.
+    #[arg(long)]
+    fullscreen: bool,
+
+    /// Audio volume (0-100).
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(0..=100))]
+    volume: u32,
+
+    /// Run without opening a window.
+    #[arg(long)]
+    headless: bool,
+
+    /// Number of frames to run in headless mode.
+    #[arg(long, default_value_t = 60)]
+    frames: u32,
+
+    /// Frames a held key waits before auto-repeat starts (at 30fps).
+    #[arg(long, default_value_t = 10)]
+    repeat_delay: u32,
+
+    /// Frames between auto-repeat pulses once a held key is repeating (at 30fps).
+    #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u32).range(1..))]
+    repeat_period: u32,
 
     /// Maximum guest instructions per callback.
     #[arg(long, default_value_t = 5_000_000)]
@@ -90,6 +132,8 @@ fn main() -> Result<()> {
         machine = NicaiMachine::new(&archive).context("failed to create CBE machine")?;
         boot_result = machine.boot(cli.instruction_limit);
     }
+    machine.set_volume(cli.volume);
+    machine.set_key_auto_repeat(cli.repeat_delay, cli.repeat_period);
 
     if let Some(path) = &cli.screenshot {
         capture_screenshot(
@@ -99,6 +143,18 @@ fn main() -> Result<()> {
             cli.instruction_limit,
             path,
         )?;
+        write_save_state(&machine, &archive, cli.save_state.as_deref())?;
+        return Ok(());
+    }
+
+    if cli.headless {
+        boot_result.context("failed to initialize CBE application")?;
+        for frame in 0..cli.frames {
+            machine
+                .run_frame(cli.instruction_limit)
+                .with_context(|| format!("guest screen callback stopped at frame {}", frame + 1))?;
+        }
+        info!("Headless run completed: {} frames", cli.frames);
         write_save_state(&machine, &archive, cli.save_state.as_deref())?;
         return Ok(());
     }
@@ -116,12 +172,17 @@ fn main() -> Result<()> {
         cli.width,
         cli.height,
         WindowOptions {
-            resize: true,
-            scale_mode: ScaleMode::AspectRatioStretch,
+            resize: !cli.fullscreen,
+            borderless: cli.fullscreen,
+            scale_mode: minifb::ScaleMode::Stretch,
             ..WindowOptions::default()
         },
     )
     .context("failed to create emulator window")?;
+    if cli.fullscreen {
+        window.topmost(true);
+        window.set_position(0, 0);
+    }
     window.set_target_fps(30);
     let audio_output = StandaloneAudio::try_new();
     if audio_output.is_none() {
@@ -129,8 +190,10 @@ fn main() -> Result<()> {
     }
 
     info!("Controls: arrows/WASD move, Enter/F confirms, Q/E soft keys, R resets, Esc exits");
+    let mut display_scaler = DisplayScaler::new(cli.filter);
+    let keyboard = KeyboardMapper::new(&cli.remappings);
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        update_keys(&window, &mut machine);
+        keyboard.apply(&window, &mut machine);
         if let Some((mouse_x, mouse_y)) = window.get_mouse_pos(minifb::MouseMode::Clamp) {
             let x = (mouse_x * 240.0 / cli.width as f32) as i32;
             let y = (mouse_y * 400.0 / cli.height as f32) as i32;
@@ -152,9 +215,14 @@ fn main() -> Result<()> {
         if let Some(audio) = &audio_output {
             audio.push(machine.take_audio_samples(2048));
         }
-        let pixels = machine.frame_pixels();
+        let mut pixels = machine.frame_pixels();
+        if cli.show_gamepad {
+            GamepadOverlay::draw(&mut pixels, 240, 400, machine.held_keys());
+        }
+        let (window_width, window_height) = window.get_size();
+        let buffer = display_scaler.render(&pixels, 240, 400, window_width, window_height);
         window
-            .update_with_buffer(&pixels, 240, 400)
+            .update_with_buffer(buffer, window_width.max(1), window_height.max(1))
             .context("failed to update emulator window")?;
     }
     write_save_state(&machine, &archive, cli.save_state.as_deref())?;
@@ -302,39 +370,10 @@ fn capture_screenshot(
     Ok(())
 }
 
-fn update_keys(window: &Window, machine: &mut NicaiMachine) {
-    const KEY_MAP: &[(u8, &[Key])] = &[
-        (0, &[Key::Key0]),
-        (1, &[Key::Key1]),
-        (2, &[Key::Key2]),
-        (3, &[Key::Key3]),
-        (4, &[Key::Key4]),
-        (5, &[Key::Key5]),
-        (6, &[Key::Key6]),
-        (7, &[Key::Key7]),
-        (8, &[Key::Key8]),
-        (9, &[Key::Key9]),
-        (12, &[Key::Q]),
-        (13, &[Key::E]),
-        (14, &[Key::Enter, Key::F]),
-        (15, &[Key::Left, Key::A]),
-        (16, &[Key::Right, Key::D]),
-        (17, &[Key::Up, Key::W]),
-        (18, &[Key::Down, Key::S]),
-        (19, &[Key::N]),
-        (20, &[Key::M]),
-    ];
-    for &(guest_key, host_keys) in KEY_MAP {
-        machine.set_key(
-            guest_key,
-            host_keys.iter().any(|key| window.is_key_down(*key)),
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
 
     #[test]
     fn parses_screenshot_options() {
@@ -376,5 +415,108 @@ mod tests {
 
         assert_eq!(cli.save_state, Some(PathBuf::from("game.sav")));
         assert_eq!(cli.load_state, Some(PathBuf::from("old.sav")));
+    }
+
+    #[test]
+    fn parses_every_display_filter() {
+        for (name, expected) in [
+            ("nearest", ScaleFilter::Nearest),
+            ("bilinear", ScaleFilter::Bilinear),
+            ("bicubic", ScaleFilter::Bicubic),
+            ("xbrz", ScaleFilter::Xbrz),
+        ] {
+            let cli =
+                Cli::try_parse_from(["nicaiemu", "--file", "game.CBE", "--filter", name]).unwrap();
+            assert_eq!(cli.filter, expected);
+        }
+    }
+
+    #[test]
+    fn display_filter_defaults_to_nearest() {
+        let cli = Cli::try_parse_from(["nicaiemu", "--file", "game.CBE"]).unwrap();
+
+        assert_eq!(cli.filter, ScaleFilter::Nearest);
+    }
+
+    #[test]
+    fn parses_key_remappings() {
+        let cli = Cli::try_parse_from([
+            "nicaiemu",
+            "--file",
+            "game.CBE",
+            "--remap",
+            "enter:space",
+            "--remap",
+            "up:w",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.remappings.len(), 2);
+        assert_eq!(cli.remappings[0].to_string(), "enter:space");
+    }
+
+    #[test]
+    fn rejects_invalid_key_remappings() {
+        assert!(Cli::try_parse_from(
+            ["nicaiemu", "--file", "game.CBE", "--remap", "enter:escape",]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn parses_frontend_experience_options() {
+        let cli = Cli::try_parse_from([
+            "nicaiemu",
+            "--file",
+            "game.CBE",
+            "--fullscreen",
+            "--volume",
+            "35",
+            "--headless",
+            "--frames",
+            "120",
+            "--repeat-delay",
+            "20",
+            "--repeat-period",
+            "6",
+        ])
+        .unwrap();
+
+        assert!(cli.fullscreen);
+        assert_eq!(cli.volume, 35);
+        assert!(cli.headless);
+        assert_eq!(cli.frames, 120);
+        assert_eq!(cli.repeat_delay, 20);
+        assert_eq!(cli.repeat_period, 6);
+    }
+
+    #[test]
+    fn frontend_experience_options_have_sensible_defaults() {
+        let cli = Cli::try_parse_from(["nicaiemu", "--file", "game.CBE"]).unwrap();
+
+        assert!(!cli.fullscreen);
+        assert_eq!(cli.volume, 100);
+        assert!(!cli.headless);
+        assert_eq!(cli.frames, 60);
+        assert_eq!(cli.repeat_delay, 10);
+        assert_eq!(cli.repeat_period, 15);
+    }
+
+    #[test]
+    fn rejects_out_of_range_volume_and_repeat_period() {
+        assert!(
+            Cli::try_parse_from(["nicaiemu", "--file", "game.CBE", "--volume", "101",]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["nicaiemu", "--file", "game.CBE", "--repeat-period", "0",])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn prints_version() {
+        let output = Cli::command().render_version();
+        assert!(output.contains("nicaiemu"));
+        assert!(output.contains(env!("CARGO_PKG_VERSION")));
     }
 }
