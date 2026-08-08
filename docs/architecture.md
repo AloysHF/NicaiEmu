@@ -20,7 +20,7 @@ Native applications receive guest-callable tables whose entries lead to emulator
 
 - heap and memory-block allocation;
 - resource lookup by identifier and name;
-- length-prefixed stream reads and compressed actor streams;
+- byte- and word-length-prefixed stream reads across both DreamFactory manager table layouts;
 - RGB565 screen and image drawing;
 - GBK text measurement and rendering;
 - phone-key edge and held-state queries;
@@ -31,7 +31,7 @@ Unsupported service entries currently return a neutral value. Service usage coun
 
 ## Rendering
 
-The guest owns a 240×400 RGB565 screen. Image resources are reconstructed from the CBE GIF variant or firmware PNG representation, decoded, and copied into guest image objects. The desktop frontend converts the completed screen to 32-bit RGB for `minifb`. Text is decoded as GBK and rasterized from an embedded Unicode font, so the core does not depend on host fonts.
+The guest owns a 240×400 RGB565 screen. Image resources are reconstructed from the CBE GIF variant or firmware PNG representation, decoded, and copied into guest image objects. Some custom GIF headers resemble ICO files, so a failed standard-image decode falls back to the CBE decoder. The desktop frontend converts the completed screen to 32-bit RGB for `minifb`. Text is decoded as GBK and rasterized from an embedded Unicode font, so the core does not depend on host fonts.
 
 ## Headless execution
 

@@ -92,6 +92,14 @@ fn manager_initializer_count(index: u32) -> Option<u32> {
     })
 }
 
+fn game_service_string_uses_wide_length(index: u32) -> Option<bool> {
+    match index {
+        97 => Some(false),
+        101 => Some(true),
+        _ => None,
+    }
+}
+
 /// Executable image metadata stored at the beginning of a CBE file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CbeExecutable {
@@ -1892,6 +1900,12 @@ impl NicaiMachine {
     }
 
     fn handle_game_service(&mut self, index: u32) {
+        if let Some(wide_length) = game_service_string_uses_wide_length(index) {
+            let result =
+                self.read_length_prefixed_string(self.register(0), self.register(1), wide_length);
+            self.set_result(result);
+            return;
+        }
         match index {
             0 => {
                 let source = self.resource_by_id(self.register(0));
@@ -3582,6 +3596,14 @@ mod tests {
         assert_eq!(manager_initializer_count(32), Some(144));
         assert_eq!(manager_initializer_count(45), Some(6));
         assert_eq!(manager_initializer_count(26), None);
+    }
+
+    #[test]
+    fn game_service_string_readers_use_firmware_length_widths() {
+        assert_eq!(game_service_string_uses_wide_length(97), Some(false));
+        assert_eq!(game_service_string_uses_wide_length(101), Some(true));
+        assert_eq!(game_service_string_uses_wide_length(96), None);
+        assert_eq!(game_service_string_uses_wide_length(102), None);
     }
 
     #[test]

@@ -2,8 +2,6 @@
 
 CBE applications in the local validation corpus were run by the standalone emulator for 120 headless frames. Every screenshot below is the RGB565 framebuffer produced by guest execution. If an application stops, times out, or leaves a single-color framebuffer, the batch does not create a screenshot. A successful startup capture does not guarantee that every screen or gameplay path works correctly.
 
-Tested on 2026-08-07. This document is maintained manually after reviewing the batch results and screenshots.
-
 ## Supported Application Profile
 
 The current core recognizes little- and big-endian ARM/Thumb CBE executables designed for a 240×400 display, including variable segment headers and fixed-address manager-directory variants. It implements the firmware subsets needed for memory blocks, native data packages, image and text drawing, screen changes, file queries, timers, and keypad input.

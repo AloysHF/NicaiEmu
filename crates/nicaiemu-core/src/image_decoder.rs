@@ -39,7 +39,17 @@ pub fn decode_image(data: &[u8]) -> Result<DecodedImage> {
 
     if image::guess_format(data).is_ok() {
         debug!("Decoding standard image");
-        return decode_standard_image(data);
+        match decode_standard_image(data) {
+            Ok(decoded) => return Ok(decoded),
+            Err(standard_error) => {
+                debug!("Standard image decode failed, trying CBE custom GIF: {standard_error:#}");
+                return decode_cbe_gif(data).with_context(|| {
+                    format!(
+                        "Failed to decode standard image ({standard_error:#}) or CBE custom GIF"
+                    )
+                });
+            }
+        }
     }
 
     // CBE custom format: 8-byte metadata + RGB565 palette + GIF blocks
@@ -256,5 +266,24 @@ mod tests {
         assert!(normalized.starts_with(b"\x89PNG\r\n\x1a\n"));
         assert_eq!(&normalized[16..22], &[255, 0, 0, 0, 255, 0]);
         assert!(normalized.ends_with(&[0xae, 0x42, 0x60, 0x82]));
+    }
+
+    #[test]
+    fn decodes_cbe_gif_with_ico_like_header() {
+        let encoded = [
+            0x00, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0xf8, 0x00, 0x00, 0x1f, 0x21, 0xf9, 0x04,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+            0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3b,
+        ];
+
+        assert_eq!(
+            image::guess_format(&encoded).unwrap(),
+            image::ImageFormat::Ico
+        );
+
+        let decoded = decode_image(&encoded).unwrap();
+
+        assert_eq!((decoded.width, decoded.height), (1, 1));
+        assert_eq!(decoded.data, [255, 0, 0, 255]);
     }
 }
