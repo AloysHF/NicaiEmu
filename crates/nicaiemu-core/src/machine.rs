@@ -1433,30 +1433,24 @@ impl NicaiMachine {
         }
     }
 
-    /// Read guest audio bytes and queue decoded PCM when the format is known.
+    /// Read a CBE audio resource from guest memory and queue decoded PCM.
+    ///
+    /// `repeats` is the firmware's loop count for `vMAudioPlayByData`.
     fn play_guest_audio(&mut self, pointer: u32, length: u32) {
         const MAX_AUDIO_BYTES: u32 = 4 * 1024 * 1024;
-        let length = length.min(MAX_AUDIO_BYTES);
-        if length == 0 {
-            log::warn!("Audio play call without a length argument (ABI not recovered)");
-            self.set_result(0);
-            return;
-        }
-        let prefix: [u8; 4] = [
+        let header: [u8; 5] = [
             self.memory.r8(pointer),
             self.memory.r8(pointer.wrapping_add(1)),
             self.memory.r8(pointer.wrapping_add(2)),
             self.memory.r8(pointer.wrapping_add(3)),
+            self.memory.r8(pointer.wrapping_add(4)),
         ];
-        if &prefix == b"MThd" {
-            log::warn!("Guest MIDI playback is not implemented yet");
-            self.set_result(0);
-            return;
-        }
-        let bytes: Vec<u8> = (0..length)
+        let payload_len = ((header[2] as u32) << 16) | ((header[3] as u32) << 8) | header[4] as u32;
+        let total = 5u32.saturating_add(payload_len).min(MAX_AUDIO_BYTES);
+        let bytes: Vec<u8> = (0..total)
             .map(|offset| self.memory.r8(pointer.wrapping_add(offset)))
             .collect();
-        match self.audio.play_bytes(&bytes) {
+        match self.audio.play_bytes_repeats(&bytes, length) {
             Ok(()) => log::debug!("Guest audio queued ({} bytes)", bytes.len()),
             Err(error) => log::warn!("Guest audio rejected: {error:#}"),
         }
@@ -4087,7 +4081,7 @@ mod tests {
     #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
     fn real_content_reaches_audio_services() {
         let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
-        let game_path = std::path::PathBuf::from(game_dir).join("打地鼠.CBE");
+        let game_path = std::path::PathBuf::from(game_dir).join("激情砖块.CBE");
         assert!(game_path.is_file(), "missing {}", game_path.display());
 
         let archive = CbeArchive::load(&game_path).unwrap();
@@ -4109,6 +4103,10 @@ mod tests {
         assert_eq!(
             diagnostics.sample_rate,
             crate::audio_engine::AUDIO_SAMPLE_RATE
+        );
+        assert!(
+            diagnostics.decoded_frames > 0,
+            "guest MIDI audio never reached the engine"
         );
     }
 
