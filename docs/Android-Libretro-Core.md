@@ -55,6 +55,5 @@ Each ABI produces `libnicaiemu.so`; rename it to
 ## Current Limitations
 
 - Android support is experimental
-- The libretro core is still in scaffold stage
-- Audio output is not implemented
-- Save states are not implemented
+- Core options are not yet available
+- File-based MP3 control is not implemented yet
