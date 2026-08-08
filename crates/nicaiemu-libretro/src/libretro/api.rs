@@ -364,12 +364,11 @@ pub extern "C" fn retro_reset() {
             log::warn!("retro_reset called before loading a game");
             return;
         };
-        match NicaiMachine::new(&emulator.archive).and_then(|mut machine| {
-            machine.boot(emulator.instruction_limit)?;
-            Ok(machine)
-        }) {
-            Ok(machine) => {
-                emulator.machine = machine;
+        match emulator
+            .machine
+            .reset(&emulator.archive, emulator.instruction_limit)
+        {
+            Ok(()) => {
                 emulator.stopped = false;
                 log::info!("Game reset");
             }

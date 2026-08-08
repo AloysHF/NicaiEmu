@@ -976,6 +976,17 @@ impl NicaiMachine {
         Ok(())
     }
 
+    /// Rebuild the machine from an archive and re-run the boot sequence.
+    ///
+    /// Frontends use this for reset so a game restarts from a clean runtime
+    /// state without reloading the file from disk.
+    pub fn reset(&mut self, archive: &CbeArchive, instruction_limit: u64) -> Result<()> {
+        let mut rebuilt = NicaiMachine::new(archive)?;
+        rebuilt.boot(instruction_limit)?;
+        *self = rebuilt;
+        Ok(())
+    }
+
     fn run_until_return(&mut self, instruction_limit: u64) -> Result<()> {
         for _ in 0..instruction_limit {
             let mut pc = self.cpu.reg_get(Mode::User, reg::PC);

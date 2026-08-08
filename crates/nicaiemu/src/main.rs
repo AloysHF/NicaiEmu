@@ -105,9 +105,15 @@ fn main() -> Result<()> {
     .context("failed to create emulator window")?;
     window.set_target_fps(30);
 
-    info!("Controls: arrows/WASD move, Enter/F confirms, Q/E are soft keys, Esc exits");
+    info!("Controls: arrows/WASD move, Enter/F confirms, Q/E soft keys, R resets, Esc exits");
     while window.is_open() && !window.is_key_down(Key::Escape) {
         update_keys(&window, &mut machine);
+        if window.is_key_pressed(Key::R, minifb::KeyRepeat::No) {
+            machine
+                .reset(&archive, cli.instruction_limit)
+                .context("failed to reset CBE application")?;
+            info!("Game reset");
+        }
         machine
             .run_frame(cli.instruction_limit)
             .context("guest screen callback failed")?;

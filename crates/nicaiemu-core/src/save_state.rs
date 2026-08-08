@@ -200,6 +200,8 @@ mod tests {
         let mut restored = decode_machine(&state, content_crc32).unwrap();
         restored.run_frame(5_000_000).unwrap();
         machine.run_frame(5_000_000).unwrap();
+        assert_eq!(restored.instruction_count(), machine.instruction_count());
+        assert_eq!(restored.last_pc(), machine.last_pc());
         assert_eq!(
             framebuffer_crc32(&mut restored),
             framebuffer_crc32(&mut machine)

@@ -68,6 +68,7 @@ nicaiemu --file path/to/game.CBE --list
 | Right soft key | E |
 | Numeric keypad | 0–9 |
 | Additional keys | N / M |
+| Reset | R |
 | Exit | Escape |
 
 ## Headless Mode
