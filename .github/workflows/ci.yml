@@ -30,5 +30,8 @@ jobs:
       - name: Build
         run: cargo build --workspace --release
 
+      - name: Build libretro core
+        run: cargo build -p nicaiemu-libretro --release
+
       - name: Run tests
         run: cargo test --workspace

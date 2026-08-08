@@ -540,10 +540,12 @@ mod tests {
         let core_info = include_str!("../../nicaiemu_libretro.info");
         let libretro_manifest = include_str!("../../Cargo.toml");
         let workspace_manifest = include_str!("../../../../Cargo.toml");
+        let buildbot_config = include_str!("../../../../.gitlab-ci.yml");
 
         assert!(libretro_manifest.contains("name = \"nicaiemu-libretro\""));
         assert!(libretro_manifest.contains("name = \"nicaiemu\""));
         assert!(workspace_manifest.contains("\"crates/nicaiemu-libretro\""));
+        assert!(buildbot_config.contains("CORENAME: nicaiemu"));
         assert!(core_info.contains("corename = \"nicaiemu\""));
         assert!(core_info.contains("savestate = \"false\""));
         assert!(core_info.contains("cheats = \"false\""));
