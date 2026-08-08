@@ -1,6 +1,11 @@
-//! Runtime State Management
+//! Scene-level runtime state management (experimental).
 //!
-//! Manages the emulator runtime state including scenes, entities, and scripts.
+//! This module is not wired to any frontend: the emulator executes guest code
+//! through [`crate::machine::NicaiMachine`]. It is kept crate-internal as a
+//! possible foundation for future scene-level HLE tooling.
+
+// Kept for future scene-level HLE tooling; nothing calls it yet.
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use log::{debug, info};
