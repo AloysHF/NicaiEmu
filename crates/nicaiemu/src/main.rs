@@ -20,6 +20,7 @@ use standalone::scaler::{DisplayScaler, ScaleFilter};
 #[derive(Parser)]
 #[command(name = "nicaiemu")]
 #[command(about = "A desktop emulator for Nicai/MStar CBE games")]
+#[command(version)]
 struct Cli {
     /// Path to the CBE executable.
     #[arg(short, long)]
@@ -48,6 +49,30 @@ struct Cli {
     /// Show a virtual gamepad overlay over the game frame.
     #[arg(long)]
     show_gamepad: bool,
+
+    /// Run in fullscreen mode.
+    #[arg(long)]
+    fullscreen: bool,
+
+    /// Audio volume (0-100).
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(0..=100))]
+    volume: u32,
+
+    /// Run without opening a window.
+    #[arg(long)]
+    headless: bool,
+
+    /// Number of frames to run in headless mode.
+    #[arg(long, default_value_t = 60)]
+    frames: u32,
+
+    /// Frames a held key waits before auto-repeat starts (at 30fps).
+    #[arg(long, default_value_t = 10)]
+    repeat_delay: u32,
+
+    /// Frames between auto-repeat pulses once a held key is repeating (at 30fps).
+    #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u32).range(1..))]
+    repeat_period: u32,
 
     /// Maximum guest instructions per callback.
     #[arg(long, default_value_t = 5_000_000)]
@@ -107,6 +132,8 @@ fn main() -> Result<()> {
         machine = NicaiMachine::new(&archive).context("failed to create CBE machine")?;
         boot_result = machine.boot(cli.instruction_limit);
     }
+    machine.set_volume(cli.volume);
+    machine.set_key_auto_repeat(cli.repeat_delay, cli.repeat_period);
 
     if let Some(path) = &cli.screenshot {
         capture_screenshot(
@@ -116,6 +143,18 @@ fn main() -> Result<()> {
             cli.instruction_limit,
             path,
         )?;
+        write_save_state(&machine, &archive, cli.save_state.as_deref())?;
+        return Ok(());
+    }
+
+    if cli.headless {
+        boot_result.context("failed to initialize CBE application")?;
+        for frame in 0..cli.frames {
+            machine
+                .run_frame(cli.instruction_limit)
+                .with_context(|| format!("guest screen callback stopped at frame {}", frame + 1))?;
+        }
+        info!("Headless run completed: {} frames", cli.frames);
         write_save_state(&machine, &archive, cli.save_state.as_deref())?;
         return Ok(());
     }
@@ -133,12 +172,17 @@ fn main() -> Result<()> {
         cli.width,
         cli.height,
         WindowOptions {
-            resize: true,
+            resize: !cli.fullscreen,
+            borderless: cli.fullscreen,
             scale_mode: minifb::ScaleMode::Stretch,
             ..WindowOptions::default()
         },
     )
     .context("failed to create emulator window")?;
+    if cli.fullscreen {
+        window.topmost(true);
+        window.set_position(0, 0);
+    }
     window.set_target_fps(30);
     let audio_output = StandaloneAudio::try_new();
     if audio_output.is_none() {
@@ -329,6 +373,7 @@ fn capture_screenshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
 
     #[test]
     fn parses_screenshot_options() {
@@ -416,5 +461,62 @@ mod tests {
             ["nicaiemu", "--file", "game.CBE", "--remap", "enter:escape",]
         )
         .is_err());
+    }
+
+    #[test]
+    fn parses_frontend_experience_options() {
+        let cli = Cli::try_parse_from([
+            "nicaiemu",
+            "--file",
+            "game.CBE",
+            "--fullscreen",
+            "--volume",
+            "35",
+            "--headless",
+            "--frames",
+            "120",
+            "--repeat-delay",
+            "20",
+            "--repeat-period",
+            "6",
+        ])
+        .unwrap();
+
+        assert!(cli.fullscreen);
+        assert_eq!(cli.volume, 35);
+        assert!(cli.headless);
+        assert_eq!(cli.frames, 120);
+        assert_eq!(cli.repeat_delay, 20);
+        assert_eq!(cli.repeat_period, 6);
+    }
+
+    #[test]
+    fn frontend_experience_options_have_sensible_defaults() {
+        let cli = Cli::try_parse_from(["nicaiemu", "--file", "game.CBE"]).unwrap();
+
+        assert!(!cli.fullscreen);
+        assert_eq!(cli.volume, 100);
+        assert!(!cli.headless);
+        assert_eq!(cli.frames, 60);
+        assert_eq!(cli.repeat_delay, 10);
+        assert_eq!(cli.repeat_period, 15);
+    }
+
+    #[test]
+    fn rejects_out_of_range_volume_and_repeat_period() {
+        assert!(
+            Cli::try_parse_from(["nicaiemu", "--file", "game.CBE", "--volume", "101",]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["nicaiemu", "--file", "game.CBE", "--repeat-period", "0",])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn prints_version() {
+        let output = Cli::command().render_version();
+        assert!(output.contains("nicaiemu"));
+        assert!(output.contains(env!("CARGO_PKG_VERSION")));
     }
 }
