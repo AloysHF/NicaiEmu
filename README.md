@@ -30,7 +30,9 @@ by supported games.
 - **240×400 display** — native WQVGA resolution with resizable desktop window
 - **Headless mode** — run without a window for testing and batch processing
 - **Screenshot capture** — automated PNG screenshot generation
-- **Libretro integration** — libretro core scaffold (in progress)
+- **Libretro integration** — playable libretro core with RGB888 video output,
+  RetroPad input, and content loading (audio, save states, and core options
+  are planned for later milestones)
 
 ## Usage
 
@@ -105,9 +107,16 @@ crates/
 │       │   ├── cbe_boot.rs   # Headless boot tool
 │       │   └── cbe_ls.rs     # Archive listing tool
 │       └── ...
-└── nicaiemu-libretro/     # Libretro integration scaffold
+└── nicaiemu-libretro/     # Libretro cdylib (→ nicaiemu_libretro.{dll,so,dylib})
+    ├── nicaiemu_libretro.info   # RetroArch core metadata
     └── src/
-        └── ...
+        ├── lib.rs               # cdylib crate root
+        └── libretro/
+            ├── api.rs           # Exported libretro functions
+            ├── callbacks.rs     # Callback management
+            ├── constants.rs     # libretro constants
+            ├── logger.rs        # Bridges the `log` crate to the frontend
+            └── types.rs         # libretro type definitions
 ```
 
 See [Architecture](docs/architecture.md) for implementation details.
