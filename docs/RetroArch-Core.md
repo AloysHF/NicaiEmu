@@ -49,6 +49,21 @@ frontend can display the core metadata and supported features.
 - Audio output at 44.1 kHz stereo through the sample batch callback
 - Touch and pointer input through the RetroArch pointer device, which covers
   both mouse and touchscreen input
+- Core options for volume, key auto-repeat timing, touch input, and debug
+  logging, applied live while a game is running
+
+## Core Options
+
+Open **Settings > Core Options** in RetroArch to configure the core. Changes
+apply immediately while a game is running and survive resets.
+
+| Option | Choices (default first) | Description |
+|---|---|---|
+| Audio Volume (%) | 100 to 0 in steps of 10 | Master playback volume |
+| Key Auto-Repeat Delay (frames) | 10, 0–60 | Frames a held key waits before repeating (at 30fps) |
+| Key Auto-Repeat Period (frames) | 15, 1–30 | Frames between repeat pulses once repeating |
+| Touch/Pointer Input | enabled, disabled | Whether mouse/touchscreen taps reach the guest |
+| CPU/HLE Debug Logging | disabled, enabled | Forward debug-level core logs to the frontend log |
 
 ## RetroPad Button Mapping
 
@@ -67,6 +82,5 @@ frontend can display the core metadata and supported features.
 
 ## Current Limitations
 
-- Core options are not yet available
 - File-based MP3 control is not implemented yet
 - Compatibility is limited to a subset of CBE applications
