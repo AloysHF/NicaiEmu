@@ -136,6 +136,13 @@ scaling, so it stays crisp at any window size.
 WAV/MP3/MIDI audio at 44.1 kHz stereo through the default system output device.
 If no device is available the emulator continues silently and logs a warning.
 
+`--auto-bgm` plays the first packaged MIDI resource as background music when a
+game never calls the audio manager on its own. Some games (for example the
+local 魔塔 build) ship `.mid` soundtrack resources but never issue audio-manager
+calls, so the music stays silent without this option. The layer restarts the
+MIDI after each pass and hands audio back to the game as soon as the guest
+issues its own audio call.
+
 ## Auto-Repeat
 
 Held keys follow a feature-phone auto-repeat pattern: one visible step, a quiet

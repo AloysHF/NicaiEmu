@@ -64,6 +64,7 @@ apply immediately while a game is running and survive resets.
 | Key Auto-Repeat Period (frames) | 15, 1–30 | Frames between repeat pulses once repeating |
 | Touch/Pointer Input | enabled, disabled | Whether mouse/touchscreen taps reach the guest |
 | CPU/HLE Debug Logging | disabled, enabled | Forward debug-level core logs to the frontend log |
+| Auto BGM (packaged MIDI) | disabled, enabled | Play the first packaged MIDI resource when the game never calls the audio manager |
 
 ## RetroPad Button Mapping
 

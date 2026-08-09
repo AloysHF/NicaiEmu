@@ -12,6 +12,7 @@ pub const OPTION_REPEAT_DELAY: &CStr = c"nicaiemu_repeat_delay";
 pub const OPTION_REPEAT_PERIOD: &CStr = c"nicaiemu_repeat_period";
 pub const OPTION_TOUCH_INPUT: &CStr = c"nicaiemu_touch_input";
 pub const OPTION_DEBUG_LOGGING: &CStr = c"nicaiemu_debug_logging";
+pub const OPTION_AUTO_BGM: &CStr = c"nicaiemu_auto_bgm";
 
 /// Resolved core option values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +22,7 @@ pub struct CoreOptions {
     pub repeat_period: u32,
     pub touch_input: bool,
     pub debug_logging: bool,
+    pub auto_bgm: bool,
 }
 
 impl Default for CoreOptions {
@@ -31,6 +33,7 @@ impl Default for CoreOptions {
             repeat_period: 15,
             touch_input: true,
             debug_logging: false,
+            auto_bgm: false,
         }
     }
 }
@@ -51,7 +54,7 @@ pub fn set_core_options() {
 }
 
 /// The option list advertised to the frontend, terminated by a null entry.
-fn core_option_variables() -> [retro_variable; 6] {
+fn core_option_variables() -> [retro_variable; 7] {
     [
         retro_variable {
             key: OPTION_VOLUME.as_ptr(),
@@ -72,6 +75,10 @@ fn core_option_variables() -> [retro_variable; 6] {
         retro_variable {
             key: OPTION_DEBUG_LOGGING.as_ptr(),
             value: c"CPU/HLE Debug Logging; disabled|enabled".as_ptr(),
+        },
+        retro_variable {
+            key: OPTION_AUTO_BGM.as_ptr(),
+            value: c"Auto BGM (packaged MIDI); disabled|enabled".as_ptr(),
         },
         // Terminator.
         retro_variable {
@@ -143,6 +150,13 @@ pub fn read_core_options(mut get: impl FnMut(&CStr) -> Option<String>) -> CoreOp
             options.debug_logging = false;
         }
     }
+    if let Some(auto_bgm) = get(OPTION_AUTO_BGM) {
+        if auto_bgm == "enabled" {
+            options.auto_bgm = true;
+        } else if auto_bgm == "disabled" {
+            options.auto_bgm = false;
+        }
+    }
     options
 }
 
@@ -189,6 +203,7 @@ mod tests {
             (OPTION_REPEAT_PERIOD, "6"),
             (OPTION_TOUCH_INPUT, "disabled"),
             (OPTION_DEBUG_LOGGING, "enabled"),
+            (OPTION_AUTO_BGM, "enabled"),
         ]));
         assert_eq!(
             options,
@@ -198,6 +213,7 @@ mod tests {
                 repeat_period: 6,
                 touch_input: false,
                 debug_logging: true,
+                auto_bgm: true,
             }
         );
     }
@@ -220,6 +236,7 @@ mod tests {
             (OPTION_REPEAT_PERIOD, "soon"),
             (OPTION_TOUCH_INPUT, "sometimes"),
             (OPTION_DEBUG_LOGGING, "verbose"),
+            (OPTION_AUTO_BGM, "sometimes"),
         ]));
         assert_eq!(options, CoreOptions::default());
     }
@@ -232,6 +249,7 @@ mod tests {
             (OPTION_REPEAT_PERIOD, "15"),
             (OPTION_TOUCH_INPUT, "enabled"),
             (OPTION_DEBUG_LOGGING, "disabled"),
+            (OPTION_AUTO_BGM, "disabled"),
         ];
         for (key, expected_default) in cases {
             let variables = core_option_variables();

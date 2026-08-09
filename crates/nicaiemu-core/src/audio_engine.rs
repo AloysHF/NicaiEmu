@@ -156,6 +156,14 @@ impl AudioEngine {
         }
     }
 
+    /// Number of stereo frames still buffered and ready to pull.
+    ///
+    /// Frontends and the auto-BGM compatibility layer use this to detect
+    /// when a finished resource should be restarted.
+    pub fn buffered_frames(&self) -> usize {
+        self.samples.len() / 2
+    }
+
     /// Pull up to `max_frames` stereo frames, applying the configured volume.
     pub fn pull_samples(&mut self, max_frames: usize) -> Vec<i16> {
         if !self.playing || self.paused {
