@@ -47,13 +47,16 @@ by supported games.
   framebuffer to frontend memory tools
 - **Audio** — WAV/MP3 decoding and MIDI synthesis, stereo mixing, volume
   control, and 44.1 kHz output through the libretro sample callback and the
-  standalone device sink (file-based MP3 control is a planned follow-up)
+  standalone device sink; `--auto-bgm` plays the first packaged MIDI resource
+  when a game never calls the audio manager on its own (file-based MP3 control
+  is a planned follow-up)
 - **Touch input** — the guest touchscreen responds to mouse clicks in the
   standalone frontend and to pointer devices (mouse or touchscreen) in
   RetroArch
 - **Libretro integration** — playable libretro core with RGB888 video output,
   RetroPad input, content loading, save states, reset, and memory exposure
-  (core options cover volume, key auto-repeat, touch input, and debug logging)
+  (core options cover volume, key auto-repeat, touch input, auto BGM, and
+  debug logging)
 
 ## Usage
 

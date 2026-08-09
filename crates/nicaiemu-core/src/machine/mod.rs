@@ -525,6 +525,15 @@ pub struct NicaiMachine {
     key_repeat_on: u32,
     #[serde(skip, default = "default_key_repeat_off")]
     key_repeat_off: u32,
+    // Auto-BGM compatibility layer: plays the first packaged MIDI when the
+    // guest never touches the audio manager. Deliberately excluded from save
+    // states; frontends re-apply it after load/reset.
+    #[serde(skip, default)]
+    auto_bgm: bool,
+    #[serde(skip, default)]
+    auto_bgm_data: Option<Vec<u8>>,
+    #[serde(skip, default)]
+    auto_bgm_gave_way: bool,
     pointer: PointerState,
     timers: Vec<GuestTimer>,
     resources: Vec<HostResource>,
@@ -616,6 +625,9 @@ impl NicaiMachine {
             key_repeat_delay: Self::KEY_REPEAT_DELAY,
             key_repeat_on: Self::KEY_REPEAT_ON_FRAMES,
             key_repeat_off: Self::KEY_REPEAT_OFF_FRAMES,
+            auto_bgm: false,
+            auto_bgm_data: None,
+            auto_bgm_gave_way: false,
             pointer: PointerState::new(),
             timers: vec![
                 GuestTimer {
@@ -790,11 +802,13 @@ impl NicaiMachine {
         let key_repeat_on = self.key_repeat_on;
         let key_repeat_off = self.key_repeat_off;
         let volume = self.audio.volume();
+        let auto_bgm = self.auto_bgm;
         let mut rebuilt = NicaiMachine::new(archive)?;
         rebuilt.key_repeat_delay = key_repeat_delay;
         rebuilt.key_repeat_on = key_repeat_on;
         rebuilt.key_repeat_off = key_repeat_off;
         rebuilt.audio.set_volume(volume);
+        rebuilt.auto_bgm = auto_bgm;
         rebuilt.boot(instruction_limit)?;
         *self = rebuilt;
         Ok(())
@@ -872,6 +886,7 @@ impl NicaiMachine {
             bail!("CBE machine is not ready");
         }
         self.update_key_state();
+        self.maybe_run_auto_bgm();
         self.frame_count = self.frame_count.wrapping_add(1);
         self.dispatch_timers(instruction_limit)?;
         if self.uses_native_dispatch_abi() {
@@ -937,6 +952,63 @@ impl NicaiMachine {
         } else {
             screen
         }
+    }
+
+    /// Play the first packaged MIDI resource as background music when the
+    /// guest never touches the audio manager.
+    ///
+    /// Some games (for example the local 魔塔 build) ship `.mid` resources but
+    /// never call any audio-manager service, so the packaged soundtrack stays
+    /// silent on real hardware-adjacent emulation. This compatibility layer
+    /// restarts the first MIDI once the previous pass is consumed, and hands
+    /// audio back to the game as soon as the guest issues its own audio call.
+    fn maybe_run_auto_bgm(&mut self) {
+        if !self.auto_bgm || self.auto_bgm_gave_way {
+            return;
+        }
+        // State 1 (playing) with an empty queue means the previous pass was
+        // fully consumed; state 0 means nothing was ever queued. In both cases
+        // (re)start the soundtrack.
+        if self.audio.state() == 1 && self.audio.buffered_frames() != 0 {
+            return;
+        }
+        if self.auto_bgm_data.is_none() {
+            self.auto_bgm_data = self
+                .resources
+                .iter()
+                .find(|resource| {
+                    let name = resource.name.to_ascii_lowercase();
+                    name.ends_with(".mid") || name.ends_with(".midi")
+                })
+                .map(|resource| resource.data.clone());
+        }
+        let Some(data) = self.auto_bgm_data.clone() else {
+            return;
+        };
+        match self.audio.play_bytes(&data) {
+            Ok(()) => log::debug!("Auto BGM started ({} bytes)", data.len()),
+            Err(error) => log::warn!("Auto BGM rejected: {error:#}"),
+        }
+    }
+
+    /// Enable or disable the packaged-MIDI auto-BGM compatibility layer.
+    ///
+    /// The guest audio manager always wins: the layer stops permanently as
+    /// soon as the game issues any audio-manager call of its own.
+    pub fn set_auto_bgm(&mut self, enabled: bool) {
+        self.auto_bgm = enabled;
+        if enabled {
+            // Re-enabling the layer also lets it take over again after the
+            // guest previously issued its own audio-manager calls.
+            self.auto_bgm_gave_way = false;
+        } else {
+            self.audio.stop();
+        }
+    }
+
+    /// Whether the packaged-MIDI auto-BGM compatibility layer is enabled.
+    pub fn auto_bgm(&self) -> bool {
+        self.auto_bgm
     }
 
     /// Frames a held key stays visible for one walk step or repeat pulse.
@@ -1297,6 +1369,42 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_auto_bgm_plays_packaged_midi() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("魔塔.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(5_000_000).unwrap();
+        machine.set_auto_bgm(true);
+        for _ in 0..3 {
+            machine.run_frame(5_000_000).unwrap();
+        }
+
+        let diagnostics = machine.audio_diagnostics();
+        assert!(
+            diagnostics.decoded_frames > 0,
+            "packaged MIDI never reached the engine via auto BGM"
+        );
+        assert!(
+            diagnostics.nonzero_samples > 0,
+            "auto BGM produced only silence"
+        );
+
+        // The guest never calls the audio manager, so auto BGM must not have
+        // given way to the game.
+        assert!(
+            !machine
+                .service_calls()
+                .keys()
+                .any(|(group, _)| *group == 18),
+            "guest unexpectedly used the audio manager"
+        );
+    }
+
+    #[test]
     fn pointer_press_holds_drag_and_release_edges() {
         let mut pointer = PointerState::new();
         assert!(!pointer.held && !pointer.down && !pointer.up);
@@ -1326,5 +1434,63 @@ mod tests {
         assert_eq!((pointer.x, pointer.y), (0, 399));
         pointer.set(1000, -10, true);
         assert_eq!((pointer.x, pointer.y), (239, 0));
+    }
+
+    /// A minimal MIDI resource in the packaged CBE audio format: u16 type
+    /// 0x000A followed by a u24 big-endian payload length.
+    fn midi_resource_header(payload: &[u8]) -> Vec<u8> {
+        let mut data = vec![0x0A, 0x00, 0, 0, 0];
+        let length = payload.len() as u32;
+        data[2] = (length >> 16) as u8;
+        data[3] = (length >> 8) as u8;
+        data[4] = length as u8;
+        data.extend_from_slice(payload);
+        data
+    }
+
+    fn tiny_midi_payload() -> Vec<u8> {
+        let mut midi = Vec::new();
+        midi.extend_from_slice(b"MThd");
+        midi.extend_from_slice(&6u32.to_be_bytes());
+        midi.extend_from_slice(&0u16.to_be_bytes());
+        midi.extend_from_slice(&1u16.to_be_bytes());
+        midi.extend_from_slice(&48u16.to_be_bytes());
+
+        let mut track = Vec::new();
+        track.extend_from_slice(&[0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20]);
+        track.extend_from_slice(&[0x00, 0x90, 0x3C, 0x64]);
+        track.extend_from_slice(&[0x30, 0x80, 0x3C, 0x00]);
+        track.extend_from_slice(&[0x00, 0xFF, 0x2F, 0x00]);
+
+        midi.extend_from_slice(b"MTrk");
+        midi.extend_from_slice(&(track.len() as u32).to_be_bytes());
+        midi.extend_from_slice(&track);
+        midi
+    }
+
+    #[test]
+    fn auto_bgm_midi_resource_decodes_and_restarts_when_consumed() {
+        let payload = tiny_midi_payload();
+        let resource = HostResource {
+            name: "bgm.mid".to_string(),
+            data: midi_resource_header(&payload),
+        };
+        let mut engine = crate::audio_engine::AudioEngine::new();
+        engine.play_bytes(&resource.data).unwrap();
+        let first = engine.diagnostics();
+        assert!(first.decoded_frames > 0);
+
+        // Drain every buffered frame; the engine then reports playing with an
+        // empty queue, which is exactly the state `maybe_run_auto_bgm` treats
+        // as "previous pass consumed".
+        let frames = engine.buffered_frames();
+        let drained = engine.pull_samples(frames);
+        assert_eq!(drained.len(), frames * 2);
+        assert_eq!(engine.buffered_frames(), 0);
+        assert_eq!(engine.state(), 1);
+
+        engine.play_bytes(&resource.data).unwrap();
+        assert!(engine.buffered_frames() > 0);
+        assert_eq!(engine.state(), 1);
     }
 }

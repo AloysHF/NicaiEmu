@@ -409,13 +409,15 @@ fn apply_core_options(emulator: &mut Emulator) {
         .machine
         .set_key_auto_repeat(options.repeat_delay, options.repeat_period);
     emulator.touch_input = options.touch_input;
+    emulator.machine.set_auto_bgm(options.auto_bgm);
     super::logger::set_debug_logging(options.debug_logging);
     log::info!(
-        "Core options applied: volume={} repeat_delay={} repeat_period={} touch_input={} debug_logging={}",
+        "Core options applied: volume={} repeat_delay={} repeat_period={} touch_input={} auto_bgm={} debug_logging={}",
         options.volume,
         options.repeat_delay,
         options.repeat_period,
         options.touch_input,
+        options.auto_bgm,
         options.debug_logging
     );
 }
@@ -544,6 +546,7 @@ pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
             Ok(machine) => {
                 emulator.machine = machine;
                 emulator.stopped = false;
+                apply_core_options(emulator);
                 log::info!("Game state restored");
                 true
             }

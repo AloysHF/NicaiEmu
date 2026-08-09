@@ -6,6 +6,12 @@ use super::super::NicaiMachine;
 
 impl NicaiMachine {
     pub(crate) fn handle_audio_service(&mut self, index: u32) {
+        // Any explicit guest audio-manager call means the game owns audio;
+        // hand the auto-BGM compatibility layer over to the game.
+        if self.auto_bgm {
+            self.auto_bgm_gave_way = true;
+            self.audio.stop();
+        }
         match index {
             // vMAudioSetVolume(volume)
             0 => {

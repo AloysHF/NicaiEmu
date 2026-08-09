@@ -58,6 +58,11 @@ struct Cli {
     #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(0..=100))]
     volume: u32,
 
+    /// Play the first packaged MIDI resource as background music when the
+    /// game never issues audio-manager calls of its own.
+    #[arg(long)]
+    auto_bgm: bool,
+
     /// Run without opening a window.
     #[arg(long)]
     headless: bool,
@@ -134,6 +139,7 @@ fn main() -> Result<()> {
     }
     machine.set_volume(cli.volume);
     machine.set_key_auto_repeat(cli.repeat_delay, cli.repeat_period);
+    machine.set_auto_bgm(cli.auto_bgm);
 
     if let Some(path) = &cli.screenshot {
         capture_screenshot(
