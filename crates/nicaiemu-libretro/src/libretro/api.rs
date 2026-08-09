@@ -5,6 +5,7 @@
 
 use super::callbacks;
 use super::constants::*;
+use super::options;
 use super::types::*;
 use nicaiemu_core::{
     decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, SERIALIZED_SIZE,
@@ -25,6 +26,7 @@ struct Emulator {
     machine: NicaiMachine,
     instruction_limit: u64,
     stopped: bool,
+    touch_input: bool,
     content_crc32: u32,
 }
 
@@ -38,6 +40,9 @@ static mut EMULATOR: Option<Emulator> = None;
 #[no_mangle]
 pub extern "C" fn retro_set_environment(cb: retro_environment_t) {
     callbacks::set_environment(cb);
+    // Declare core options as early as possible so the frontend can show them
+    // before any content is loaded.
+    options::set_core_options();
 }
 
 #[no_mangle]
@@ -179,9 +184,11 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
                     machine,
                     instruction_limit: DEFAULT_INSTRUCTION_LIMIT,
                     stopped: false,
+                    touch_input: true,
                     content_crc32,
                 });
                 if let Some(emulator) = EMULATOR.as_mut() {
+                    apply_core_options(emulator);
                     register_memory_maps(emulator);
                 }
                 true
@@ -218,6 +225,10 @@ pub extern "C" fn retro_run() {
             log::warn!("retro_run called before loading a game");
             return;
         };
+
+        if options::core_options_changed() {
+            apply_core_options(emulator);
+        }
 
         callbacks::input_poll();
         update_phone_keys(emulator);
@@ -390,6 +401,25 @@ fn register_memory_maps(emulator: &mut Emulator) {
     }
 }
 
+/// Apply the frontend core option selections to the running emulator.
+fn apply_core_options(emulator: &mut Emulator) {
+    let options = options::read_core_options(options::get_core_option);
+    emulator.machine.set_volume(options.volume);
+    emulator
+        .machine
+        .set_key_auto_repeat(options.repeat_delay, options.repeat_period);
+    emulator.touch_input = options.touch_input;
+    super::logger::set_debug_logging(options.debug_logging);
+    log::info!(
+        "Core options applied: volume={} repeat_delay={} repeat_period={} touch_input={} debug_logging={}",
+        options.volume,
+        options.repeat_delay,
+        options.repeat_period,
+        options.touch_input,
+        options.debug_logging
+    );
+}
+
 /// Map RetroPad buttons to phone keypad ABI key codes.
 fn update_phone_keys(emulator: &mut Emulator) {
     let joypad = |id: u32| callbacks::input_state(0, RETRO_DEVICE_JOYPAD, 0, id) != 0;
@@ -425,6 +455,9 @@ fn pointer_to_screen(value: i32, screen_size: i32) -> i32 {
 
 /// Poll the libretro pointer device (mouse or touchscreen) into the machine.
 fn update_pointer(emulator: &mut Emulator) {
+    if !emulator.touch_input {
+        return;
+    }
     let x = callbacks::input_state(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
     let y = callbacks::input_state(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
     let pressed =
@@ -449,6 +482,7 @@ pub extern "C" fn retro_reset() {
         {
             Ok(()) => {
                 emulator.stopped = false;
+                apply_core_options(emulator);
                 log::info!("Game reset");
             }
             Err(error) => log::error!("Failed to reset game: {error:#}"),
@@ -590,6 +624,7 @@ mod tests {
                 | RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS
                 | RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL
                 | RETRO_ENVIRONMENT_SET_MEMORY_MAPS
+                | RETRO_ENVIRONMENT_SET_VARIABLES
         )
     }
 
@@ -739,7 +774,7 @@ mod tests {
         assert!(core_info.contains("cheats = \"false\""));
         assert!(core_info.contains("input_descriptors = \"true\""));
         assert!(core_info.contains("memory_descriptors = \"true\""));
-        assert!(core_info.contains("core_options = \"false\""));
+        assert!(core_info.contains("core_options = \"true\""));
     }
 
     #[test]

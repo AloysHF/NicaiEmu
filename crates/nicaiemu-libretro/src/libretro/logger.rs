@@ -3,12 +3,20 @@
 use super::callbacks;
 use super::types::retro_log_level;
 use log::{Level, LevelFilter, Log, Metadata, Record};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 struct LibretroLogger;
 
+/// Whether debug records are forwarded to the frontend.
+static DEBUG_LOGGING: AtomicBool = AtomicBool::new(false);
+
 impl Log for LibretroLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= Level::Info
+        if DEBUG_LOGGING.load(Ordering::Relaxed) {
+            metadata.level() <= Level::Trace
+        } else {
+            metadata.level() <= Level::Info
+        }
     }
 
     fn log(&self, record: &Record) {
@@ -36,7 +44,17 @@ static LOGGER: LibretroLogger = LibretroLogger;
 pub fn init() {
     // A frontend may initialize the core more than once in the same process.
     let _ = log::set_logger(&LOGGER);
-    log::set_max_level(LevelFilter::Debug);
+    set_debug_logging(false);
+}
+
+/// Enable or disable debug-level records in the frontend log output.
+pub fn set_debug_logging(enabled: bool) {
+    DEBUG_LOGGING.store(enabled, Ordering::Relaxed);
+    log::set_max_level(if enabled {
+        LevelFilter::Debug
+    } else {
+        LevelFilter::Info
+    });
 }
 
 #[cfg(test)]
@@ -53,9 +71,17 @@ mod tests {
     }
 
     #[test]
-    fn forwards_info_and_above_only() {
+    fn debug_logging_toggles_the_frontend_filter() {
+        set_debug_logging(false);
         assert!(!LOGGER.enabled(&Metadata::builder().level(Level::Debug).build()));
         assert!(LOGGER.enabled(&Metadata::builder().level(Level::Info).build()));
         assert!(LOGGER.enabled(&Metadata::builder().level(Level::Error).build()));
+
+        set_debug_logging(true);
+        assert!(LOGGER.enabled(&Metadata::builder().level(Level::Debug).build()));
+        assert!(LOGGER.enabled(&Metadata::builder().level(Level::Trace).build()));
+        assert!(LOGGER.enabled(&Metadata::builder().level(Level::Error).build()));
+
+        set_debug_logging(false);
     }
 }

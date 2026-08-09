@@ -53,7 +53,7 @@ by supported games.
   RetroArch
 - **Libretro integration** — playable libretro core with RGB888 video output,
   RetroPad input, content loading, save states, reset, and memory exposure
-  (core options are planned for a later milestone)
+  (core options cover volume, key auto-repeat, touch input, and debug logging)
 
 ## Usage
 
