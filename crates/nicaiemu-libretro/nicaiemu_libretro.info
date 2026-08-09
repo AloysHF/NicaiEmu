@@ -27,6 +27,6 @@ load_subsystem = "false"
 hw_render = "false"
 needs_fullpath = "true"
 disk_control = "false"
-is_experimental = "true"
+is_experimental = "false"
 
 description = "NicaiEmu is an emulator for the Nicai/MStar CBE game format. This libretro core supports .cbe content files."
