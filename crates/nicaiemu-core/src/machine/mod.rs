@@ -933,8 +933,13 @@ impl NicaiMachine {
         }
         self.maybe_run_auto_bgm();
         self.frame_count = self.frame_count.wrapping_add(1);
+        let had_screen_before_timers =
+            self.active_screen != 0 || self.pending_screen != 0 || !self.screen_stack.is_empty();
         self.dispatch_timers(instruction_limit)?;
         if self.finish_halted_frame() {
+            return Ok(());
+        }
+        if had_screen_before_timers && self.finish_screen_callback_frame() {
             return Ok(());
         }
         if self.uses_native_dispatch_abi() {
@@ -980,7 +985,7 @@ impl NicaiMachine {
         if !self.screen_initialized {
             let init = self.memory.r32(screen);
             self.invoke_callback(init, screen_this, 0, 0, instruction_limit)?;
-            if self.finish_halted_frame() {
+            if self.finish_screen_callback_frame() {
                 return Ok(());
             }
             self.screen_initialized = true;
@@ -992,7 +997,7 @@ impl NicaiMachine {
             self.resource_load_screen = 0;
             let load_resource = self.memory.r32(screen + 24);
             self.invoke_callback(load_resource, screen_this, 0, 0, instruction_limit)?;
-            if self.finish_halted_frame() {
+            if self.finish_screen_callback_frame() {
                 return Ok(());
             }
         }
@@ -1023,7 +1028,7 @@ impl NicaiMachine {
                 KEY_EVENT_ARG,
                 instruction_limit,
             )?;
-            if self.finish_halted_frame() {
+            if self.finish_screen_callback_frame() {
                 return Ok(());
             }
             self.key_down = 0;
@@ -1033,7 +1038,7 @@ impl NicaiMachine {
             }
         }
         self.invoke_callback(logic, screen_this, 6, 0, instruction_limit)?;
-        if self.finish_halted_frame() {
+        if self.finish_screen_callback_frame() {
             return Ok(());
         }
         if self.pending_screen == 0 || self.pending_screen == screen {
@@ -1042,6 +1047,9 @@ impl NicaiMachine {
                 bail!("CBE screen at 0x{screen:08X} has no render callback");
             }
             self.invoke_callback(render, screen_this, 0, 0, instruction_limit)?;
+            if self.finish_screen_callback_frame() {
+                return Ok(());
+            }
         }
         self.key_down = 0;
         self.pointer.end_frame();
@@ -1055,6 +1063,17 @@ impl NicaiMachine {
         self.key_down = 0;
         self.pointer.end_frame();
         true
+    }
+
+    fn finish_screen_callback_frame(&mut self) -> bool {
+        if self.state != MachineState::Halted
+            && self.active_screen == 0
+            && self.pending_screen == 0
+            && self.screen_stack.is_empty()
+        {
+            self.state = MachineState::Halted;
+        }
+        self.finish_halted_frame()
     }
 
     fn screen_call_parameter(&self, screen: u32) -> u32 {
@@ -1507,6 +1526,27 @@ mod tests {
         assert!(
             machine.service_calls().get(&(6, 5)).copied().unwrap_or(0) > 0,
             "game never called the random-number service"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_removing_last_screen_halts_without_frame_errors() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("在线书城.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for _ in 0..400 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Halted);
+        assert!(
+            machine.service_calls().get(&(14, 6)).copied().unwrap_or(0) > 0,
+            "game never removed its final screen"
         );
     }
 
