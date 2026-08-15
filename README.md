@@ -7,6 +7,7 @@
 <p align="center">
   <a href="https://jiangxincode.github.io/NicaiEmu/"><img src="https://img.shields.io/badge/Website-NicaiEmu-E8553A?logo=githubpages&logoColor=white" alt="Website"></a>
   <a href="https://github.com/jiangxincode/NicaiEmu/actions/workflows/ci.yml"><img src="https://github.com/jiangxincode/NicaiEmu/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://git.libretro.com/libretro/nicaiemu/-/pipelines"><img src="https://img.shields.io/gitlab/pipeline-status/nicaiemu?gitlab_url=https%3A%2F%2Fgit.libretro.com%2Flibretro&branch=master&logo=gitlab&label=Pipeline%20Status" alt="Gitlab Pipeline Status" ></a>
   <a href="https://github.com/jiangxincode/NicaiEmu/releases/latest"><img src="https://img.shields.io/github/v/release/jiangxincode/NicaiEmu" alt="Release"></a>
   <a href="https://github.com/jiangxincode/NicaiEmu/releases"><img src="https://img.shields.io/github/downloads/jiangxincode/NicaiEmu/total" alt="Downloads"></a>
   <a href="https://sonarcloud.io/dashboard?id=jiangxincode_NicaiEmu"><img src="https://sonarcloud.io/api/project_badges/measure?project=jiangxincode_NicaiEmu&metric=alert_status" alt="Quality Gate Status"></a>
