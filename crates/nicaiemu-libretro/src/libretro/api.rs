@@ -8,8 +8,8 @@ use super::constants::*;
 use super::options;
 use super::types::*;
 use nicaiemu_core::{
-    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, GUEST_FRAME_RATE,
-    SERIALIZED_SIZE,
+    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE,
+    DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
 };
 use std::ffi::{c_char, c_void, CStr};
 use std::path::Path;
@@ -19,8 +19,6 @@ const DISPLAY_WIDTH: u32 = 240;
 const DISPLAY_HEIGHT: u32 = 400;
 const DISPLAY_FPS: f64 = GUEST_FRAME_RATE as f64;
 const PERFORMANCE_LEVEL: u32 = 3;
-const DEFAULT_INSTRUCTION_LIMIT: u64 = 5_000_000;
-
 /// Loaded emulator state shared by the libretro entry points.
 struct Emulator {
     archive: CbeArchive,

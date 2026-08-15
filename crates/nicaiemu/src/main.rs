@@ -11,8 +11,8 @@ use clap::Parser;
 use log::{info, warn};
 use minifb::{Key, Window, WindowOptions};
 use nicaiemu_core::{
-    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, GUEST_FRAME_RATE,
-    SERIALIZED_SIZE,
+    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE,
+    DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
 };
 use standalone::gamepad_overlay::GamepadOverlay;
 use standalone::input::{KeyboardMapper, RemapSpec};
@@ -73,7 +73,7 @@ struct Cli {
     frames: u32,
 
     /// Maximum guest instructions per callback.
-    #[arg(long, default_value_t = 5_000_000)]
+    #[arg(long, default_value_t = DEFAULT_INSTRUCTION_LIMIT)]
     instruction_limit: u64,
 
     /// Take a PNG screenshot after running headlessly, then exit.
@@ -490,6 +490,7 @@ mod tests {
         assert_eq!(cli.volume, 100);
         assert!(!cli.headless);
         assert_eq!(cli.frames, 60);
+        assert_eq!(cli.instruction_limit, DEFAULT_INSTRUCTION_LIMIT);
     }
 
     #[test]

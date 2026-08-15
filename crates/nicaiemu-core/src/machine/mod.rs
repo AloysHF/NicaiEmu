@@ -1382,6 +1382,29 @@ mod tests {
 
     #[test]
     #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_completes_high_cost_idle_frames_with_default_budget() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        for (game, frames) in [
+            ("疯狂捕鸟.CBE", 1),
+            ("疯狂企鹅大冒险.CBE", 28),
+            ("僵尸先生.CBE", 1),
+        ] {
+            let game_path = std::path::PathBuf::from(&game_dir).join(game);
+            assert!(game_path.is_file(), "missing {}", game_path.display());
+
+            let archive = CbeArchive::load(&game_path).unwrap();
+            let mut machine = NicaiMachine::new(&archive).unwrap();
+            machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            for _ in 0..frames {
+                machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            }
+
+            assert_eq!(machine.state(), MachineState::Ready, "{game} faulted");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
     fn real_content_auto_bgm_plays_packaged_midi() {
         let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
         let game_path = std::path::PathBuf::from(game_dir).join("魔塔.CBE");
