@@ -1447,6 +1447,45 @@ mod tests {
 
     #[test]
     #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_shooter_advances_projectiles_and_registers_hits() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("雷霆战机.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for frame in 0..1_200 {
+            let confirm = matches!(frame, 5 | 50 | 100 | 150);
+            if confirm {
+                machine.set_key(14, true);
+            }
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            if confirm {
+                machine.set_key(14, false);
+            }
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        for index in 103..=106 {
+            assert!(
+                machine
+                    .service_calls()
+                    .get(&(3, index))
+                    .copied()
+                    .unwrap_or(0)
+                    > 0,
+                "game never called required game-math service {index}"
+            );
+        }
+        let score = machine
+            .memory
+            .r32(machine.executable.data_address() + 0x396c);
+        assert!(score > 0, "projectiles never registered a hit");
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
     fn real_content_completes_high_cost_idle_frames_with_default_budget() {
         let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
         for (game, frames) in [
