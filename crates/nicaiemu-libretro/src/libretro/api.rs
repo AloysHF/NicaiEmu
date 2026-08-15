@@ -8,7 +8,8 @@ use super::constants::*;
 use super::options;
 use super::types::*;
 use nicaiemu_core::{
-    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, SERIALIZED_SIZE,
+    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, GUEST_FRAME_RATE,
+    SERIALIZED_SIZE,
 };
 use std::ffi::{c_char, c_void, CStr};
 use std::path::Path;
@@ -16,7 +17,7 @@ use std::ptr;
 
 const DISPLAY_WIDTH: u32 = 240;
 const DISPLAY_HEIGHT: u32 = 400;
-const DISPLAY_FPS: f64 = 30.0;
+const DISPLAY_FPS: f64 = GUEST_FRAME_RATE as f64;
 const PERFORMANCE_LEVEL: u32 = 3;
 const DEFAULT_INSTRUCTION_LIMIT: u64 = 5_000_000;
 
@@ -255,7 +256,9 @@ pub extern "C" fn retro_run() {
             (DISPLAY_WIDTH * 4) as usize,
         );
 
-        let samples = emulator.machine.take_audio_samples(2048);
+        let samples = emulator
+            .machine
+            .take_audio_samples((AUDIO_SAMPLE_RATE / GUEST_FRAME_RATE) as usize);
         if !samples.is_empty() {
             callbacks::audio_sample_batch(samples.as_ptr(), samples.len() / 2);
         }
@@ -405,17 +408,12 @@ fn register_memory_maps(emulator: &mut Emulator) {
 fn apply_core_options(emulator: &mut Emulator) {
     let options = options::read_core_options(options::get_core_option);
     emulator.machine.set_volume(options.volume);
-    emulator
-        .machine
-        .set_key_auto_repeat(options.repeat_delay, options.repeat_period);
     emulator.touch_input = options.touch_input;
     emulator.machine.set_auto_bgm(options.auto_bgm);
     super::logger::set_debug_logging(options.debug_logging);
     log::info!(
-        "Core options applied: volume={} repeat_delay={} repeat_period={} touch_input={} auto_bgm={} debug_logging={}",
+        "Core options applied: volume={} touch_input={} auto_bgm={} debug_logging={}",
         options.volume,
-        options.repeat_delay,
-        options.repeat_period,
         options.touch_input,
         options.auto_bgm,
         options.debug_logging

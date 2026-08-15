@@ -24,3 +24,6 @@ pub use cbe::{CbeArchive, ResourceEntry, ResourceType};
 pub use image_decoder::DecodedImage;
 pub use machine::{CbeExecutable, MachineState, NicaiMachine};
 pub use save_state::{decode_machine, encode_machine, SERIALIZED_SIZE};
+
+/// Guest screen scheduler frequency used by the original runtime.
+pub const GUEST_FRAME_RATE: u32 = 10;

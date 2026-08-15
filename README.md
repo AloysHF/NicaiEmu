@@ -56,8 +56,7 @@ by supported games.
   RetroArch
 - **Libretro integration** — playable libretro core with RGB888 video output,
   RetroPad input, content loading, save states, reset, and memory exposure
-  (core options cover volume, key auto-repeat, touch input, auto BGM, and
-  debug logging)
+  (core options cover volume, touch input, auto BGM, and debug logging)
 
 ## Usage
 
@@ -167,8 +166,9 @@ See [Architecture](docs/architecture.md) for implementation details.
 | Additional keys | N / M |
 | Exit | Escape |
 
-Direction presses advance one step; holding a direction key auto-repeats so
-the character keeps moving while the key stays down.
+Direction keys remain visible to the guest while physically held. Guest logic
+runs at the platform's 10 Hz screen-update rate, so continuous-motion games
+walk smoothly without flooding tile-based games with 30 updates per second.
 
 ## Game Compatibility
 

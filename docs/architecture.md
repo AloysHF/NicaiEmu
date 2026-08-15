@@ -8,7 +8,7 @@ NicaiEmu executes native CBE applications instead of replacing their game logic 
 2. `CbeExecutable` validates the executable header, segment bounds, checksums, and guest byte order.
 3. `NicaiMachine` maps code, initialized data, stack, heap, manager tables, and service trampolines into the guest address space.
 4. The ARM/Thumb interpreter runs the application initializer and entry point, including interworking branches and compiler-generated PC-relative jump tables.
-5. Each frontend frame invokes the active screen's logic and render callbacks.
+5. Each 100ms guest tick invokes the active screen's logic and render callbacks.
 
 ## Guest memory
 
@@ -23,8 +23,8 @@ Native applications receive guest-callable tables whose entries lead to emulator
 - byte- and word-length-prefixed stream reads across both DreamFactory manager table layouts;
 - RGB565 screen and image drawing;
 - GBK text measurement and rendering;
-- phone-key edge and held-state queries, with auto-repeat for held keys so a
-  press produces one step while holding keeps moving;
+- phone-key edge and held-state queries, with held keys remaining visible on
+  every guest tick until the frontend reports their release;
 - screen transitions and resource notifications;
 - a bounded subset of C-style formatted strings.
 

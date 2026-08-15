@@ -26,7 +26,9 @@ pub fn encode_machine(machine: &NicaiMachine, content_crc32: u32, output: &mut [
 
 /// Decode a machine snapshot, rejecting states from other content builds.
 pub fn decode_machine(input: &[u8], expected_content_crc32: u32) -> Result<NicaiMachine> {
-    decode_value(input, expected_content_crc32)
+    let mut machine: NicaiMachine = decode_value(input, expected_content_crc32)?;
+    machine.normalize_input_after_load();
+    Ok(machine)
 }
 
 fn encode_value<T: Serialize>(value: &T, content_crc32: u32, output: &mut [u8]) -> Result<()> {

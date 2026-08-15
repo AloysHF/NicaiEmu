@@ -18,6 +18,8 @@ struct Cli {
     press_frame: Vec<u32>,
     #[arg(long, value_parser = parse_key_event)]
     key_event: Vec<(u32, u8)>,
+    #[arg(long, value_parser = parse_key_hold)]
+    key_hold: Vec<(u32, u32, u8)>,
     #[arg(long, value_parser = parse_pointer_event)]
     pointer_event: Vec<(u32, i32, i32)>,
     #[arg(long)]
@@ -35,6 +37,26 @@ fn parse_key_event(value: &str) -> Result<(u32, u8), String> {
         .parse()
         .map_err(|_| "key event key must be an unsigned byte".to_owned())?;
     Ok((frame, key))
+}
+
+fn parse_key_hold(value: &str) -> Result<(u32, u32, u8), String> {
+    let parts: Vec<&str> = value.split(':').collect();
+    if parts.len() != 3 {
+        return Err("key hold must use START:END:KEY syntax".to_owned());
+    }
+    let start = parts[0]
+        .parse()
+        .map_err(|_| "key hold start must be an unsigned integer".to_owned())?;
+    let end = parts[1]
+        .parse()
+        .map_err(|_| "key hold end must be an unsigned integer".to_owned())?;
+    let key = parts[2]
+        .parse()
+        .map_err(|_| "key hold key must be an unsigned byte".to_owned())?;
+    if start >= end {
+        return Err("key hold end must be greater than start".to_owned());
+    }
+    Ok((start, end, key))
 }
 
 fn parse_pointer_event(value: &str) -> Result<(u32, i32, i32), String> {
@@ -73,6 +95,13 @@ fn main() -> Result<()> {
             }
             for key in &event_keys {
                 machine.set_key(*key, true);
+            }
+            for &(start, end, key) in &cli.key_hold {
+                if frame == start {
+                    machine.set_key(key, true);
+                } else if frame == end {
+                    machine.set_key(key, false);
+                }
             }
             for &(event_frame, x, y) in &cli.pointer_event {
                 if event_frame == frame {
@@ -134,4 +163,21 @@ fn main() -> Result<()> {
         eprintln!("unmapped address=0x{address:08X}");
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_key_hold_range() {
+        assert_eq!(parse_key_hold("20:40:16"), Ok((20, 40, 16)));
+    }
+
+    #[test]
+    fn rejects_invalid_key_hold_range() {
+        assert!(parse_key_hold("20:20:16").is_err());
+        assert!(parse_key_hold("40:20:16").is_err());
+        assert!(parse_key_hold("20:40").is_err());
+    }
 }

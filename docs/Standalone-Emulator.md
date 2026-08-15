@@ -45,8 +45,6 @@ nicaiemu [OPTIONS] <GAME_PATH>
 | `--volume <VOLUME>` | 0–100 | `100` | Audio volume. |
 | `--headless` | flag | off | Run without opening a window. |
 | `--frames <COUNT>` | integer | `60` | Frames to run in headless mode. |
-| `--repeat-delay <COUNT>` | integer | `10` | Frames a held key waits before auto-repeat starts. |
-| `--repeat-period <COUNT>` | integer | `15` | Frames between auto-repeat pulses once repeating. |
 | `--instruction-limit <COUNT>` | integer | — | Maximum guest instructions per callback. |
 | `-S, --screenshot <PATH>` | path | — | Run headlessly, save a PNG screenshot, and exit. |
 | `--screenshot-frames <COUNT>` | integer | `30` | Frames to run before capture. |
@@ -145,16 +143,12 @@ calls, so the music stays silent without this option. The layer restarts the
 MIDI after each pass and hands audio back to the game as soon as the guest
 issues its own audio call.
 
-## Auto-Repeat
+## Input Timing
 
-Held keys follow a feature-phone auto-repeat pattern: one visible step, a quiet
-delay, then short pulses while the key stays held. `--repeat-delay` controls
-the quiet delay and `--repeat-period` controls the distance between pulses:
-
-```bash
-# Faster walking: shorter delay and tighter pulses
-nicaiemu path/to/game.CBE --repeat-delay 5 --repeat-period 8
-```
+The guest screen scheduler runs every 100ms. A pressed key produces one
+`KeyDown` edge, while `KeyHold` remains active on every guest tick until the
+physical key is released. This preserves continuous movement and walking
+animation without synthesizing host-side repeat pulses.
 
 ## Screenshot Mode
 
@@ -172,11 +166,15 @@ native framebuffer resolution.
 ## Headless Validation Tool
 
 The `cbe_boot` tool runs the same machine core without opening a window. A key
-event uses `FRAME:PHONE_KEY` syntax.
+event uses `FRAME:PHONE_KEY` syntax. A held range uses
+`START_FRAME:END_FRAME:PHONE_KEY`, with the end frame excluded.
 
 ```bash
 cargo run --release -p nicaiemu-tools --bin cbe_boot -- \
   path/to/game.CBE --frames 120 --key-event 1:14 --screenshot frame.png
+
+cargo run --release -p nicaiemu-tools --bin cbe_boot -- \
+  path/to/game.CBE --frames 120 --key-hold 30:60:16 --screenshot held.png
 ```
 
 Set `CBE_TRACE=all` to trace every bridged service, or provide comma-separated
