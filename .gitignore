@@ -30,6 +30,7 @@ out_*/
 *.temp
 
 # Internal project files
+.claude/
 CLAUDE.md
 AGENTS.md
 tmp/
