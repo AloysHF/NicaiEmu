@@ -27,14 +27,14 @@ The binary is produced at `target/release/nicaiemu` (`.exe` on Windows).
 ## Synopsis
 
 ```text
-nicaiemu [OPTIONS] --file <GAME_PATH>
+nicaiemu [OPTIONS] <GAME_PATH>
 ```
 
 ## Options
 
 | Option | Value | Default | Description |
 |---|---|---|---|
-| `-f, --file <FILE>` | path | *required* | Path to the CBE game file. |
+| `<GAME_PATH>` | path | *required* | Path to the CBE game file. |
 | `-l, --list` | flag | off | List packaged resources and exit. |
 | `-w, --width <WIDTH>` | integer | `480` | Initial window width. |
 | `-H, --height <HEIGHT>` | integer | `800` | Initial window height. |
@@ -61,16 +61,16 @@ The standalone emulator accepts `.CBE` files:
 
 ```bash
 # Load a game directly
-nicaiemu --file path/to/game.CBE
+nicaiemu path/to/game.CBE
 
 # Load with custom window size
-nicaiemu --file path/to/game.CBE --width 600 --height 1000
+nicaiemu path/to/game.CBE --width 600 --height 1000
 
 # Run fullscreen with the xbrz pixel-art scaler
-nicaiemu --file path/to/game.CBE --fullscreen --filter xbrz
+nicaiemu path/to/game.CBE --fullscreen --filter xbrz
 
 # List resources in the archive
-nicaiemu --file path/to/game.CBE --list
+nicaiemu path/to/game.CBE --list
 ```
 
 ## Default Key Mappings
@@ -96,10 +96,10 @@ The `--remap` option rebinds a guest key to any host key using
 
 ```bash
 # Confirm with Space instead of Enter/F
-nicaiemu --file path/to/game.CBE --remap enter:space
+nicaiemu path/to/game.CBE --remap enter:space
 
 # Put the dpad on WASD and confirm on Space
-nicaiemu --file path/to/game.CBE --remap up:w --remap down:s --remap left:a --remap right:d --remap enter:space
+nicaiemu path/to/game.CBE --remap up:w --remap down:s --remap left:a --remap right:d --remap enter:space
 ```
 
 ## Headless Mode
@@ -109,10 +109,10 @@ processing:
 
 ```bash
 # Run 120 frames silently and exit
-nicaiemu --file path/to/game.CBE --headless --frames 120
+nicaiemu path/to/game.CBE --headless --frames 120
 
 # Older-style screenshot-only headless run
-nicaiemu --file path/to/game.CBE --screenshot /dev/null --screenshot-frames 120
+nicaiemu path/to/game.CBE --screenshot /dev/null --screenshot-frames 120
 ```
 
 ## Display Scaling
@@ -151,7 +151,7 @@ the quiet delay and `--repeat-period` controls the distance between pulses:
 
 ```bash
 # Faster walking: shorter delay and tighter pulses
-nicaiemu --file path/to/game.CBE --repeat-delay 5 --repeat-period 8
+nicaiemu path/to/game.CBE --repeat-delay 5 --repeat-period 8
 ```
 
 ## Screenshot Mode
@@ -160,7 +160,7 @@ Capture a PNG screenshot after a number of frames, then exit:
 
 ```bash
 # Take a screenshot after 120 frames
-nicaiemu --file path/to/game.CBE --screenshot screenshot.png --screenshot-frames 120
+nicaiemu path/to/game.CBE --screenshot screenshot.png --screenshot-frames 120
 ```
 
 This is used by the batch screenshot script (`scripts/batch-screenshots.ps1`)
@@ -199,29 +199,29 @@ script defaults.
 
 ```bash
 # Basic usage
-nicaiemu --file path/to/game.CBE
+nicaiemu path/to/game.CBE
 
 # Custom window size
-nicaiemu --file path/to/game.CBE --width 600 --height 1000
+nicaiemu path/to/game.CBE --width 600 --height 1000
 
 # Fullscreen with the xbrz filter and gamepad overlay
-nicaiemu --file path/to/game.CBE --fullscreen --filter xbrz --show-gamepad
+nicaiemu path/to/game.CBE --fullscreen --filter xbrz --show-gamepad
 
 # Take a screenshot and exit
-nicaiemu --file path/to/game.CBE --screenshot shot.png --screenshot-frames 120
+nicaiemu path/to/game.CBE --screenshot shot.png --screenshot-frames 120
 
 # Run and write a save state when the window closes
-nicaiemu --file path/to/game.CBE --save-state game.sav
+nicaiemu path/to/game.CBE --save-state game.sav
 
 # Resume from a save state
-nicaiemu --file path/to/game.CBE --load-state game.sav
+nicaiemu path/to/game.CBE --load-state game.sav
 
 # List archive contents
-nicaiemu --file path/to/game.CBE --list
+nicaiemu path/to/game.CBE --list
 
 # Run 120 frames without a window
-nicaiemu --file path/to/game.CBE --headless --frames 120
+nicaiemu path/to/game.CBE --headless --frames 120
 
 # Verbose logging
-nicaiemu --file path/to/game.CBE --verbose
+nicaiemu path/to/game.CBE --verbose
 ```

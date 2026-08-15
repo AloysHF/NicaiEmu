@@ -137,7 +137,7 @@ foreach ($game in $games) {
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $output = & $Binary --file $game.FullName --screenshot $outPath `
+        $output = & $Binary $game.FullName --screenshot $outPath `
             --screenshot-frames $Frames --instruction-limit $InstructionLimit 2>&1
         $exitCode = $LASTEXITCODE
         $diagnostics = $output | Out-String

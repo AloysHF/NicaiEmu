@@ -23,7 +23,7 @@ use standalone::scaler::{DisplayScaler, ScaleFilter};
 #[command(version)]
 struct Cli {
     /// Path to the CBE executable.
-    #[arg(short, long)]
+    #[arg(value_name = "GAME_PATH")]
     file: PathBuf,
 
     /// List packaged resources and exit.
@@ -382,10 +382,17 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
+    fn parses_game_path_as_positional_argument() {
+        let cli = Cli::try_parse_from(["nicaiemu", "game.CBE"]).unwrap();
+
+        assert_eq!(cli.file, PathBuf::from("game.CBE"));
+        assert!(Cli::try_parse_from(["nicaiemu", "--file", "game.CBE"]).is_err());
+    }
+
+    #[test]
     fn parses_screenshot_options() {
         let cli = Cli::try_parse_from([
             "nicaiemu",
-            "--file",
             "game.CBE",
             "--screenshot",
             "frame.png",
@@ -400,7 +407,7 @@ mod tests {
 
     #[test]
     fn screenshot_frames_default_to_thirty() {
-        let cli = Cli::try_parse_from(["nicaiemu", "--file", "game.CBE"]).unwrap();
+        let cli = Cli::try_parse_from(["nicaiemu", "game.CBE"]).unwrap();
 
         assert_eq!(cli.screenshot, None);
         assert_eq!(cli.screenshot_frames, 30);
@@ -410,7 +417,6 @@ mod tests {
     fn parses_save_and_load_state_options() {
         let cli = Cli::try_parse_from([
             "nicaiemu",
-            "--file",
             "game.CBE",
             "--save-state",
             "game.sav",
@@ -431,15 +437,14 @@ mod tests {
             ("bicubic", ScaleFilter::Bicubic),
             ("xbrz", ScaleFilter::Xbrz),
         ] {
-            let cli =
-                Cli::try_parse_from(["nicaiemu", "--file", "game.CBE", "--filter", name]).unwrap();
+            let cli = Cli::try_parse_from(["nicaiemu", "game.CBE", "--filter", name]).unwrap();
             assert_eq!(cli.filter, expected);
         }
     }
 
     #[test]
     fn display_filter_defaults_to_nearest() {
-        let cli = Cli::try_parse_from(["nicaiemu", "--file", "game.CBE"]).unwrap();
+        let cli = Cli::try_parse_from(["nicaiemu", "game.CBE"]).unwrap();
 
         assert_eq!(cli.filter, ScaleFilter::Nearest);
     }
@@ -448,7 +453,6 @@ mod tests {
     fn parses_key_remappings() {
         let cli = Cli::try_parse_from([
             "nicaiemu",
-            "--file",
             "game.CBE",
             "--remap",
             "enter:space",
@@ -463,17 +467,13 @@ mod tests {
 
     #[test]
     fn rejects_invalid_key_remappings() {
-        assert!(Cli::try_parse_from(
-            ["nicaiemu", "--file", "game.CBE", "--remap", "enter:escape",]
-        )
-        .is_err());
+        assert!(Cli::try_parse_from(["nicaiemu", "game.CBE", "--remap", "enter:escape",]).is_err());
     }
 
     #[test]
     fn parses_frontend_experience_options() {
         let cli = Cli::try_parse_from([
             "nicaiemu",
-            "--file",
             "game.CBE",
             "--fullscreen",
             "--volume",
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn frontend_experience_options_have_sensible_defaults() {
-        let cli = Cli::try_parse_from(["nicaiemu", "--file", "game.CBE"]).unwrap();
+        let cli = Cli::try_parse_from(["nicaiemu", "game.CBE"]).unwrap();
 
         assert!(!cli.fullscreen);
         assert_eq!(cli.volume, 100);
@@ -510,13 +510,8 @@ mod tests {
 
     #[test]
     fn rejects_out_of_range_volume_and_repeat_period() {
-        assert!(
-            Cli::try_parse_from(["nicaiemu", "--file", "game.CBE", "--volume", "101",]).is_err()
-        );
-        assert!(
-            Cli::try_parse_from(["nicaiemu", "--file", "game.CBE", "--repeat-period", "0",])
-                .is_err()
-        );
+        assert!(Cli::try_parse_from(["nicaiemu", "game.CBE", "--volume", "101",]).is_err());
+        assert!(Cli::try_parse_from(["nicaiemu", "game.CBE", "--repeat-period", "0",]).is_err());
     }
 
     #[test]

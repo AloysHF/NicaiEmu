@@ -67,7 +67,7 @@ Download the latest binary from the
 [Releases](https://github.com/jiangxincode/NicaiEmu/releases) page and run:
 
 ```bash
-nicaiemu --file path/to/game.CBE
+nicaiemu path/to/game.CBE
 ```
 
 See the [Standalone Emulator](docs/Standalone-Emulator.md) guide for
@@ -89,7 +89,7 @@ Requires [Rust](https://www.rust-lang.org/tools/install) (stable).
 
 ```bash
 cargo build -p nicaiemu --release
-cargo run -p nicaiemu --release -- --file path/to/game.CBE
+cargo run -p nicaiemu --release -- path/to/game.CBE
 ```
 
 ### Libretro Core (for RetroArch)
