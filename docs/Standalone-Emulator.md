@@ -189,11 +189,11 @@ pwsh scripts/batch-screenshots.ps1
 ```
 
 The script builds the standalone `nicaiemu` executable, runs each application
-for 120 frames, and writes PNG captures to `docs/images`. Headless capture keeps
-the last guest-rendered frame if a later callback stops. Blank frames and
-applications that stop before drawing are reported as failures. Use
-`-Frames`, `-Binary`, `-GameDirectory`, or `-OutputDirectory` to override the
-script defaults.
+with default or application-specific capture timing, and writes PNG captures
+to `docs/images`. Headless capture keeps the last guest-rendered frame if a
+later callback stops. Blank frames and applications that stop before drawing
+are reported as failures. Use `-Frames`, `-Binary`, `-GameDirectory`, or
+`-OutputDirectory` to override the script defaults where applicable.
 
 ## Examples
 

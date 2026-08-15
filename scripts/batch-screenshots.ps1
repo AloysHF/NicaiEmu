@@ -8,7 +8,8 @@
     supplied, the latest release binary is built before capture.
 
 .PARAMETER Frames
-    Number of frames to run before capturing. Default: 120.
+    Number of frames to run before capturing. Default: 120. Selected
+    applications use capture-specific frame counts.
 
 .PARAMETER InstructionLimit
     Maximum guest instructions allowed during boot and each frame.
@@ -113,6 +114,14 @@ $usedNames = [System.Collections.Generic.Dictionary[string, int]]::new(
 foreach ($game in $games) {
     $baseName = [System.IO.Path]::GetFileNameWithoutExtension($game.Name)
     $safeName = Get-SafeBaseName $baseName
+    $captureFrames = switch ($baseName) {
+        "动感骰子" { 1; break }
+        "打火机" { 2; break }
+        "愤怒的小鸟" { 1; break }
+        "众神之战" { 400; break }
+        default { $Frames }
+    }
+    $frameLabel = if ($captureFrames -eq 1) { "1 frame" } else { "$captureFrames frames" }
     if ($usedNames.ContainsKey($safeName)) {
         $usedNames[$safeName]++
         $safeName = "$safeName-$($usedNames[$safeName])"
@@ -122,7 +131,7 @@ foreach ($game in $games) {
 
     $imageName = "$safeName.png"
     $outPath = Join-Path $OutputDirectory $imageName
-    Write-Host -NoNewline "  $baseName ... "
+    Write-Host -NoNewline "  $baseName ($frameLabel) ... "
 
     # Prevent a previous capture from being reported as the current result.
     if (Test-Path -LiteralPath $outPath -PathType Leaf) {
@@ -138,7 +147,7 @@ foreach ($game in $games) {
     $ErrorActionPreference = "Continue"
     try {
         $output = & $Binary $game.FullName --screenshot $outPath `
-            --screenshot-frames $Frames --instruction-limit $InstructionLimit 2>&1
+            --screenshot-frames $captureFrames --instruction-limit $InstructionLimit 2>&1
         $exitCode = $LASTEXITCODE
         $diagnostics = $output | Out-String
         $diagnostics = [regex]::Replace(

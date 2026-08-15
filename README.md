@@ -173,11 +173,11 @@ walk smoothly without flooding tile-based games with 30 updates per second.
 ## Game Compatibility
 
 The emulator supports CBE applications for Nicai/MStar phones with 240×400
-display. 75 out of 75 tested games render startup frames successfully.
+display. 74 out of 74 tested games render startup frames successfully.
 
 | Status | Count |
 |--------|-------|
-| ✅ Pass | 75 |
+| ✅ Pass | 74 |
 | ❌ Fail | 0 |
 
 For the full game list with screenshots, see [Game Compatibility](docs/Game-Compatibility.md).
