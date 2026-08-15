@@ -23,10 +23,13 @@ by supported games.
 
 ## Features
 
-- **CBE format support** — section parsing, resource lookup, image decoding
+- **CBE format support** — section parsing, installed-package extraction,
+  resource lookup, image decoding
 - **ARM/Thumb CPU emulation** — little- and big-endian execution, interworking branches
 - **Service bridge** — firmware-style API for memory, resources, display,
   input, text, fixed-point game math, and packed-rectangle collision detection
+- **Guest filesystem** — sandboxed in-memory files used by CBE installers and
+  file-backed resource packages
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
 - **Text rendering** — GBK decoding with embedded Unicode bitmap font
 - **240×400 display** — native WQVGA resolution with resizable desktop window
@@ -124,6 +127,7 @@ crates/
 │       │   ├── mod.rs        # Executable parsing, boot, frame loop, input
 │       │   ├── memory.rs     # Sparse guest memory regions
 │       │   ├── packages.rs   # Guest resource package parsing
+│       │   ├── virtual_fs.rs # Sandboxed guest filesystem
 │       │   ├── cpu_bridge.rs # Execution loop and service dispatch
 │       │   ├── drawing.rs    # Framebuffer drawing, blits, and text
 │       │   └── services/     # Firmware service handlers by manager

@@ -8,7 +8,8 @@ NicaiEmu executes native CBE applications instead of replacing their game logic 
 2. `CbeExecutable` validates the executable header, segment bounds, checksums, and guest byte order.
 3. `NicaiMachine` maps code, initialized data, stack, heap, manager tables, and service trampolines into the guest address space.
 4. The ARM/Thumb interpreter runs the application initializer and entry point, including interworking branches and compiler-generated PC-relative jump tables.
-5. Each 100ms guest tick invokes the active screen's logic and render callbacks.
+5. Applications that contain an installer can extract their named resource packages into the sandboxed guest filesystem before launching the installed entry point.
+6. Each 100ms guest tick invokes the active screen's logic and render callbacks.
 
 ## Guest memory
 
@@ -19,7 +20,8 @@ The machine uses checked sparse regions rather than reserving the entire 32-bit 
 Native applications receive guest-callable tables whose entries lead to emulator trampolines. Implemented service families include:
 
 - heap and memory-block allocation;
-- resource lookup by identifier and name;
+- guest file access and directory queries backed by an in-memory sandbox;
+- resource lookup by identifier and name, including file-backed data packages;
 - byte- and word-length-prefixed stream reads across both DreamFactory manager table layouts;
 - RGB565 screen and image drawing;
 - GBK text measurement and rendering;

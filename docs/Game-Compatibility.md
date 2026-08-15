@@ -4,9 +4,9 @@ CBE applications in the local validation corpus were run by the standalone emula
 
 ## Supported Application Profile
 
-The current core recognizes little- and big-endian ARM/Thumb CBE executables designed for a 240×400 display, including variable segment headers and fixed-address manager-directory variants. It implements the firmware subsets needed for memory blocks, native data packages, image and text drawing, screen changes, file queries, timers, and keypad input.
+The current core recognizes little- and big-endian ARM/Thumb CBE executables designed for a 240×400 display, including variable segment headers and fixed-address manager-directory variants. It implements the firmware subsets needed for memory blocks, native and installed data packages, image and text drawing, screen changes, sandboxed guest files, timers, and keypad input.
 
-Validated behavior includes executable initialization, startup and narrative screens, resource-image decoding, Chinese text and HUD rendering, keypad input, fixed-point trigonometry, packed-rectangle collision detection, and continued frame execution. Headless capture preserves a valid guest-rendered framebuffer if a later callback stops.
+Validated behavior includes executable initialization, startup and narrative screens, archive extraction, file-backed resource-image decoding, Chinese text and HUD rendering, keypad input, fixed-point trigonometry, packed-rectangle collision detection, and continued frame execution. Headless capture preserves a valid guest-rendered framebuffer if a later callback stops.
 
 ## Summary
 

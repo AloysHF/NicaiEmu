@@ -1,17 +1,134 @@
 //! File and stdio services (groups 5 and 6) with C-string helpers.
 
 use armv4t_emu::Memory;
+use encoding_rs::GBK;
 
 use super::super::{variadic_argument_location, NicaiMachine, VariadicArgument};
 
 impl NicaiMachine {
     pub(crate) fn handle_file_service(&mut self, index: u32) {
+        if super::super::service_trace_enabled(5, index) {
+            let path = match index {
+                0 | 2 | 3 | 9..=12 => self.read_file_path(self.register(1)),
+                _ => String::new(),
+            };
+            let extra = match index {
+                0 => self.read_c_string(self.register(2), 16),
+                10 => self.read_file_path(self.register(2)),
+                _ => String::new(),
+            };
+            eprintln!(
+                "file service index={index} r0={:08X} r1={:08X} r2={:08X} path={path:?} extra={extra:?}",
+                self.register(0),
+                self.register(1),
+                self.register(2),
+            );
+        }
         match index {
-            3 | 17 => self.set_result(1),
+            0 => {
+                let path = self.read_file_path(self.register(1));
+                let mode = self.read_c_string(self.register(2), 16);
+                let result = self.virtual_fs.open(&path, &mode, self.register(0));
+                self.set_result(result as u32);
+            }
+            1 => {
+                let result = self.virtual_fs.close(self.register(0));
+                self.set_result(result as u32);
+            }
+            2 => {
+                let path = self.read_file_path(self.register(1));
+                self.set_result(u32::from(self.virtual_fs.file_exists(&path)));
+            }
+            3 => {
+                let path = self.read_file_path(self.register(1));
+                self.set_result(u32::from(self.virtual_fs.directory_exists(&path)));
+            }
+            4 => {
+                let destination = self.register(0);
+                let size = self.register(1) as usize;
+                let handle = self.register(2);
+                let result = if size > 16 * 1024 * 1024 {
+                    None
+                } else {
+                    self.virtual_fs.read(handle, size)
+                };
+                if let Some(data) = result {
+                    self.memory.write_bytes(destination, &data);
+                    self.set_result(data.len() as u32);
+                } else {
+                    self.set_result(u32::MAX);
+                }
+            }
+            5 => {
+                let source = self.register(0);
+                let size = self.register(1) as usize;
+                let handle = self.register(2);
+                if size > 16 * 1024 * 1024 {
+                    self.set_result(u32::MAX);
+                } else {
+                    let data: Vec<u8> = (0..size)
+                        .map(|offset| self.memory.r8(source + offset as u32))
+                        .collect();
+                    let result = self.virtual_fs.write(handle, &data);
+                    self.set_result(result.map_or(u32::MAX, |written| written as u32));
+                }
+            }
+            6 => {
+                let result = self.virtual_fs.seek(
+                    self.register(0),
+                    self.register(1) as i32,
+                    self.register(2),
+                );
+                self.set_result(result.map_or(u32::MAX, |position| position as u32));
+            }
+            7 => {
+                let result = self.virtual_fs.tell(self.register(0));
+                self.set_result(result.map_or(u32::MAX, |position| position as u32));
+            }
+            8 => {
+                let result = self.virtual_fs.size(self.register(0));
+                self.set_result(result.map_or(u32::MAX, |size| size as u32));
+            }
+            9 => {
+                let path = self.read_file_path(self.register(1));
+                let removed = self.virtual_fs.remove_file(&path);
+                self.set_result(u32::from(removed));
+            }
+            10 => {
+                let old_path = self.read_file_path(self.register(1));
+                let new_path = self.read_file_path(self.register(2));
+                let renamed = self.virtual_fs.rename(&old_path, &new_path);
+                self.set_result(u32::from(renamed));
+            }
+            11 => {
+                let path = self.read_file_path(self.register(1));
+                let result = self.virtual_fs.create_directory(&path);
+                self.set_result(if result { 0 } else { u32::MAX });
+            }
+            12 => self.set_result(0),
             13 | 14 => self.set_result(u32::MAX),
             16 => self.set_result(64 * 1024 * 1024),
+            17 => self.set_result(1),
             _ => self.set_result(0),
         }
+    }
+
+    fn read_file_path(&mut self, address: u32) -> String {
+        if address == 0 {
+            return String::new();
+        }
+        if self.memory.r8(address + 1) != 0 {
+            return self.read_gbk_string(address, 512);
+        }
+        let mut units = Vec::new();
+        for offset in 0..256u32 {
+            let unit = self.memory.r16(address + offset * 2);
+            if unit == 0 {
+                break;
+            }
+            units.push(unit);
+        }
+        String::from_utf16_lossy(&units)
     }
 
     pub(crate) fn handle_stdio_service(&mut self, index: u32) {
@@ -222,6 +339,12 @@ impl NicaiMachine {
 
     pub(crate) fn read_c_string(&mut self, address: u32, limit: u32) -> String {
         String::from_utf8_lossy(&self.read_c_bytes(address, limit)).into_owned()
+    }
+
+    pub(crate) fn read_gbk_string(&mut self, address: u32, limit: u32) -> String {
+        GBK.decode(&self.read_c_bytes(address, limit))
+            .0
+            .into_owned()
     }
 
     pub(crate) fn read_c_bytes(&mut self, address: u32, limit: u32) -> Vec<u8> {
