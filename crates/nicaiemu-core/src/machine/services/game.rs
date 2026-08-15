@@ -115,7 +115,7 @@ impl NicaiMachine {
                 self.set_result(SCREEN_IS_IN_QUIT);
             }
             61 => {
-                self.resource_load_screen = self.pending_screen;
+                self.resource_load_screen = 0;
                 self.resource_load_pending = true;
                 self.set_result(0);
             }
