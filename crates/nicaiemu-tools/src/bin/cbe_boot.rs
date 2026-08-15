@@ -2,13 +2,13 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use nicaiemu_core::{CbeArchive, NicaiMachine};
+use nicaiemu_core::{CbeArchive, NicaiMachine, DEFAULT_INSTRUCTION_LIMIT};
 
 #[derive(Parser)]
 #[command(about = "Run a CBE executable through the headless ARM core")]
 struct Cli {
     file: PathBuf,
-    #[arg(long, default_value_t = 5_000_000)]
+    #[arg(long, default_value_t = DEFAULT_INSTRUCTION_LIMIT)]
     instruction_limit: u64,
     #[arg(long, default_value_t = 0)]
     frames: u32,
@@ -179,5 +179,12 @@ mod tests {
         assert!(parse_key_hold("20:20:16").is_err());
         assert!(parse_key_hold("40:20:16").is_err());
         assert!(parse_key_hold("20:40").is_err());
+    }
+
+    #[test]
+    fn uses_shared_default_instruction_limit() {
+        let cli = Cli::try_parse_from(["cbe_boot", "game.CBE"]).unwrap();
+
+        assert_eq!(cli.instruction_limit, DEFAULT_INSTRUCTION_LIMIT);
     }
 }

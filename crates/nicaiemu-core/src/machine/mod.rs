@@ -796,6 +796,9 @@ impl NicaiMachine {
         self.cpu.reg_set(Mode::User, reg::PC, code_address);
         self.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
         self.run_until_return(instruction_limit)?;
+        if self.state == MachineState::Halted {
+            return Ok(());
+        }
         if self.uses_native_dispatch_abi() {
             if self.native_app_parser == 0 {
                 self.state = MachineState::Faulted;
@@ -803,7 +806,13 @@ impl NicaiMachine {
             }
             self.app_main = self.native_app_parser;
             self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit)?;
+            if self.state == MachineState::Halted {
+                return Ok(());
+            }
             self.invoke_callback(self.native_app_init, 0, 0, 0, instruction_limit)?;
+            if self.state == MachineState::Halted {
+                return Ok(());
+            }
             self.state = MachineState::Ready;
             return Ok(());
         }
@@ -824,6 +833,9 @@ impl NicaiMachine {
         }
         self.cpu.reg_set(Mode::User, reg::CPSR, cpsr);
         self.run_until_return(instruction_limit)?;
+        if self.state == MachineState::Halted {
+            return Ok(());
+        }
         self.state = MachineState::Ready;
         Ok(())
     }
@@ -911,12 +923,25 @@ impl NicaiMachine {
 
     /// Execute one screen update and render pass.
     pub fn run_frame(&mut self, instruction_limit: u64) -> Result<()> {
+        if self.state == MachineState::Halted {
+            self.key_down = 0;
+            self.pointer.end_frame();
+            return Ok(());
+        }
         if self.state != MachineState::Ready {
             bail!("CBE machine is not ready");
         }
         self.maybe_run_auto_bgm();
         self.frame_count = self.frame_count.wrapping_add(1);
+        let had_screen_before_timers =
+            self.active_screen != 0 || self.pending_screen != 0 || !self.screen_stack.is_empty();
         self.dispatch_timers(instruction_limit)?;
+        if self.finish_halted_frame() {
+            return Ok(());
+        }
+        if had_screen_before_timers && self.finish_screen_callback_frame() {
+            return Ok(());
+        }
         if self.uses_native_dispatch_abi() {
             self.key_down = 0;
             if let Some(event) = self.pending_key_events.pop_front() {
@@ -936,6 +961,11 @@ impl NicaiMachine {
             self.screen_initialized = false;
         }
         if self.active_screen == 0 {
+            if self.timers.iter().any(|timer| timer.active) {
+                self.key_down = 0;
+                self.pointer.end_frame();
+                return Ok(());
+            }
             bail!("CBE application has no active screen");
         }
 
@@ -955,6 +985,9 @@ impl NicaiMachine {
         if !self.screen_initialized {
             let init = self.memory.r32(screen);
             self.invoke_callback(init, screen_this, 0, 0, instruction_limit)?;
+            if self.finish_screen_callback_frame() {
+                return Ok(());
+            }
             self.screen_initialized = true;
         }
         if self.resource_load_pending
@@ -964,6 +997,9 @@ impl NicaiMachine {
             self.resource_load_screen = 0;
             let load_resource = self.memory.r32(screen + 24);
             self.invoke_callback(load_resource, screen_this, 0, 0, instruction_limit)?;
+            if self.finish_screen_callback_frame() {
+                return Ok(());
+            }
         }
         if self.pending_screen != 0 && self.pending_screen != screen {
             self.key_down = 0;
@@ -992,6 +1028,9 @@ impl NicaiMachine {
                 KEY_EVENT_ARG,
                 instruction_limit,
             )?;
+            if self.finish_screen_callback_frame() {
+                return Ok(());
+            }
             self.key_down = 0;
             if self.pending_screen != 0 && self.pending_screen != screen {
                 self.pointer.end_frame();
@@ -999,16 +1038,42 @@ impl NicaiMachine {
             }
         }
         self.invoke_callback(logic, screen_this, 6, 0, instruction_limit)?;
+        if self.finish_screen_callback_frame() {
+            return Ok(());
+        }
         if self.pending_screen == 0 || self.pending_screen == screen {
             let render = self.memory.r32(screen + 12);
             if render == 0 {
                 bail!("CBE screen at 0x{screen:08X} has no render callback");
             }
             self.invoke_callback(render, screen_this, 0, 0, instruction_limit)?;
+            if self.finish_screen_callback_frame() {
+                return Ok(());
+            }
         }
         self.key_down = 0;
         self.pointer.end_frame();
         Ok(())
+    }
+
+    fn finish_halted_frame(&mut self) -> bool {
+        if self.state != MachineState::Halted {
+            return false;
+        }
+        self.key_down = 0;
+        self.pointer.end_frame();
+        true
+    }
+
+    fn finish_screen_callback_frame(&mut self) -> bool {
+        if self.state != MachineState::Halted
+            && self.active_screen == 0
+            && self.pending_screen == 0
+            && self.screen_stack.is_empty()
+        {
+            self.state = MachineState::Halted;
+        }
+        self.finish_halted_frame()
     }
 
     fn screen_call_parameter(&self, screen: u32) -> u32 {
@@ -1358,6 +1423,130 @@ mod tests {
         assert!(
             machine.service_calls().get(&(6, 3)).copied().unwrap_or(0) > 0,
             "game never used the timer service"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_loads_resources_after_legacy_screen_transition() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        for game in ["暴力摩托.CBE", "恶魔城.CBE", "雷霆战机.CBE"] {
+            let game_path = std::path::PathBuf::from(&game_dir).join(game);
+            assert!(game_path.is_file(), "missing {}", game_path.display());
+
+            let archive = CbeArchive::load(&game_path).unwrap();
+            let mut machine = NicaiMachine::new(&archive).unwrap();
+            machine.boot(5_000_000).unwrap();
+            for _ in 0..2 {
+                machine.run_frame(5_000_000).unwrap();
+            }
+
+            assert_eq!(machine.state(), MachineState::Ready, "{game} faulted");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_completes_high_cost_idle_frames_with_default_budget() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        for (game, frames) in [
+            ("疯狂捕鸟.CBE", 1),
+            ("疯狂企鹅大冒险.CBE", 28),
+            ("僵尸先生.CBE", 1),
+        ] {
+            let game_path = std::path::PathBuf::from(&game_dir).join(game);
+            assert!(game_path.is_file(), "missing {}", game_path.display());
+
+            let archive = CbeArchive::load(&game_path).unwrap();
+            let mut machine = NicaiMachine::new(&archive).unwrap();
+            machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            for _ in 0..frames {
+                machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            }
+
+            assert_eq!(machine.state(), MachineState::Ready, "{game} faulted");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_waits_for_timer_driven_first_screen() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("魔鬼理发师.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for _ in 0..8 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert_ne!(machine.active_screen(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_fixed_address_game_populates_standard_runtime_services() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("武林外传(新品).CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        let system_info = machine
+            .memory
+            .r32(machine.executable.data_address() + 0x1724);
+        assert_eq!(
+            machine.memory.r32(system_info + 0x220),
+            SERVICE_BASE + TABLE_STRIDE * 6 + 5 * 4
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_terminal_loop_halts_without_frame_errors() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("武林外传(新品).CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for _ in 0..400 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Halted);
+        assert!(
+            machine.service_calls().get(&(6, 5)).copied().unwrap_or(0) > 0,
+            "game never called the random-number service"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_removing_last_screen_halts_without_frame_errors() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("在线书城.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for _ in 0..400 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Halted);
+        assert!(
+            machine.service_calls().get(&(14, 6)).copied().unwrap_or(0) > 0,
+            "game never removed its final screen"
         );
     }
 

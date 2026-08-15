@@ -27,3 +27,6 @@ pub use save_state::{decode_machine, encode_machine, SERIALIZED_SIZE};
 
 /// Guest screen scheduler frequency used by the original runtime.
 pub const GUEST_FRAME_RATE: u32 = 10;
+
+/// Default instruction budget for each guest callback.
+pub const DEFAULT_INSTRUCTION_LIMIT: u64 = 20_000_000;

@@ -31,6 +31,15 @@ impl NicaiMachine {
             if pc & !1 == EXIT_ADDRESS {
                 return Ok(());
             }
+            let terminal_self_branch = if self.cpu.thumb_mode() {
+                self.memory.r16(pc) == 0xe7fe
+            } else {
+                self.memory.r32(pc) == 0xeaff_fffe
+            };
+            if terminal_self_branch {
+                self.state = super::MachineState::Halted;
+                return Ok(());
+            }
             if (SERVICE_BASE..SERVICE_BASE + SERVICE_SIZE).contains(&pc) {
                 self.handle_service(pc)?;
             } else if self.cpu.thumb_mode() && self.memory.r16(pc) == 0xdfab {
