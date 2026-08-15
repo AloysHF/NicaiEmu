@@ -118,6 +118,7 @@ foreach ($game in $games) {
         "动感骰子" { 1; break }
         "打火机" { 2; break }
         "愤怒的小鸟" { 1; break }
+        "僵尸先生" { 400; break }
         "众神之战" { 400; break }
         default { $Frames }
     }
