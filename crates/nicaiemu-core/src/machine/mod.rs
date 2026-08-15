@@ -936,6 +936,11 @@ impl NicaiMachine {
             self.screen_initialized = false;
         }
         if self.active_screen == 0 {
+            if self.timers.iter().any(|timer| timer.active) {
+                self.key_down = 0;
+                self.pointer.end_frame();
+                return Ok(());
+            }
             bail!("CBE application has no active screen");
         }
 
@@ -1401,6 +1406,24 @@ mod tests {
 
             assert_eq!(machine.state(), MachineState::Ready, "{game} faulted");
         }
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_waits_for_timer_driven_first_screen() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("魔鬼理发师.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for _ in 0..8 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert_ne!(machine.active_screen(), 0);
     }
 
     #[test]
