@@ -56,6 +56,7 @@ const DREAM_FACTORY_PACKAGE_SLOT: u32 = MANAGER_BASE + 0x7ff0;
 const DREAM_FACTORY_MEMORY_BLOCK_SLOT: u32 = MANAGER_BASE + 0x7ff4;
 const DREAM_FACTORY_FORMAT_BUFFER: u32 = MANAGER_BASE + 0x7f80;
 const DREAM_FACTORY_FORMAT_BUFFER_SIZE: usize = 64;
+const KEY_EVENT_ARG: u32 = MANAGER_BASE + 0x7fdc;
 const DATA_PACKAGE_SIZE: u32 = 108;
 const SCREEN_IMAGE_STRUCT: u32 = MEMORY_BLOCK_PTR + 0x408;
 const SCREEN_IMAGE: u32 = SCREEN_IMAGE_STRUCT + 24;
@@ -425,16 +426,33 @@ fn service_trace_enabled(group: u32, index: u32) -> bool {
     value.split(',').any(|filter| filter.trim() == service)
 }
 
-fn default_key_repeat_delay() -> u32 {
-    10
+fn update_key_bits(key_down: &mut u32, key_held: &mut u32, key: u8, pressed: bool) {
+    if key >= 31 {
+        return;
+    }
+    let mask = 1u32 << key;
+    if pressed {
+        if *key_held & mask == 0 {
+            *key_down |= mask;
+        }
+        *key_held |= mask;
+    } else {
+        *key_held &= !mask;
+    }
 }
 
-fn default_key_repeat_on() -> u32 {
-    1
-}
-
-fn default_key_repeat_off() -> u32 {
-    14
+fn update_physical_key_bits(key_held: &mut u32, key: u8, pressed: bool) -> bool {
+    if key >= 31 {
+        return false;
+    }
+    let mask = 1u32 << key;
+    let was_pressed = *key_held & mask != 0;
+    if pressed {
+        *key_held |= mask;
+    } else {
+        *key_held &= !mask;
+    }
+    was_pressed != pressed
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -465,6 +483,12 @@ struct GuestTimer {
     callback: u32,
     context: u32,
     remaining_frames: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KeyEvent {
+    key: u8,
+    pressed: bool,
 }
 
 impl PointerState {
@@ -533,15 +557,11 @@ pub struct NicaiMachine {
     key_down: u32,
     key_held: u32,
     key_held_physical: u32,
-    key_press_frame: [u32; 31],
-    key_frame_counter: u32,
-    // Frontend configuration; deliberately excluded from save states.
-    #[serde(skip, default = "default_key_repeat_delay")]
-    key_repeat_delay: u32,
-    #[serde(skip, default = "default_key_repeat_on")]
-    key_repeat_on: u32,
-    #[serde(skip, default = "default_key_repeat_off")]
-    key_repeat_off: u32,
+    // Retained to preserve the version-1 save-state field layout.
+    _legacy_key_press_frame: [u32; 31],
+    _legacy_key_frame_counter: u32,
+    #[serde(skip, default)]
+    pending_key_events: VecDeque<KeyEvent>,
     // Auto-BGM compatibility layer: plays the first packaged MIDI when the
     // guest never touches the audio manager. Deliberately excluded from save
     // states; frontends re-apply it after load/reset.
@@ -637,11 +657,9 @@ impl NicaiMachine {
             key_down: 0,
             key_held: 0,
             key_held_physical: 0,
-            key_press_frame: [u32::MAX; 31],
-            key_frame_counter: 0,
-            key_repeat_delay: Self::KEY_REPEAT_DELAY,
-            key_repeat_on: Self::KEY_REPEAT_ON_FRAMES,
-            key_repeat_off: Self::KEY_REPEAT_OFF_FRAMES,
+            _legacy_key_press_frame: [u32::MAX; 31],
+            _legacy_key_frame_counter: 0,
+            pending_key_events: VecDeque::new(),
             auto_bgm: false,
             auto_bgm_data: None,
             auto_bgm_gave_way: false,
@@ -815,15 +833,9 @@ impl NicaiMachine {
     /// Frontends use this for reset so a game restarts from a clean runtime
     /// state without reloading the file from disk.
     pub fn reset(&mut self, archive: &CbeArchive, instruction_limit: u64) -> Result<()> {
-        let key_repeat_delay = self.key_repeat_delay;
-        let key_repeat_on = self.key_repeat_on;
-        let key_repeat_off = self.key_repeat_off;
         let volume = self.audio.volume();
         let auto_bgm = self.auto_bgm;
         let mut rebuilt = NicaiMachine::new(archive)?;
-        rebuilt.key_repeat_delay = key_repeat_delay;
-        rebuilt.key_repeat_on = key_repeat_on;
-        rebuilt.key_repeat_off = key_repeat_off;
         rebuilt.audio.set_volume(volume);
         rebuilt.auto_bgm = auto_bgm;
         rebuilt.boot(instruction_limit)?;
@@ -902,12 +914,22 @@ impl NicaiMachine {
         if self.state != MachineState::Ready {
             bail!("CBE machine is not ready");
         }
-        self.update_key_state();
         self.maybe_run_auto_bgm();
         self.frame_count = self.frame_count.wrapping_add(1);
         self.dispatch_timers(instruction_limit)?;
         if self.uses_native_dispatch_abi() {
-            return self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit);
+            self.key_down = 0;
+            if let Some(event) = self.pending_key_events.pop_front() {
+                update_key_bits(
+                    &mut self.key_down,
+                    &mut self.key_held,
+                    event.key,
+                    event.pressed,
+                );
+            }
+            let result = self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit);
+            self.key_down = 0;
+            return result;
         }
         if self.pending_screen != 0 && self.pending_screen != self.active_screen {
             self.active_screen = self.pending_screen;
@@ -949,7 +971,33 @@ impl NicaiMachine {
             return Ok(());
         }
 
+        self.key_down = 0;
+        let key_event = self.pending_key_events.pop_front();
+        if let Some(event) = key_event {
+            update_key_bits(
+                &mut self.key_down,
+                &mut self.key_held,
+                event.key,
+                event.pressed,
+            );
+        }
+
         let logic = self.memory.r32(screen + 8);
+        if let Some(event) = key_event {
+            self.memory.w32(KEY_EVENT_ARG, 1u32 << event.key);
+            self.invoke_callback(
+                logic,
+                screen_this,
+                u32::from(!event.pressed),
+                KEY_EVENT_ARG,
+                instruction_limit,
+            )?;
+            self.key_down = 0;
+            if self.pending_screen != 0 && self.pending_screen != screen {
+                self.pointer.end_frame();
+                return Ok(());
+            }
+        }
         self.invoke_callback(logic, screen_this, 6, 0, instruction_limit)?;
         if self.pending_screen == 0 || self.pending_screen == screen {
             let render = self.memory.r32(screen + 12);
@@ -1028,109 +1076,22 @@ impl NicaiMachine {
         self.auto_bgm
     }
 
-    /// Frames a held key stays visible for one walk step or repeat pulse.
-    const KEY_STEP_FRAMES: u32 = 5;
-    /// Default frames a held key is hidden after the initial step before auto-repeat.
-    const KEY_REPEAT_DELAY: u32 = 10;
-    /// Default frames an auto-repeat step stays visible while a key stays held.
-    const KEY_REPEAT_ON_FRAMES: u32 = 1;
-    /// Default frames between auto-repeat steps while a key stays held.
-    const KEY_REPEAT_OFF_FRAMES: u32 = 14;
-
-    /// Whether a key held for `elapsed` frames is visible to `GAME_isKeyHold`.
-    ///
-    /// The key is visible once at the end of the initial step window (the frame
-    /// where tile-based games complete the first walk step), hidden during the
-    /// repeat delay, then visible again in short auto-repeat pulses so holding
-    /// the key keeps producing discrete walk steps.
-    fn key_visible_in_frame(
-        elapsed: u32,
-        step: u32,
-        delay: u32,
-        repeat_on: u32,
-        repeat_off: u32,
-    ) -> bool {
-        if elapsed == step.saturating_sub(1) {
-            return true;
-        }
-        elapsed
-            .checked_sub(step + delay)
-            .is_some_and(|frames| frames % (repeat_on + repeat_off) < repeat_on)
-    }
-
-    /// Refresh the game-visible held state using feature-phone auto-repeat.
-    ///
-    /// A fresh press exposes the key to `GAME_isKeyHold` for a short step
-    /// window so each press advances exactly one tile.  While the physical key
-    /// stays held, further step windows fire after a delay so holding keeps
-    /// walking instead of flooding the game with one move per frame.
-    fn update_key_state(&mut self) {
-        self.key_frame_counter = self.key_frame_counter.wrapping_add(1);
-        let counter = self.key_frame_counter;
-        let mut visible = 0u32;
-        for (key, press_frame) in self.key_press_frame.iter().enumerate() {
-            if *press_frame == u32::MAX {
-                continue;
-            }
-            let mask = 1u32 << key;
-            let elapsed = counter.wrapping_sub(*press_frame);
-            let physically_held = self.key_held_physical & mask != 0;
-            // A released key stays visible only while its initial step window
-            // is still open, so a very quick tap still completes one step.
-            let within_step_grace = physically_held || elapsed < Self::KEY_STEP_FRAMES;
-            if within_step_grace
-                && Self::key_visible_in_frame(
-                    elapsed,
-                    Self::KEY_STEP_FRAMES,
-                    self.key_repeat_delay,
-                    self.key_repeat_on,
-                    self.key_repeat_off,
-                )
-            {
-                visible |= mask;
-            }
-        }
-        self.key_held = visible;
-    }
-
-    /// Configure held-key auto-repeat (delay before repeating, repeat period).
-    pub fn set_key_auto_repeat(&mut self, delay: u32, period: u32) {
-        self.key_repeat_delay = delay;
-        self.key_repeat_on = 1;
-        self.key_repeat_off = period.saturating_sub(1).max(1);
-    }
-
     /// Set a guest key state. Key codes use the platform ABI values (0-20).
     pub fn set_key(&mut self, key: u8, pressed: bool) {
-        if key >= 31 {
-            return;
-        }
-        let mask = 1u32 << key;
-        if pressed {
-            if self.key_held_physical & mask == 0 {
-                self.key_down |= mask;
-                // Frontends that re-report a held key every frame must not
-                // restart the step window, or the guest never observes the
-                // completed step.  Only a press after the previous step window
-                // started a fresh press.
-                let fresh_press = self.key_press_frame[key as usize] == u32::MAX
-                    || self
-                        .key_frame_counter
-                        .wrapping_sub(self.key_press_frame[key as usize])
-                        >= Self::KEY_STEP_FRAMES;
-                if fresh_press {
-                    self.key_press_frame[key as usize] = self.key_frame_counter;
-                }
-            }
-            self.key_held_physical |= mask;
-        } else {
-            self.key_held_physical &= !mask;
+        if update_physical_key_bits(&mut self.key_held_physical, key, pressed) {
+            self.pending_key_events.push_back(KeyEvent { key, pressed });
         }
     }
 
     /// Bitmask of guest keys physically held down (key code as bit index).
     pub fn held_keys(&self) -> u32 {
         self.key_held_physical
+    }
+
+    pub(crate) fn normalize_input_after_load(&mut self) {
+        self.key_down = 0;
+        self.key_held = self.key_held_physical;
+        self.pending_key_events.clear();
     }
 
     /// Set the playback volume, clamped to 0-100.
@@ -1237,24 +1198,25 @@ mod tests {
     }
 
     #[test]
-    fn key_hold_auto_repeat_produces_bounded_steps() {
-        let (step, delay, on, off) = (5u32, 10u32, 1u32, 14u32);
-        let visible: Vec<u32> = (0..45)
-            .filter(|elapsed| NicaiMachine::key_visible_in_frame(*elapsed, step, delay, on, off))
-            .collect();
-        // One visible frame for the initial step, then a quiet delay, then
-        // single-frame auto-repeat steps while the key stays held.
-        assert_eq!(visible, [4, 15, 30]);
-    }
+    fn held_keys_remain_visible_without_repeating_down_edges() {
+        let mut down = 0;
+        let mut held = 0;
+        let mut physical = 0;
 
-    #[test]
-    fn key_hold_auto_repeat_hides_between_steps() {
-        let (step, delay, on, off) = (5u32, 10u32, 1u32, 14u32);
-        assert!(!NicaiMachine::key_visible_in_frame(3, step, delay, on, off));
-        assert!(NicaiMachine::key_visible_in_frame(4, step, delay, on, off));
-        assert!(!NicaiMachine::key_visible_in_frame(
-            24, step, delay, on, off
-        ));
+        assert!(update_physical_key_bits(&mut physical, 16, true));
+        update_key_bits(&mut down, &mut held, 16, true);
+        assert_eq!(down, 1 << 16);
+        assert_eq!(held, 1 << 16);
+
+        down = 0;
+        assert!(!update_physical_key_bits(&mut physical, 16, true));
+        assert_eq!(down, 0);
+        assert_eq!(held, 1 << 16);
+
+        assert!(update_physical_key_bits(&mut physical, 16, false));
+        update_key_bits(&mut down, &mut held, 16, false);
+        assert_eq!(physical, 0);
+        assert_eq!(held, 0);
     }
 
     #[test]

@@ -11,7 +11,8 @@ use clap::Parser;
 use log::{info, warn};
 use minifb::{Key, Window, WindowOptions};
 use nicaiemu_core::{
-    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, SERIALIZED_SIZE,
+    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE, GUEST_FRAME_RATE,
+    SERIALIZED_SIZE,
 };
 use standalone::gamepad_overlay::GamepadOverlay;
 use standalone::input::{KeyboardMapper, RemapSpec};
@@ -70,14 +71,6 @@ struct Cli {
     /// Number of frames to run in headless mode.
     #[arg(long, default_value_t = 60)]
     frames: u32,
-
-    /// Frames a held key waits before auto-repeat starts (at 30fps).
-    #[arg(long, default_value_t = 10)]
-    repeat_delay: u32,
-
-    /// Frames between auto-repeat pulses once a held key is repeating (at 30fps).
-    #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u32).range(1..))]
-    repeat_period: u32,
 
     /// Maximum guest instructions per callback.
     #[arg(long, default_value_t = 5_000_000)]
@@ -138,7 +131,6 @@ fn main() -> Result<()> {
         boot_result = machine.boot(cli.instruction_limit);
     }
     machine.set_volume(cli.volume);
-    machine.set_key_auto_repeat(cli.repeat_delay, cli.repeat_period);
     machine.set_auto_bgm(cli.auto_bgm);
 
     if let Some(path) = &cli.screenshot {
@@ -189,7 +181,7 @@ fn main() -> Result<()> {
         window.topmost(true);
         window.set_position(0, 0);
     }
-    window.set_target_fps(30);
+    window.set_target_fps(GUEST_FRAME_RATE as usize);
     let audio_output = StandaloneAudio::try_new();
     if audio_output.is_none() {
         warn!("Audio output unavailable; running without sound");
@@ -219,7 +211,7 @@ fn main() -> Result<()> {
             .run_frame(cli.instruction_limit)
             .context("guest screen callback failed")?;
         if let Some(audio) = &audio_output {
-            audio.push(machine.take_audio_samples(2048));
+            audio.push(machine.take_audio_samples((AUDIO_SAMPLE_RATE / GUEST_FRAME_RATE) as usize));
         }
         let mut pixels = machine.frame_pixels();
         if cli.show_gamepad {
@@ -481,10 +473,6 @@ mod tests {
             "--headless",
             "--frames",
             "120",
-            "--repeat-delay",
-            "20",
-            "--repeat-period",
-            "6",
         ])
         .unwrap();
 
@@ -492,8 +480,6 @@ mod tests {
         assert_eq!(cli.volume, 35);
         assert!(cli.headless);
         assert_eq!(cli.frames, 120);
-        assert_eq!(cli.repeat_delay, 20);
-        assert_eq!(cli.repeat_period, 6);
     }
 
     #[test]
@@ -504,14 +490,11 @@ mod tests {
         assert_eq!(cli.volume, 100);
         assert!(!cli.headless);
         assert_eq!(cli.frames, 60);
-        assert_eq!(cli.repeat_delay, 10);
-        assert_eq!(cli.repeat_period, 15);
     }
 
     #[test]
-    fn rejects_out_of_range_volume_and_repeat_period() {
+    fn rejects_out_of_range_volume() {
         assert!(Cli::try_parse_from(["nicaiemu", "game.CBE", "--volume", "101",]).is_err());
-        assert!(Cli::try_parse_from(["nicaiemu", "game.CBE", "--repeat-period", "0",]).is_err());
     }
 
     #[test]

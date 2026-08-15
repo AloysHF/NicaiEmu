@@ -8,8 +8,6 @@ use std::ptr;
 
 /// Option keys exposed to the frontend.
 pub const OPTION_VOLUME: &CStr = c"nicaiemu_volume";
-pub const OPTION_REPEAT_DELAY: &CStr = c"nicaiemu_repeat_delay";
-pub const OPTION_REPEAT_PERIOD: &CStr = c"nicaiemu_repeat_period";
 pub const OPTION_TOUCH_INPUT: &CStr = c"nicaiemu_touch_input";
 pub const OPTION_DEBUG_LOGGING: &CStr = c"nicaiemu_debug_logging";
 pub const OPTION_AUTO_BGM: &CStr = c"nicaiemu_auto_bgm";
@@ -18,8 +16,6 @@ pub const OPTION_AUTO_BGM: &CStr = c"nicaiemu_auto_bgm";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoreOptions {
     pub volume: u32,
-    pub repeat_delay: u32,
-    pub repeat_period: u32,
     pub touch_input: bool,
     pub debug_logging: bool,
     pub auto_bgm: bool,
@@ -29,8 +25,6 @@ impl Default for CoreOptions {
     fn default() -> Self {
         Self {
             volume: 100,
-            repeat_delay: 10,
-            repeat_period: 15,
             touch_input: true,
             debug_logging: false,
             auto_bgm: false,
@@ -54,19 +48,11 @@ pub fn set_core_options() {
 }
 
 /// The option list advertised to the frontend, terminated by a null entry.
-fn core_option_variables() -> [retro_variable; 7] {
+fn core_option_variables() -> [retro_variable; 5] {
     [
         retro_variable {
             key: OPTION_VOLUME.as_ptr(),
             value: c"Audio Volume (%); 100|90|80|70|60|50|40|30|20|10|0".as_ptr(),
-        },
-        retro_variable {
-            key: OPTION_REPEAT_DELAY.as_ptr(),
-            value: c"Key Auto-Repeat Delay (frames); 10|0|2|4|6|8|12|16|20|24|30|45|60".as_ptr(),
-        },
-        retro_variable {
-            key: OPTION_REPEAT_PERIOD.as_ptr(),
-            value: c"Key Auto-Repeat Period (frames); 15|1|2|3|4|5|6|8|10|12|20|30".as_ptr(),
         },
         retro_variable {
             key: OPTION_TOUCH_INPUT.as_ptr(),
@@ -129,12 +115,6 @@ pub fn read_core_options(mut get: impl FnMut(&CStr) -> Option<String>) -> CoreOp
     let mut options = CoreOptions::default();
     if let Some(volume) = get(OPTION_VOLUME).and_then(|value| value.parse::<u32>().ok()) {
         options.volume = volume.min(100);
-    }
-    if let Some(delay) = get(OPTION_REPEAT_DELAY).and_then(|value| value.parse::<u32>().ok()) {
-        options.repeat_delay = delay;
-    }
-    if let Some(period) = get(OPTION_REPEAT_PERIOD).and_then(|value| value.parse::<u32>().ok()) {
-        options.repeat_period = period.max(1);
     }
     if let Some(touch) = get(OPTION_TOUCH_INPUT) {
         if touch == "enabled" {
@@ -199,8 +179,6 @@ mod tests {
     fn frontend_values_override_defaults() {
         let options = read_core_options(fake_get(&[
             (OPTION_VOLUME, "70"),
-            (OPTION_REPEAT_DELAY, "20"),
-            (OPTION_REPEAT_PERIOD, "6"),
             (OPTION_TOUCH_INPUT, "disabled"),
             (OPTION_DEBUG_LOGGING, "enabled"),
             (OPTION_AUTO_BGM, "enabled"),
@@ -209,8 +187,6 @@ mod tests {
             options,
             CoreOptions {
                 volume: 70,
-                repeat_delay: 20,
-                repeat_period: 6,
                 touch_input: false,
                 debug_logging: true,
                 auto_bgm: true,
@@ -220,20 +196,14 @@ mod tests {
 
     #[test]
     fn out_of_range_values_are_clamped() {
-        let options = read_core_options(fake_get(&[
-            (OPTION_VOLUME, "150"),
-            (OPTION_REPEAT_PERIOD, "0"),
-        ]));
+        let options = read_core_options(fake_get(&[(OPTION_VOLUME, "150")]));
         assert_eq!(options.volume, 100);
-        assert_eq!(options.repeat_period, 1);
     }
 
     #[test]
     fn invalid_values_fall_back_to_defaults() {
         let options = read_core_options(fake_get(&[
             (OPTION_VOLUME, "loud"),
-            (OPTION_REPEAT_DELAY, "-3"),
-            (OPTION_REPEAT_PERIOD, "soon"),
             (OPTION_TOUCH_INPUT, "sometimes"),
             (OPTION_DEBUG_LOGGING, "verbose"),
             (OPTION_AUTO_BGM, "sometimes"),
@@ -245,8 +215,6 @@ mod tests {
     fn value_strings_start_with_the_default_choice() {
         let cases = [
             (OPTION_VOLUME, "100"),
-            (OPTION_REPEAT_DELAY, "10"),
-            (OPTION_REPEAT_PERIOD, "15"),
             (OPTION_TOUCH_INPUT, "enabled"),
             (OPTION_DEBUG_LOGGING, "disabled"),
             (OPTION_AUTO_BGM, "disabled"),
