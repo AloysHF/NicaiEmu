@@ -17,6 +17,8 @@ impl NicaiMachine {
             3 => {
                 let destination = self.register(0);
                 if destination != 0 {
+                    let pointer = self.memory.r32(destination);
+                    self.deallocate(pointer);
                     self.memory.w32(destination, 0);
                 }
                 self.set_result(0);
@@ -64,7 +66,10 @@ impl NicaiMachine {
                 let pointer = self.allocate(size);
                 self.set_result(pointer);
             }
-            14 => self.set_result(0),
+            14 => {
+                self.deallocate(self.register(0));
+                self.set_result(0);
+            }
             _ => self.set_result(0),
         }
     }
@@ -96,6 +101,10 @@ impl NicaiMachine {
                 self.set_result(block);
             }
             2 => {
+                let base = self.memory.r32(block);
+                if block != MEMORY_BLOCK_PTR {
+                    self.deallocate(base);
+                }
                 self.memory.w32(block, 0);
                 self.memory.w32(block + 4, 0);
                 self.memory.w32(block + 8, 0);

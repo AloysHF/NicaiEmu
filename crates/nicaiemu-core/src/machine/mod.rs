@@ -7,7 +7,7 @@
 //! - [`drawing`]: framebuffer drawing, blits, rects, and text
 //! - [`services`]: firmware service handlers grouped by manager
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use anyhow::{bail, Context, Result};
 use armv4t_emu::{reg, Cpu, Memory, Mode};
@@ -22,10 +22,15 @@ mod drawing;
 mod memory;
 mod packages;
 mod services;
+mod virtual_fs;
 
 use memory::MachineMemory;
 pub use memory::MemoryRegionInfo;
-use packages::{grouped_package_resources, native_package_resources, HostResource};
+use packages::{
+    grouped_package_resources, named_package_resources, native_package_resources, HostResource,
+    HostResourcePackage,
+};
+use virtual_fs::VirtualFileSystem;
 
 const ROM_BASE: u32 = 0x0100_0000;
 const STACK_BASE: u32 = 0x0200_0000;
@@ -540,6 +545,10 @@ pub struct NicaiMachine {
     executable: CbeExecutable,
     state: MachineState,
     heap_cursor: u32,
+    #[serde(skip, default)]
+    heap_allocations: BTreeMap<u32, u32>,
+    #[serde(skip, default)]
+    free_heap_blocks: Vec<(u32, u32)>,
     app_main: u32,
     app_exit: u32,
     service_calls: HashMap<(u32, u32), u64>,
@@ -574,6 +583,8 @@ pub struct NicaiMachine {
     pointer: PointerState,
     timers: Vec<GuestTimer>,
     resources: Vec<HostResource>,
+    #[serde(skip, default)]
+    resource_packages: Vec<HostResourcePackage>,
     resource_data: Vec<u32>,
     resource_names: Vec<u32>,
     app_image_package: u32,
@@ -583,6 +594,8 @@ pub struct NicaiMachine {
     native_app_init: u32,
     native_system_info: u32,
     native_property_info: u32,
+    #[serde(skip, default)]
+    virtual_fs: VirtualFileSystem,
 }
 
 impl std::fmt::Debug for NicaiMachine {
@@ -592,6 +605,8 @@ impl std::fmt::Debug for NicaiMachine {
             .field("state", &self.state)
             .field("app_main", &format_args!("0x{:08X}", self.app_main))
             .field("instruction_count", &self.instruction_count)
+            .field("resource_package_count", &self.resource_packages.len())
+            .field("virtual_file_count", &self.virtual_fs.file_count())
             .field("last_pc", &format_args!("0x{:08X}", self.last_pc))
             .field(
                 "recent_pcs",
@@ -640,6 +655,8 @@ impl NicaiMachine {
             executable,
             state: MachineState::Created,
             heap_cursor: HEAP_BASE,
+            heap_allocations: BTreeMap::new(),
+            free_heap_blocks: Vec::new(),
             app_main: 0,
             app_exit: 0,
             service_calls: HashMap::new(),
@@ -673,6 +690,11 @@ impl NicaiMachine {
                 };
                 MAX_TIMERS
             ],
+            resource_packages: named_package_resources(
+                archive.bytes(),
+                resource_package_offset,
+                resource_package_size,
+            ),
             resources: {
                 let mut native = native_package_resources(archive.bytes(), resource_package_offset);
                 if native.is_empty() {
@@ -717,6 +739,7 @@ impl NicaiMachine {
             native_app_init: 0,
             native_system_info: 0,
             native_property_info: 0,
+            virtual_fs: VirtualFileSystem::default(),
         };
         machine.initialize_tables();
         machine.initialize_screen();
@@ -909,16 +932,59 @@ impl NicaiMachine {
     }
 
     fn allocate(&mut self, size: u32) -> u32 {
+        if size == 0 {
+            return 0;
+        }
         let aligned = size.saturating_add(7) & !7;
+        if let Some(index) = self
+            .free_heap_blocks
+            .iter()
+            .position(|(_, available)| *available >= aligned)
+        {
+            let (pointer, available) = self.free_heap_blocks.remove(index);
+            if available > aligned {
+                self.free_heap_blocks
+                    .insert(index, (pointer + aligned, available - aligned));
+            }
+            self.heap_allocations.insert(pointer, aligned);
+            return pointer;
+        }
         let pointer = self.heap_cursor;
         let end = pointer.saturating_add(aligned);
-        if end > HEAP_BASE + HEAP_SIZE as u32 {
+        if end > MEMORY_BLOCK_POOL {
             warn!("CBE heap exhausted while allocating {size} bytes");
             0
         } else {
             self.heap_cursor = end;
+            self.heap_allocations.insert(pointer, aligned);
             pointer
         }
+    }
+
+    fn deallocate(&mut self, pointer: u32) {
+        let Some(size) = self.heap_allocations.remove(&pointer) else {
+            return;
+        };
+        self.free_heap_blocks.push((pointer, size));
+        self.free_heap_blocks.sort_unstable_by_key(|block| block.0);
+
+        let mut index = 0;
+        while index + 1 < self.free_heap_blocks.len() {
+            let (start, length) = self.free_heap_blocks[index];
+            let (next_start, next_length) = self.free_heap_blocks[index + 1];
+            if start.saturating_add(length) == next_start {
+                self.free_heap_blocks[index].1 = length.saturating_add(next_length);
+                self.free_heap_blocks.remove(index + 1);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    fn allocation_size(&self, address: u32) -> Option<u32> {
+        let (&start, &size) = self.heap_allocations.range(..=address).next_back()?;
+        let offset = address.checked_sub(start)?;
+        (offset < size).then_some(size - offset)
     }
 
     /// Execute one screen update and render pass.
@@ -1505,6 +1571,53 @@ mod tests {
 
             assert_eq!(machine.state(), MachineState::Ready, "{game} faulted");
         }
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_installs_and_enters_zombie_game() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("僵尸先生.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        let installer_screen = machine.active_screen();
+        for _ in 0..330 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+        assert_eq!(
+            machine
+                .virtual_fs
+                .file("PlantsZombies/bwandou_zidan.actor")
+                .map(<[u8]>::len),
+            Some(324),
+            "installer wrote a resource with the wrong boundary"
+        );
+        for _ in 0..50 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert_ne!(machine.active_screen(), installer_screen);
+        assert!(machine
+            .virtual_fs
+            .file("PlantsZombies/title1.gif")
+            .is_some());
+        assert!(machine.virtual_fs.file("PlantsZombies/花园1.map").is_some());
+        assert!(machine.virtual_fs.paths().len() > 300);
+        assert!(
+            machine
+                .frame_pixels()
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                > 3,
+            "game screen did not render its resources"
+        );
     }
 
     #[test]

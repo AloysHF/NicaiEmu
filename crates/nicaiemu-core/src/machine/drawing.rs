@@ -183,6 +183,23 @@ impl NicaiMachine {
                 }
             }
             36 => self.set_result(1),
+            38 => {
+                let source = self.register(0);
+                let destination = self.register(1);
+                let capacity = self.register(2) as usize;
+                if source == 0 || destination == 0 || capacity == 0 {
+                    self.set_result(0);
+                } else {
+                    let bytes = self.read_c_bytes(source, 4096);
+                    let (text, _, _) = GBK.decode(&bytes);
+                    let units: Vec<u16> = text.encode_utf16().take(capacity - 1).collect();
+                    for (index, unit) in units.iter().enumerate() {
+                        self.memory.w16(destination + index as u32 * 2, *unit);
+                    }
+                    self.memory.w16(destination + units.len() as u32 * 2, 0);
+                    self.set_result(units.len() as u32);
+                }
+            }
             44 => {
                 let result = self.initialize_image_data_page(false);
                 self.set_result(result);
@@ -242,11 +259,16 @@ impl NicaiMachine {
             .iter()
             .position(|pointer| *pointer == source)
         else {
-            if service_trace_enabled(4, 49) {
-                eprintln!("image stream 0x{source:08X} did not match a resource");
-            }
-            warn!("image stream at 0x{source:08X} is not a CBE resource");
-            return 0;
+            let Some(size) = self.allocation_size(source) else {
+                warn!("image stream at 0x{source:08X} has no allocation boundary");
+                return 0;
+            };
+            let Some(region) = self.memory.region(source, size as usize) else {
+                return 0;
+            };
+            let offset = (source - region.base) as usize;
+            let resource = region.data[offset..offset + size as usize].to_vec();
+            return self.create_image_from_bytes(&resource, "guest stream", output);
         };
         self.create_image_from_resource_index(resource_index, output)
     }
@@ -260,14 +282,19 @@ impl NicaiMachine {
             return 0;
         };
         let resource = host_resource.data.clone();
-        let encoded = image_payload(&resource);
+        let name = host_resource.name.clone();
+        self.create_image_from_bytes(&resource, &name, output)
+    }
+
+    fn create_image_from_bytes(&mut self, resource: &[u8], name: &str, output: u32) -> u32 {
+        let encoded = image_payload(resource);
         let decoded = match image_decoder::decode_image(encoded) {
             Ok(decoded) => decoded,
             Err(error) => {
                 if service_trace_enabled(4, 49) {
                     eprintln!(
                         "image resource {} decode failed (head={:02X?}): {error:#}",
-                        host_resource.name,
+                        name,
                         &resource[..resource.len().min(12)]
                     );
                 }
@@ -290,7 +317,7 @@ impl NicaiMachine {
                 .count();
             eprintln!(
                 "image resource {} decoded={}x{} opaque={opaque}",
-                host_resource.name, decoded.width, decoded.height
+                name, decoded.width, decoded.height
             );
         }
         let pitch = decoded.width.next_multiple_of(4);

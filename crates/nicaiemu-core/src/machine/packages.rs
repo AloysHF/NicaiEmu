@@ -1,11 +1,22 @@
 //! Guest resource package parsing (native, flat, and grouped layouts).
 
+use encoding_rs::GBK;
 use serde::{Deserialize, Serialize};
+
+fn decode_name(bytes: &[u8]) -> String {
+    GBK.decode(bytes).0.into_owned()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct HostResource {
     pub(crate) name: String,
     pub(crate) data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct HostResourcePackage {
+    pub(crate) name: String,
+    pub(crate) resources: Vec<HostResource>,
 }
 
 pub(crate) fn native_package_resources(data: &[u8], start: usize) -> Vec<HostResource> {
@@ -68,7 +79,7 @@ pub(crate) fn native_package_resources(data: &[u8], start: usize) -> Vec<HostRes
         let Some(name) = data.get(cursor + 1..end) else {
             return Vec::new();
         };
-        names.push(String::from_utf8_lossy(name).into_owned());
+        names.push(decode_name(name));
         cursor = end;
     }
     if cursor > data_start {
@@ -130,7 +141,7 @@ pub(crate) fn flat_package_resources(
         let length = *data.get(cursor)? as usize;
         let end = cursor.checked_add(1 + length)?;
         let name = data.get(cursor + 1..end)?;
-        names.push(String::from_utf8_lossy(name).into_owned());
+        names.push(decode_name(name));
         cursor = end;
     }
     if cursor > data_start {
@@ -185,6 +196,70 @@ pub(crate) fn grouped_package_resources(
     resources
 }
 
+pub(crate) fn named_package_resources(
+    data: &[u8],
+    start: usize,
+    size: usize,
+) -> Vec<HostResourcePackage> {
+    let read_u32 = |offset: usize| {
+        data.get(offset..offset + 4)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u32::from_le_bytes)
+    };
+    let Some(header_size) = read_u32(start).map(|value| value as usize) else {
+        return Vec::new();
+    };
+    let Some(package_count) = read_u32(start + 8).map(|value| value as usize) else {
+        return Vec::new();
+    };
+    if header_size < 8 || !(2..=256).contains(&package_count) {
+        return Vec::new();
+    }
+    let limit = start.saturating_add(size).min(data.len());
+    let Some(root_block) = start.checked_add(4 + header_size) else {
+        return Vec::new();
+    };
+    if root_block > limit {
+        return Vec::new();
+    }
+
+    let mut cursor = start + 12;
+    let mut packages = Vec::with_capacity(package_count - 1);
+    for _ in 1..package_count {
+        let Some(&name_length) = data.get(cursor) else {
+            return Vec::new();
+        };
+        let name_length = name_length as usize;
+        let Some(name_end) = cursor.checked_add(1 + name_length) else {
+            return Vec::new();
+        };
+        let Some(name_bytes) = data.get(cursor + 1..name_end) else {
+            return Vec::new();
+        };
+        let Some(block_offset) = read_u32(name_end).map(|value| value as usize) else {
+            return Vec::new();
+        };
+        let Some(block_start) = start.checked_add(block_offset) else {
+            return Vec::new();
+        };
+        let Some((resources, block_end)) = flat_package_resources(data, block_start) else {
+            return Vec::new();
+        };
+        if block_start < root_block || block_end > limit {
+            return Vec::new();
+        }
+        packages.push(HostResourcePackage {
+            name: decode_name(name_bytes),
+            resources,
+        });
+        cursor = name_end + 4;
+    }
+    if cursor > root_block {
+        return Vec::new();
+    }
+    packages
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +301,29 @@ mod tests {
         assert_eq!(resources.len(), 2);
         assert_eq!(resources[0].name, "a");
         assert_eq!(resources[1].name, "b");
+    }
+
+    #[test]
+    fn parses_named_child_packages() {
+        let mut data = vec![0u8; 67];
+        data[0..4].copy_from_slice(&16u32.to_le_bytes());
+        data[8..12].copy_from_slice(&2u32.to_le_bytes());
+        data[12] = 3;
+        data[13..16].copy_from_slice(b"pkg");
+        data[16..20].copy_from_slice(&24u32.to_le_bytes());
+        data[24..28].copy_from_slice(&20u32.to_le_bytes());
+        data[28..32].copy_from_slice(&3u32.to_le_bytes());
+        data[32..36].copy_from_slice(&2u32.to_le_bytes());
+        data[36..40].copy_from_slice(&0u32.to_le_bytes());
+        data[40..44].copy_from_slice(&1u32.to_le_bytes());
+        data[44..48].copy_from_slice(&[1, b'a', 1, b'b']);
+        data[48..51].copy_from_slice(&[0x11, 0x22, 0x33]);
+
+        let packages = named_package_resources(&data, 0, data.len());
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "pkg");
+        assert_eq!(packages[0].resources.len(), 2);
+        assert_eq!(packages[0].resources[0].data, [0x11]);
+        assert_eq!(packages[0].resources[1].data, [0x22, 0x33]);
     }
 }
