@@ -25,7 +25,8 @@ by supported games.
 
 - **CBE format support** — section parsing, resource lookup, image decoding
 - **ARM/Thumb CPU emulation** — little- and big-endian execution, interworking branches
-- **Service bridge** — firmware-style API for memory, resources, display, input, and text
+- **Service bridge** — firmware-style API for memory, resources, display,
+  input, text, fixed-point game math, and packed-rectangle collision detection
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
 - **Text rendering** — GBK decoding with embedded Unicode bitmap font
 - **240×400 display** — native WQVGA resolution with resizable desktop window

@@ -14,6 +14,66 @@ fn rect_contains_point(left: i32, top: i32, right: i32, bottom: i32, x: i32, y: 
     x >= left && x <= right && y >= top && y <= bottom
 }
 
+fn packed_rectangles_overlap(
+    first_position: u32,
+    first_size: u32,
+    second_position: u32,
+    second_size: u32,
+) -> bool {
+    let low = |value: u32| (value as u16 as i16) as i32;
+    let high = |value: u32| ((value >> 16) as u16 as i16) as i32;
+
+    low(first_position) + low(first_size) > low(second_position)
+        && low(second_position) + low(second_size) > low(first_position)
+        && high(first_position) + high(first_size) > high(second_position)
+        && high(second_position) + high(second_size) > high(first_position)
+}
+
+fn df_sin(degrees: u32) -> i32 {
+    let radians = f64::from(degrees as i32) * std::f64::consts::PI / 180.0;
+    (radians.sin() * 4096.0) as i32
+}
+
+fn df_degree(x: u32, y: u32) -> u32 {
+    let x = i64::from(x as i32);
+    let y = i64::from(y as i32);
+    let length_squared = (i128::from(x) * i128::from(x) + i128::from(y) * i128::from(y)) as u128;
+    let mut length = (length_squared as f64).sqrt() as u128;
+    while (length + 1) * (length + 1) <= length_squared {
+        length += 1;
+    }
+    while length * length > length_squared {
+        length -= 1;
+    }
+
+    let mut scaled_y = (y as u32).wrapping_shl(12) as i32;
+    if length != 0 {
+        scaled_y /= length.min(u32::MAX.into()) as u32 as i32;
+    }
+
+    let (begin, end) = if y < 0 {
+        if x > 0 {
+            (271, 359)
+        } else {
+            (181, 270)
+        }
+    } else if x < 0 {
+        (91, 180)
+    } else {
+        (0, 90)
+    };
+    (begin..=end)
+        .find(|&degrees| {
+            let sine = df_sin(degrees);
+            if end == 90 || end == 359 {
+                sine >= scaled_y
+            } else {
+                sine <= scaled_y
+            }
+        })
+        .unwrap_or(0)
+}
+
 impl NicaiMachine {
     pub(crate) fn handle_game_service(&mut self, index: u32) {
         if let Some(wide_length) = game_service_string_uses_wide_length(index) {
@@ -225,6 +285,15 @@ impl NicaiMachine {
                 self.set_result(offset.wrapping_add(4));
             }
             102 => self.set_result(MEMORY_BLOCK_PTR),
+            103 => self.set_result(df_sin(self.register(0)) as u32),
+            104 => self.set_result(df_sin(self.register(0).wrapping_add(90)) as u32),
+            105 => self.set_result(df_degree(self.register(0), self.register(1))),
+            106 => self.set_result(u32::from(packed_rectangles_overlap(
+                self.register(0),
+                self.register(1),
+                self.register(2),
+                self.register(3),
+            ))),
             108 => {
                 let format = self.read_c_bytes(self.register(0), 4096);
                 let output = self.format_c_string_from(&format, 1);
@@ -522,6 +591,15 @@ impl NicaiMachine {
                 self.set_result(result);
             }
             30 => self.set_result(MEMORY_BLOCK_PTR),
+            31 => self.set_result(df_sin(self.register(0)) as u32),
+            32 => self.set_result(df_sin(self.register(0).wrapping_add(90)) as u32),
+            33 => self.set_result(df_degree(self.register(0), self.register(1))),
+            34 => self.set_result(u32::from(packed_rectangles_overlap(
+                self.register(0),
+                self.register(1),
+                self.register(2),
+                self.register(3),
+            ))),
             _ => self.set_result(0),
         }
     }
@@ -529,7 +607,11 @@ impl NicaiMachine {
 
 #[cfg(test)]
 mod tests {
-    use super::rect_contains_point;
+    use super::{df_degree, df_sin, packed_rectangles_overlap, rect_contains_point};
+
+    fn pack(high: i16, low: i16) -> u32 {
+        u32::from(low as u16) | (u32::from(high as u16) << 16)
+    }
 
     #[test]
     fn rectangle_point_test_includes_edges() {
@@ -542,5 +624,50 @@ mod tests {
     fn rectangle_point_test_rejects_outside_coordinates() {
         assert!(!rect_contains_point(78, 178, 161, 196, 77, 187));
         assert!(!rect_contains_point(78, 178, 161, 196, 120, 197));
+    }
+
+    #[test]
+    fn packed_rectangle_test_detects_overlap() {
+        assert!(packed_rectangles_overlap(
+            pack(20, 10),
+            pack(8, 12),
+            pack(25, 18),
+            pack(10, 6),
+        ));
+        assert!(packed_rectangles_overlap(
+            pack(-8, -10),
+            pack(10, 12),
+            pack(-4, -3),
+            pack(8, 6),
+        ));
+    }
+
+    #[test]
+    fn packed_rectangle_test_excludes_touching_edges() {
+        assert!(!packed_rectangles_overlap(
+            pack(20, 10),
+            pack(8, 12),
+            pack(28, 18),
+            pack(10, 6),
+        ));
+        assert!(!packed_rectangles_overlap(
+            pack(20, 10),
+            pack(8, 12),
+            pack(25, 22),
+            pack(10, 6),
+        ));
+    }
+
+    #[test]
+    fn fixed_point_trigonometry_matches_cardinal_directions() {
+        assert_eq!(df_sin(0), 0);
+        assert_eq!(df_sin(90), 4096);
+        assert_eq!(df_sin(180), 0);
+        assert_eq!(df_sin(270), -4096);
+
+        assert_eq!(df_degree(1, 0), 0);
+        assert_eq!(df_degree(0, 1), 90);
+        assert_eq!(df_degree((-1_i32) as u32, 0), 180);
+        assert_eq!(df_degree(0, (-1_i32) as u32), 270);
     }
 }
