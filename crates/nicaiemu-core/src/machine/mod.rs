@@ -796,6 +796,9 @@ impl NicaiMachine {
         self.cpu.reg_set(Mode::User, reg::PC, code_address);
         self.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
         self.run_until_return(instruction_limit)?;
+        if self.state == MachineState::Halted {
+            return Ok(());
+        }
         if self.uses_native_dispatch_abi() {
             if self.native_app_parser == 0 {
                 self.state = MachineState::Faulted;
@@ -803,7 +806,13 @@ impl NicaiMachine {
             }
             self.app_main = self.native_app_parser;
             self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit)?;
+            if self.state == MachineState::Halted {
+                return Ok(());
+            }
             self.invoke_callback(self.native_app_init, 0, 0, 0, instruction_limit)?;
+            if self.state == MachineState::Halted {
+                return Ok(());
+            }
             self.state = MachineState::Ready;
             return Ok(());
         }
@@ -824,6 +833,9 @@ impl NicaiMachine {
         }
         self.cpu.reg_set(Mode::User, reg::CPSR, cpsr);
         self.run_until_return(instruction_limit)?;
+        if self.state == MachineState::Halted {
+            return Ok(());
+        }
         self.state = MachineState::Ready;
         Ok(())
     }
@@ -911,12 +923,20 @@ impl NicaiMachine {
 
     /// Execute one screen update and render pass.
     pub fn run_frame(&mut self, instruction_limit: u64) -> Result<()> {
+        if self.state == MachineState::Halted {
+            self.key_down = 0;
+            self.pointer.end_frame();
+            return Ok(());
+        }
         if self.state != MachineState::Ready {
             bail!("CBE machine is not ready");
         }
         self.maybe_run_auto_bgm();
         self.frame_count = self.frame_count.wrapping_add(1);
         self.dispatch_timers(instruction_limit)?;
+        if self.finish_halted_frame() {
+            return Ok(());
+        }
         if self.uses_native_dispatch_abi() {
             self.key_down = 0;
             if let Some(event) = self.pending_key_events.pop_front() {
@@ -960,6 +980,9 @@ impl NicaiMachine {
         if !self.screen_initialized {
             let init = self.memory.r32(screen);
             self.invoke_callback(init, screen_this, 0, 0, instruction_limit)?;
+            if self.finish_halted_frame() {
+                return Ok(());
+            }
             self.screen_initialized = true;
         }
         if self.resource_load_pending
@@ -969,6 +992,9 @@ impl NicaiMachine {
             self.resource_load_screen = 0;
             let load_resource = self.memory.r32(screen + 24);
             self.invoke_callback(load_resource, screen_this, 0, 0, instruction_limit)?;
+            if self.finish_halted_frame() {
+                return Ok(());
+            }
         }
         if self.pending_screen != 0 && self.pending_screen != screen {
             self.key_down = 0;
@@ -997,6 +1023,9 @@ impl NicaiMachine {
                 KEY_EVENT_ARG,
                 instruction_limit,
             )?;
+            if self.finish_halted_frame() {
+                return Ok(());
+            }
             self.key_down = 0;
             if self.pending_screen != 0 && self.pending_screen != screen {
                 self.pointer.end_frame();
@@ -1004,6 +1033,9 @@ impl NicaiMachine {
             }
         }
         self.invoke_callback(logic, screen_this, 6, 0, instruction_limit)?;
+        if self.finish_halted_frame() {
+            return Ok(());
+        }
         if self.pending_screen == 0 || self.pending_screen == screen {
             let render = self.memory.r32(screen + 12);
             if render == 0 {
@@ -1014,6 +1046,15 @@ impl NicaiMachine {
         self.key_down = 0;
         self.pointer.end_frame();
         Ok(())
+    }
+
+    fn finish_halted_frame(&mut self) -> bool {
+        if self.state != MachineState::Halted {
+            return false;
+        }
+        self.key_down = 0;
+        self.pointer.end_frame();
+        true
     }
 
     fn screen_call_parameter(&self, screen: u32) -> u32 {
@@ -1445,6 +1486,27 @@ mod tests {
         assert_eq!(
             machine.memory.r32(system_info + 0x220),
             SERVICE_BASE + TABLE_STRIDE * 6 + 5 * 4
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_terminal_loop_halts_without_frame_errors() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("武林外传(新品).CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for _ in 0..400 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Halted);
+        assert!(
+            machine.service_calls().get(&(6, 5)).copied().unwrap_or(0) > 0,
+            "game never called the random-number service"
         );
     }
 
