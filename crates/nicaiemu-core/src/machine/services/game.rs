@@ -10,6 +10,10 @@ use super::super::{
     NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE, TABLE_STRIDE,
 };
 
+fn rect_contains_point(left: i32, top: i32, right: i32, bottom: i32, x: i32, y: i32) -> bool {
+    x >= left && x <= right && y >= top && y <= bottom
+}
+
 impl NicaiMachine {
     pub(crate) fn handle_game_service(&mut self, index: u32) {
         if let Some(wide_length) = game_service_string_uses_wide_length(index) {
@@ -49,6 +53,18 @@ impl NicaiMachine {
             23 => {
                 let result = self.decode_resource_stream(self.register(0));
                 self.set_result(result);
+            }
+            50 => {
+                let stack = self.register(reg::SP);
+                let result = rect_contains_point(
+                    signed_coord(self.register(0)),
+                    signed_coord(self.register(1)),
+                    signed_coord(self.register(2)),
+                    signed_coord(self.register(3)),
+                    signed_coord(self.memory.r32(stack)),
+                    signed_coord(self.memory.r32(stack + 4)),
+                );
+                self.set_result(u32::from(result));
             }
             58 => {
                 let block = self.register(0);
@@ -515,5 +531,23 @@ impl NicaiMachine {
             30 => self.set_result(MEMORY_BLOCK_PTR),
             _ => self.set_result(0),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rect_contains_point;
+
+    #[test]
+    fn rectangle_point_test_includes_edges() {
+        assert!(rect_contains_point(78, 178, 161, 196, 78, 178));
+        assert!(rect_contains_point(78, 178, 161, 196, 120, 187));
+        assert!(rect_contains_point(78, 178, 161, 196, 161, 196));
+    }
+
+    #[test]
+    fn rectangle_point_test_rejects_outside_coordinates() {
+        assert!(!rect_contains_point(78, 178, 161, 196, 77, 187));
+        assert!(!rect_contains_point(78, 178, 161, 196, 120, 197));
     }
 }

@@ -1471,6 +1471,47 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_pointer_opens_same_island_help_screen_as_keys() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("孤岛.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut keyed = NicaiMachine::new(&archive).unwrap();
+        keyed.boot(5_000_000).unwrap();
+        for frame in 0..60 {
+            let key = match frame {
+                20 | 22 => Some(18),
+                24 => Some(14),
+                _ => None,
+            };
+            if let Some(key) = key {
+                keyed.set_key(key, true);
+            }
+            keyed.run_frame(5_000_000).unwrap();
+            if let Some(key) = key {
+                keyed.set_key(key, false);
+            }
+        }
+
+        let mut pointed = NicaiMachine::new(&archive).unwrap();
+        pointed.boot(5_000_000).unwrap();
+        for frame in 0..60 {
+            if matches!(frame, 20 | 22) {
+                pointed.set_pointer(120, 243, true);
+            }
+            pointed.run_frame(5_000_000).unwrap();
+            if matches!(frame, 20 | 22) {
+                pointed.set_pointer(120, 243, false);
+            }
+        }
+
+        assert_eq!(pointed.state(), MachineState::Ready);
+        assert_eq!(pointed.frame_pixels(), keyed.frame_pixels());
+    }
+
+    #[test]
     fn pointer_press_holds_drag_and_release_edges() {
         let mut pointer = PointerState::new();
         assert!(!pointer.held && !pointer.down && !pointer.up);
