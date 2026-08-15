@@ -54,6 +54,8 @@ const MEMORY_BLOCK_PTR: u32 = HEAP_BASE + 0x80_0000;
 const MEMORY_BLOCK_SERVICE: u32 = SERVICE_BASE + 0x6c48;
 const DREAM_FACTORY_PACKAGE_SLOT: u32 = MANAGER_BASE + 0x7ff0;
 const DREAM_FACTORY_MEMORY_BLOCK_SLOT: u32 = MANAGER_BASE + 0x7ff4;
+const DREAM_FACTORY_FORMAT_BUFFER: u32 = MANAGER_BASE + 0x7f80;
+const DREAM_FACTORY_FORMAT_BUFFER_SIZE: usize = 64;
 const DATA_PACKAGE_SIZE: u32 = 108;
 const SCREEN_IMAGE_STRUCT: u32 = MEMORY_BLOCK_PTR + 0x408;
 const SCREEN_IMAGE: u32 = SCREEN_IMAGE_STRUCT + 24;
@@ -117,6 +119,21 @@ fn game_service_string_uses_wide_length(index: u32) -> Option<bool> {
         97 => Some(false),
         101 => Some(true),
         _ => None,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum VariadicArgument {
+    Register(u8),
+    Stack(u32),
+}
+
+fn variadic_argument_location(first_register: u32, argument_index: u32) -> VariadicArgument {
+    let register_index = first_register + argument_index;
+    if register_index <= 3 {
+        VariadicArgument::Register(register_index as u8)
+    } else {
+        VariadicArgument::Stack((register_index - 4) * 4)
     }
 }
 
@@ -1206,6 +1223,20 @@ mod tests {
     }
 
     #[test]
+    fn variadic_arguments_continue_from_registers_to_stack() {
+        assert_eq!(
+            variadic_argument_location(1, 0),
+            VariadicArgument::Register(1)
+        );
+        assert_eq!(
+            variadic_argument_location(1, 2),
+            VariadicArgument::Register(3)
+        );
+        assert_eq!(variadic_argument_location(1, 3), VariadicArgument::Stack(0));
+        assert_eq!(variadic_argument_location(2, 2), VariadicArgument::Stack(0));
+    }
+
+    #[test]
     fn key_hold_auto_repeat_produces_bounded_steps() {
         let (step, delay, on, off) = (5u32, 10u32, 1u32, 14u32);
         let visible: Vec<u32> = (0..45)
@@ -1401,6 +1432,41 @@ mod tests {
                 .keys()
                 .any(|(group, _)| *group == 18),
             "guest unexpectedly used the audio manager"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_opens_island_help_without_error() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("孤岛.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(5_000_000).unwrap();
+        for frame in 0..60 {
+            let key = match frame {
+                20 | 22 => Some(18),
+                24 => Some(14),
+                _ => None,
+            };
+            if let Some(key) = key {
+                machine.set_key(key, true);
+            }
+            machine.run_frame(5_000_000).unwrap();
+            if let Some(key) = key {
+                machine.set_key(key, false);
+            }
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert!(
+            machine
+                .frame_pixels()
+                .windows(2)
+                .any(|pixels| pixels[0] != pixels[1]),
+            "help screen remained blank"
         );
     }
 

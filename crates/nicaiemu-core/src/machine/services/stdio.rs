@@ -2,7 +2,7 @@
 
 use armv4t_emu::Memory;
 
-use super::super::NicaiMachine;
+use super::super::{variadic_argument_location, NicaiMachine, VariadicArgument};
 
 impl NicaiMachine {
     pub(crate) fn handle_file_service(&mut self, index: u32) {
@@ -160,6 +160,10 @@ impl NicaiMachine {
     }
 
     pub(crate) fn format_c_string(&mut self, format: &[u8]) -> Vec<u8> {
+        self.format_c_string_from(format, 2)
+    }
+
+    pub(crate) fn format_c_string_from(&mut self, format: &[u8], first_register: u32) -> Vec<u8> {
         let mut output = Vec::new();
         let mut position = 0usize;
         let mut argument_index = 0u32;
@@ -191,13 +195,11 @@ impl NicaiMachine {
                 break;
             };
             position += 1;
-            let argument = match argument_index {
-                0 => self.register(2),
-                1 => self.register(3),
-                index => self.memory.r32(
-                    self.register(armv4t_emu::reg::SP)
-                        .wrapping_add((index - 2) * 4),
-                ),
+            let argument = match variadic_argument_location(first_register, argument_index) {
+                VariadicArgument::Register(register) => self.register(register),
+                VariadicArgument::Stack(offset) => self
+                    .memory
+                    .r32(self.register(armv4t_emu::reg::SP).wrapping_add(offset)),
             };
             argument_index += 1;
             let mut formatted = match specifier {

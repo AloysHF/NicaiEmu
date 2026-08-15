@@ -4,10 +4,10 @@
 use armv4t_emu::{reg, Memory};
 
 use super::super::{
-    game_service_string_uses_wide_length, signed_coord, NicaiMachine,
-    DREAM_FACTORY_MEMORY_BLOCK_SLOT, DREAM_FACTORY_PACKAGE_SLOT, FIXED_GAMEOLD_OBJECT_SERVICE,
-    HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE,
-    SCREEN_IS_IN_QUIT, SERVICE_BASE, TABLE_STRIDE,
+    game_service_string_uses_wide_length, signed_coord, NicaiMachine, DREAM_FACTORY_FORMAT_BUFFER,
+    DREAM_FACTORY_FORMAT_BUFFER_SIZE, DREAM_FACTORY_MEMORY_BLOCK_SLOT, DREAM_FACTORY_PACKAGE_SLOT,
+    FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, NATIVE_DISPATCH_SERVICE,
+    NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE, TABLE_STRIDE,
 };
 
 impl NicaiMachine {
@@ -209,6 +209,18 @@ impl NicaiMachine {
                 self.set_result(offset.wrapping_add(4));
             }
             102 => self.set_result(MEMORY_BLOCK_PTR),
+            108 => {
+                let format = self.read_c_bytes(self.register(0), 4096);
+                let output = self.format_c_string_from(&format, 1);
+                let length = output
+                    .len()
+                    .min(DREAM_FACTORY_FORMAT_BUFFER_SIZE.saturating_sub(1));
+                self.memory
+                    .write_bytes(DREAM_FACTORY_FORMAT_BUFFER, &output[..length]);
+                self.memory
+                    .w8(DREAM_FACTORY_FORMAT_BUFFER + length as u32, 0);
+                self.set_result(DREAM_FACTORY_FORMAT_BUFFER);
+            }
             110 => {
                 let package = self.register(0);
                 let capacity = self.register(1);
