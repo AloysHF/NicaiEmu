@@ -1428,6 +1428,28 @@ mod tests {
 
     #[test]
     #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_fixed_address_game_populates_standard_runtime_services() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("武林外传(新品).CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        let system_info = machine
+            .memory
+            .r32(machine.executable.data_address() + 0x1724);
+        assert_eq!(
+            machine.memory.r32(system_info + 0x220),
+            SERVICE_BASE + TABLE_STRIDE * 6 + 5 * 4
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
     fn real_content_auto_bgm_plays_packaged_midi() {
         let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
         let game_path = std::path::PathBuf::from(game_dir).join("魔塔.CBE");

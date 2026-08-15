@@ -414,14 +414,7 @@ impl NicaiMachine {
                         .w32(info + 0x74, SERVICE_BASE + TABLE_STRIDE * 4 + 5 * 4);
                     self.memory
                         .w32(info + 0x78, SERVICE_BASE + TABLE_STRIDE * 4 + 6 * 4);
-                    self.memory
-                        .w32(info + 0x20c, SERVICE_BASE + TABLE_STRIDE * 6);
-                    self.memory
-                        .w32(info + 0x210, SERVICE_BASE + TABLE_STRIDE * 6 + 4);
-                    self.memory
-                        .w32(info + 0x214, SERVICE_BASE + TABLE_STRIDE * 6 + 8);
-                    self.memory
-                        .w32(info + 0x22c, SERVICE_BASE + TABLE_STRIDE * 6 + 8 * 4);
+                    self.populate_table(info + 0x20c, SERVICE_BASE + TABLE_STRIDE * 6, 22);
                     for (offset, index) in [
                         (0xa4, 2),
                         (0xa8, 1),
