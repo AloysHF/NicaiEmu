@@ -2,7 +2,27 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use nicaiemu_core::{CbeArchive, NicaiMachine, DEFAULT_INSTRUCTION_LIMIT};
+use nicaiemu_core::{CbeArchive, NicaiMachine, Rotation, DEFAULT_INSTRUCTION_LIMIT};
+
+/// Display rotation requested on the command line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum RotationArg {
+    Auto,
+    None,
+    Cw,
+    Ccw,
+}
+
+impl From<RotationArg> for Rotation {
+    fn from(value: RotationArg) -> Self {
+        match value {
+            RotationArg::Auto => Rotation::Auto,
+            RotationArg::None => Rotation::None,
+            RotationArg::Cw => Rotation::Cw,
+            RotationArg::Ccw => Rotation::Ccw,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(about = "Run a CBE executable through the headless ARM core")]
@@ -22,6 +42,8 @@ struct Cli {
     key_hold: Vec<(u32, u32, u8)>,
     #[arg(long, value_parser = parse_pointer_event)]
     pointer_event: Vec<(u32, i32, i32)>,
+    #[arg(long, value_enum, default_value_t = RotationArg::Auto)]
+    rotate: RotationArg,
     #[arg(long)]
     screenshot: Option<PathBuf>,
 }
@@ -80,6 +102,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let archive = CbeArchive::load(&cli.file)?;
     let mut machine = NicaiMachine::new(&archive)?;
+    machine.set_rotation(cli.rotate.into());
     let mut result = machine.boot(cli.instruction_limit);
     for frame in 0..cli.frames {
         if result.is_ok() {
@@ -130,6 +153,11 @@ fn main() -> Result<()> {
         machine.active_screen(),
         machine.pending_screen()
     );
+    eprintln!(
+        "rotation requested={:?} effective={:?}",
+        machine.rotation(),
+        machine.effective_rotation()
+    );
     let pixels = machine.frame_pixels();
     let nonzero = pixels.iter().filter(|pixel| **pixel != 0).count();
     let colors = pixels
@@ -138,11 +166,18 @@ fn main() -> Result<()> {
         .collect::<std::collections::HashSet<_>>();
     eprintln!("frame nonzero={nonzero} colors={}", colors.len());
     if let Some(path) = &cli.screenshot {
+        let (display_width, display_height) = machine.display_size();
         let rgb: Vec<u8> = pixels
             .iter()
             .flat_map(|pixel| [(pixel >> 16) as u8, (pixel >> 8) as u8, *pixel as u8])
             .collect();
-        image::save_buffer(path, &rgb, 240, 400, image::ColorType::Rgb8)?;
+        image::save_buffer(
+            path,
+            &rgb,
+            display_width,
+            display_height,
+            image::ColorType::Rgb8,
+        )?;
     }
     for register in 0..=14 {
         eprintln!("r{register}=0x{:08X}", machine.register_value(register));

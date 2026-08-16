@@ -39,6 +39,7 @@ nicaiemu [OPTIONS] <GAME_PATH>
 | `-w, --width <WIDTH>` | integer | `480` | Initial window width. |
 | `-H, --height <HEIGHT>` | integer | `800` | Initial window height. |
 | `--filter <FILTER>` | `nearest` \| `bilinear` \| `bicubic` \| `xbrz` | `nearest` | Pixel scaling filter for display output. |
+| `--rotate <ROTATION>` | `auto` \| `none` \| `cw` \| `ccw` | `auto` | Rotate the guest framebuffer before presentation. `auto` uses the built-in landscape-game profile; explicit values override it. |
 | `--remap <GUEST_KEY:KEY>` | `GUEST_KEY:KEY` | — | Remap a guest key to a host key. Repeatable. |
 | `--show-gamepad` | flag | off | Draw a virtual gamepad overlay over the game frame. |
 | `--fullscreen` | flag | off | Run in borderless fullscreen. |

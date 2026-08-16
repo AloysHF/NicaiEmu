@@ -33,6 +33,9 @@ by supported games.
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
 - **Text rendering** — GBK decoding with embedded Unicode bitmap font
 - **240×400 display** — native WQVGA resolution with resizable desktop window
+- **Automatic landscape rotation** — games packaged for the original phone's
+  rotated landscape LCD are presented at 400×240 automatically, with a
+  `--rotate` override for manual control
 - **Display scaling** — nearest, bilinear, bicubic, and xbrz filters with
   aspect-ratio-preserving centering (`--filter`)
 - **Key remapping** — rebind any guest key to any host key (`--remap`)

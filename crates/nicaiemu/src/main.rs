@@ -11,12 +11,32 @@ use clap::Parser;
 use log::{info, warn};
 use minifb::{Key, Window, WindowOptions};
 use nicaiemu_core::{
-    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE,
+    decode_machine, encode_machine, CbeArchive, NicaiMachine, Rotation, AUDIO_SAMPLE_RATE,
     DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
 };
 use standalone::gamepad_overlay::GamepadOverlay;
 use standalone::input::{KeyboardMapper, RemapSpec};
 use standalone::scaler::{DisplayScaler, ScaleFilter};
+
+/// Display rotation requested on the command line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum RotationArg {
+    Auto,
+    None,
+    Cw,
+    Ccw,
+}
+
+impl From<RotationArg> for Rotation {
+    fn from(value: RotationArg) -> Self {
+        match value {
+            RotationArg::Auto => Rotation::Auto,
+            RotationArg::None => Rotation::None,
+            RotationArg::Cw => Rotation::Cw,
+            RotationArg::Ccw => Rotation::Ccw,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "nicaiemu")]
@@ -42,6 +62,11 @@ struct Cli {
     /// Pixel scaling filter for display output.
     #[arg(long, value_enum, default_value_t = ScaleFilter::Nearest)]
     filter: ScaleFilter,
+
+    /// Rotate the guest framebuffer before presentation (auto detects
+    /// landscape games; explicit values override detection).
+    #[arg(long, value_enum, default_value_t = RotationArg::Auto)]
+    rotate: RotationArg,
 
     /// Remap a guest key in GUEST_KEY:KEY format.
     #[arg(long = "remap", value_name = "GUEST_KEY:KEY")]
@@ -132,6 +157,7 @@ fn main() -> Result<()> {
     }
     machine.set_volume(cli.volume);
     machine.set_auto_bgm(cli.auto_bgm);
+    machine.set_rotation(cli.rotate.into());
 
     if let Some(path) = &cli.screenshot {
         capture_screenshot(
@@ -193,8 +219,10 @@ fn main() -> Result<()> {
     while window.is_open() && !window.is_key_down(Key::Escape) {
         keyboard.apply(&window, &mut machine);
         if let Some((mouse_x, mouse_y)) = window.get_mouse_pos(minifb::MouseMode::Clamp) {
-            let x = (mouse_x * 240.0 / cli.width as f32) as i32;
-            let y = (mouse_y * 400.0 / cli.height as f32) as i32;
+            let (display_width, display_height) = machine.display_size();
+            let x = (mouse_x * display_width as f32 / cli.width as f32) as i32;
+            let y = (mouse_y * display_height as f32 / cli.height as f32) as i32;
+            let (x, y) = machine.display_to_framebuffer(x, y);
             let down = window.get_mouse_down(minifb::MouseButton::Left);
             machine.set_pointer(x, y, down);
         }
@@ -205,6 +233,7 @@ fn main() -> Result<()> {
             machine
                 .reset(&archive, cli.instruction_limit)
                 .context("failed to reset CBE application")?;
+            machine.set_rotation(cli.rotate.into());
             info!("Game reset");
         }
         machine
@@ -213,12 +242,24 @@ fn main() -> Result<()> {
         if let Some(audio) = &audio_output {
             audio.push(machine.take_audio_samples((AUDIO_SAMPLE_RATE / GUEST_FRAME_RATE) as usize));
         }
+        let (display_width, display_height) = machine.display_size();
         let mut pixels = machine.frame_pixels();
         if cli.show_gamepad {
-            GamepadOverlay::draw(&mut pixels, 240, 400, machine.held_keys());
+            GamepadOverlay::draw(
+                &mut pixels,
+                display_width,
+                display_height,
+                machine.held_keys(),
+            );
         }
         let (window_width, window_height) = window.get_size();
-        let buffer = display_scaler.render(&pixels, 240, 400, window_width, window_height);
+        let buffer = display_scaler.render(
+            &pixels,
+            display_width,
+            display_height,
+            window_width,
+            window_height,
+        );
         window
             .update_with_buffer(buffer, window_width.max(1), window_height.max(1))
             .context("failed to update emulator window")?;
@@ -345,6 +386,7 @@ fn capture_screenshot(
         }
     }
 
+    let (display_width, display_height) = machine.display_size();
     let pixels = machine.frame_pixels();
     let colors = pixels
         .iter()
@@ -362,8 +404,14 @@ fn capture_screenshot(
         .iter()
         .flat_map(|pixel| [(pixel >> 16) as u8, (pixel >> 8) as u8, *pixel as u8])
         .collect();
-    image::save_buffer(path, &rgb, 240, 400, image::ColorType::Rgb8)
-        .with_context(|| format!("failed to save screenshot: {}", path.display()))?;
+    image::save_buffer(
+        path,
+        &rgb,
+        display_width,
+        display_height,
+        image::ColorType::Rgb8,
+    )
+    .with_context(|| format!("failed to save screenshot: {}", path.display()))?;
     info!("Screenshot saved to: {}", path.display());
     Ok(())
 }
