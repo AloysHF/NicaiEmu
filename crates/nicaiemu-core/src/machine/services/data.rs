@@ -77,6 +77,44 @@ impl NicaiMachine {
     }
 
     pub(crate) fn load_main_resource_package(&mut self, package: u32) {
+        if !self.resources.is_empty() {
+            if self.resource_data.is_empty() {
+                let resources = self.resources.clone();
+                self.resource_data.reserve(resources.len());
+                self.resource_names.reserve(resources.len());
+                for resource in resources {
+                    let data = self.allocate(resource.data.len().max(1) as u32);
+                    self.memory.write_bytes(data, &resource.data);
+                    self.resource_data.push(data);
+
+                    let name = self.allocate_gbk_string(&resource.name);
+                    self.resource_names.push(name);
+                }
+            }
+
+            let count = self.resources.len().min(u16::MAX as usize);
+            let names = self.allocate((count * 4) as u32);
+            let offsets = self.allocate((count * 4) as u32);
+            let ids = self.allocate((count * 2) as u32);
+            for index in 0..count {
+                self.memory
+                    .w32(names + index as u32 * 4, self.resource_names[index]);
+                self.memory
+                    .w32(offsets + index as u32 * 4, self.resource_data[index]);
+                self.memory.w16(ids + index as u32 * 2, index as u16);
+            }
+            self.memory.w8(package, 1);
+            self.memory.w16(package + 8, count as u16);
+            self.memory.w32(package + 12, names);
+            self.memory.w32(package + 16, offsets);
+            self.memory.w32(package + 20, ids);
+            self.memory.w32(package + 24, 0);
+            self.memory.w32(package + 96, 0);
+            debug!("loaded {count} CBE resources into guest memory");
+        } else {
+            warn!("CBE main resource package is empty");
+        }
+
         if !self.resource_packages.is_empty() {
             let packages = self.resource_packages.clone();
             let child_count = self.memory.r16(package + 10) as u32;
@@ -102,45 +140,7 @@ impl NicaiMachine {
                 loaded += 1;
             }
             debug!("loaded {loaded} named CBE resource packages into guest memory");
-            return;
         }
-        if self.resources.is_empty() {
-            warn!("CBE main resource package is empty");
-            return;
-        }
-        if self.resource_data.is_empty() {
-            let resources = self.resources.clone();
-            self.resource_data.reserve(resources.len());
-            self.resource_names.reserve(resources.len());
-            for resource in resources {
-                let data = self.allocate(resource.data.len().max(1) as u32);
-                self.memory.write_bytes(data, &resource.data);
-                self.resource_data.push(data);
-
-                let name = self.allocate_gbk_string(&resource.name);
-                self.resource_names.push(name);
-            }
-        }
-
-        let count = self.resources.len().min(u16::MAX as usize);
-        let names = self.allocate((count * 4) as u32);
-        let offsets = self.allocate((count * 4) as u32);
-        let ids = self.allocate((count * 2) as u32);
-        for index in 0..count {
-            self.memory
-                .w32(names + index as u32 * 4, self.resource_names[index]);
-            self.memory
-                .w32(offsets + index as u32 * 4, self.resource_data[index]);
-            self.memory.w16(ids + index as u32 * 2, index as u16);
-        }
-        self.memory.w8(package, 1);
-        self.memory.w16(package + 8, count as u16);
-        self.memory.w32(package + 12, names);
-        self.memory.w32(package + 16, offsets);
-        self.memory.w32(package + 20, ids);
-        self.memory.w32(package + 24, 0);
-        self.memory.w32(package + 96, 0);
-        debug!("loaded {count} CBE resources into guest memory");
     }
 
     fn populate_guest_resource_package(
