@@ -100,10 +100,14 @@
     "hero.download": { zh: "下载 Release", en: "Download Release" },
     "hero.source": { zh: "查看源码 ↗", en: "View Source ↗" },
     "hero.note": { zh: "NicaiEmu 实际运行画面", en: "Actual NicaiEmu output" },
+    "hero.title": {
+      zh: "让尘封的<span class=\"accent\">手机游戏</span><br>在现代设备上重生",
+      en: "Bring forgotten <span class=\"accent\">phone games</span><br>back to life on modern devices",
+    },
     "about.title": { zh: "什么是 Nicai / MStar 游戏？", en: "What are Nicai / MStar games?" },
     "about.p1": {
-      zh: "Nicai（尼采）是 MStar 时代功能手机的游戏平台。游戏以 .CBE 容器打包，内含 ARM/Thumb 可执行代码与场景、地图、图片、音频等资源，通过厂商固件服务与硬件交互。这类游戏一度只能在特定手机上运行。",
-      en: "Nicai was the game platform on MStar feature phones. Games ship as .CBE containers holding ARM/Thumb code plus scene, map, image, and audio resources, talking to the hardware through vendor firmware services. They once ran only on specific handsets.",
+      zh: "Nicai（尼采）是 MStar 时代功能手机的游戏平台。游戏以 <strong>.CBE</strong> 容器打包，内含 ARM/Thumb 可执行代码与场景、地图、图片、音频等资源，通过厂商固件服务与硬件交互。这类游戏一度只能在特定手机上运行。",
+      en: "Nicai was the game platform on MStar feature phones. Games ship as <strong>.CBE</strong> containers holding ARM/Thumb code plus scene, map, image, and audio resources, talking to the hardware through vendor firmware services. They once ran only on specific handsets.",
     },
     "stats.games": { zh: "语料验证", en: "Games Verified" },
     "stats.gamesSub": { zh: "启动帧 100% 出图", en: "100% boot-frame output" },
@@ -186,7 +190,7 @@
       var key = node.getAttribute("data-i18n");
       var entry = I18N[key];
       if (entry && entry[lang]) {
-        node.textContent = entry[lang];
+        node.innerHTML = entry[lang];
       }
     });
   }
