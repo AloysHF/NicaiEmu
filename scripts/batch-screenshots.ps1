@@ -13,7 +13,7 @@
 
 .PARAMETER InstructionLimit
     Maximum guest instructions allowed during boot and each frame.
-    Default: 20000000.
+    Default: 100000000.
 
 .PARAMETER Binary
     Path to the nicaiemu executable. Default: the release build output.
@@ -29,7 +29,7 @@ param(
     [ValidateRange(0, [int]::MaxValue)]
     [int]$Frames = 120,
     [ValidateRange(1, [uint64]::MaxValue)]
-    [uint64]$InstructionLimit = 20000000,
+    [uint64]$InstructionLimit = 100000000,
     [string]$Binary = "",
     [string]$GameDirectory = "",
     [string]$OutputDirectory = ""

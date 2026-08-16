@@ -1757,6 +1757,52 @@ mod tests {
 
     #[test]
     #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_leidian_attack_flow_stays_ready_with_default_budget() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("雷电.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        // Navigate: menu -> flight select -> confirm popup -> sortie ->
+        // second confirm popup -> sortie. The second sortie starts the stage
+        // intro, whose single heavy render frame previously exceeded the
+        // default callback budget and aborted the machine.
+        let taps = [
+            (30, 0, 0, true),      // key 14 opens the flight-select screen.
+            (60, 30, 375, false),  // Tap the bottom-left confirm checkmark.
+            (90, 38, 214, false),  // Tap the sortie button in the popup.
+            (150, 30, 375, false), // Tap the checkmark again.
+            (180, 38, 214, false), // Tap sortie to start the stage.
+        ];
+        for frame in 0..300 {
+            let event = taps
+                .iter()
+                .find(|&&(event_frame, _, _, _)| event_frame == frame)
+                .copied();
+            if let Some((_, x, y, key_press)) = event {
+                if key_press {
+                    machine.set_key(14, true);
+                } else {
+                    machine.set_pointer(x, y, true);
+                }
+            }
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            if let Some((_, x, y, key_press)) = event {
+                if key_press {
+                    machine.set_key(14, false);
+                } else {
+                    machine.set_pointer(x, y, false);
+                }
+            }
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
     fn real_content_completes_high_cost_idle_frames_with_default_budget() {
         let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
         for (game, frames) in [

@@ -32,4 +32,9 @@ pub use save_state::{decode_machine, encode_machine, SERIALIZED_SIZE};
 pub const GUEST_FRAME_RATE: u32 = 10;
 
 /// Default instruction budget for each guest callback.
-pub const DEFAULT_INSTRUCTION_LIMIT: u64 = 20_000_000;
+///
+/// Some games legitimately draw very heavy single frames; for example 雷电
+/// renders its stage-intro animation (100 blend passes) in one callback,
+/// which needs roughly 70M guest instructions. The budget must stay high
+/// enough for those frames while still bounding runaway guest loops.
+pub const DEFAULT_INSTRUCTION_LIMIT: u64 = 100_000_000;
