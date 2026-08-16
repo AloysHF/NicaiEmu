@@ -2,6 +2,12 @@
 
 CBE applications in the local validation corpus were run by the standalone emulator with default or application-specific capture timing. Every screenshot below is the RGB565 framebuffer produced by guest execution. If an application stops, times out, or leaves a single-color framebuffer, the batch does not create a screenshot. A successful startup capture does not guarantee that every screen or gameplay path works correctly.
 
+Games packaged for the original phone's rotated landscape display present the
+240×400 framebuffer rotated 90 degrees counterclockwise as 400×240. The
+rotation is resolved automatically from a content-identity profile keyed by
+archive CRC-32 and size (not by file name), so the screenshots below match how
+the titles appear on the original hardware.
+
 ## Supported Application Profile
 
 The current core recognizes little- and big-endian ARM/Thumb CBE executables designed for a 240×400 display, including variable segment headers and fixed-address manager-directory variants. It implements the firmware subsets needed for memory blocks, native and installed data packages, image and text drawing, screen changes, sandboxed guest files, timers, and keypad input.

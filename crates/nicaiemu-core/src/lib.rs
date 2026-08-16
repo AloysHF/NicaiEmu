@@ -22,7 +22,10 @@ mod runtime;
 pub use audio_engine::{AudioDiagnostics, AudioEngine, AUDIO_SAMPLE_RATE};
 pub use cbe::{CbeArchive, ResourceEntry, ResourceType};
 pub use image_decoder::DecodedImage;
-pub use machine::{CbeExecutable, MachineState, NicaiMachine};
+pub use machine::{
+    rotation_for_archive, CbeExecutable, MachineState, NicaiMachine, Rotation, FRAME_HEIGHT,
+    FRAME_WIDTH,
+};
 pub use save_state::{decode_machine, encode_machine, SERIALIZED_SIZE};
 
 /// Guest screen scheduler frequency used by the original runtime.

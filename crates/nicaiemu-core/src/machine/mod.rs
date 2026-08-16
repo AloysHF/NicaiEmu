@@ -32,6 +32,123 @@ use packages::{
 };
 use virtual_fs::VirtualFileSystem;
 
+/// Native guest framebuffer width in pixels.
+pub const FRAME_WIDTH: u32 = 240;
+/// Native guest framebuffer height in pixels.
+pub const FRAME_HEIGHT: u32 = 400;
+
+/// Display rotation applied to the guest framebuffer before presentation.
+///
+/// Some games render a landscape (400x240) layout into the portrait
+/// 240x400 framebuffer, matching the LCD rotation used by the original
+/// phone hardware. The emulator presents the raw framebuffer, so those
+/// games need a 90-degree rotation to display upright.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Rotation {
+    /// Resolve automatically from the guest's rendering (default).
+    #[default]
+    Auto,
+    /// Present the framebuffer as-is (portrait 240x400).
+    None,
+    /// Rotate the framebuffer 90 degrees clockwise (400x240 output).
+    Cw,
+    /// Rotate the framebuffer 90 degrees counterclockwise (400x240 output).
+    Ccw,
+}
+
+impl Rotation {
+    /// Whether this rotation changes the output dimensions.
+    pub fn swaps_dimensions(self) -> bool {
+        matches!(self, Rotation::Cw | Rotation::Ccw)
+    }
+
+    /// Map a presented display coordinate back to a guest framebuffer
+    /// coordinate, used to translate pointer input on rotated output.
+    pub fn unrotate(self, display_x: i32, display_y: i32) -> (i32, i32) {
+        match self {
+            Rotation::Auto | Rotation::None => (display_x, display_y),
+            Rotation::Cw => (display_y, (FRAME_HEIGHT - 1) as i32 - display_x),
+            Rotation::Ccw => ((FRAME_WIDTH - 1) as i32 - display_y, display_x),
+        }
+    }
+}
+
+/// Content-identity rotation profile for the local CBE corpus.
+///
+/// These games draw landscape (400x240) art pre-rotated into the portrait
+/// 240x400 framebuffer and rely on the original phone's rotated LCD output,
+/// so the emulator must present the raw framebuffer rotated 90 degrees
+/// counterclockwise. Keying by archive CRC-32 plus byte length instead of the
+/// file name keeps the profile valid across renames.
+const LANDSCAPE_ROTATION_PROFILE: &[(u32, u64)] = &[
+    (0xEE5A53AC, 341737),  // 暴力摩托
+    (0x7A5C0A30, 728876),  // 捕鱼猎人
+    (0x50528857, 961146),  // 法老祖玛2
+    (0x9C5E0674, 958874),  // 愤怒的小鸟
+    (0x52DAD535, 611925),  // 疯狂捕鸟
+    (0xF3283516, 606493),  // 疯狂斗地主
+    (0x7BCDA1EB, 396952),  // 疯狂企鹅大冒险
+    (0x4A849388, 910806),  // 机场指挥部
+    (0x701C7D4B, 539016),  // 僵尸先生
+    (0x5F320C34, 1413319), // 开心大富翁
+    (0x8EDDE44F, 1292332), // 美女桌球
+    (0x282FE73D, 1143317), // 三国群殴传
+    (0xC6488351, 400101),  // 士兵突袭
+    (0xBC3CD75C, 734986),  // 水果达人
+    (0x2CB6103B, 1074317), // 吸血鬼猎人
+    (0x145C46B4, 1016330), // 小鸟愤怒冬季版
+    (0x5E8B5904, 319424),  // 幸运扑克机
+];
+
+/// Resolve the automatic rotation from the content-identity profile.
+pub fn rotation_for_archive(bytes: &[u8]) -> Rotation {
+    let crc = crc32fast::hash(bytes);
+    let length = bytes.len() as u64;
+    if LANDSCAPE_ROTATION_PROFILE
+        .iter()
+        .any(|&(expected_crc, expected_length)| crc == expected_crc && length == expected_length)
+    {
+        Rotation::Ccw
+    } else {
+        Rotation::None
+    }
+}
+
+/// Rotate a row-major pixel buffer 90 degrees for presentation.
+///
+/// The output keeps the same pixel count but swaps dimensions: a `width` x
+/// `height` source becomes `height` x `width`. Clockwise rotation maps source
+/// (x, y) to output (height - 1 - y, x); counterclockwise maps it to
+/// (y, width - 1 - x).
+pub(crate) fn rotate_frame(
+    pixels: &[u32],
+    width: u32,
+    height: u32,
+    rotation: Rotation,
+) -> Vec<u32> {
+    match rotation {
+        Rotation::Auto | Rotation::None => pixels.to_vec(),
+        Rotation::Cw => {
+            let mut rotated = Vec::with_capacity(pixels.len());
+            for y in 0..width {
+                for x in 0..height {
+                    rotated.push(pixels[((height - 1 - x) * width + y) as usize]);
+                }
+            }
+            rotated
+        }
+        Rotation::Ccw => {
+            let mut rotated = Vec::with_capacity(pixels.len());
+            for y in 0..width {
+                for x in 0..height {
+                    rotated.push(pixels[(x * width + (width - 1 - y)) as usize]);
+                }
+            }
+            rotated
+        }
+    }
+}
+
 const ROM_BASE: u32 = 0x0100_0000;
 const STACK_BASE: u32 = 0x0200_0000;
 const STACK_SIZE: usize = 0x10_0000;
@@ -580,6 +697,13 @@ pub struct NicaiMachine {
     auto_bgm_data: Option<Vec<u8>>,
     #[serde(skip, default)]
     auto_bgm_gave_way: bool,
+    // Display rotation is a frontend presentation concern rather than guest
+    // state; frontends re-apply it after load/reset.
+    #[serde(skip, default)]
+    rotation: Rotation,
+    /// Resolved rotation after automatic landscape detection.
+    #[serde(skip, default)]
+    effective_rotation: Rotation,
     pointer: PointerState,
     timers: Vec<GuestTimer>,
     resources: Vec<HostResource>,
@@ -680,6 +804,8 @@ impl NicaiMachine {
             auto_bgm: false,
             auto_bgm_data: None,
             auto_bgm_gave_way: false,
+            rotation: Rotation::Auto,
+            effective_rotation: Rotation::None,
             pointer: PointerState::new(),
             timers: vec![
                 GuestTimer {
@@ -743,6 +869,8 @@ impl NicaiMachine {
         };
         machine.initialize_tables();
         machine.initialize_screen();
+        // Resolve the default Auto rotation from the content-identity profile.
+        machine.effective_rotation = rotation_for_archive(archive.bytes());
         Ok(machine)
     }
 
@@ -1235,7 +1363,40 @@ impl NicaiMachine {
         self.pointer.set(x, y, down);
     }
 
-    /// Copy the current 240x400 RGB565 screen into 0x00RRGGBB pixels.
+    /// Set the display rotation applied by [`NicaiMachine::frame_pixels`].
+    pub fn set_rotation(&mut self, rotation: Rotation) {
+        self.rotation = rotation;
+        if rotation != Rotation::Auto {
+            self.effective_rotation = rotation;
+        }
+    }
+
+    /// The display rotation applied by [`NicaiMachine::frame_pixels`].
+    pub fn rotation(&self) -> Rotation {
+        self.rotation
+    }
+
+    /// The resolved rotation currently applied to output.
+    pub fn effective_rotation(&self) -> Rotation {
+        self.effective_rotation
+    }
+
+    /// Presented output size in pixels after rotation.
+    pub fn display_size(&self) -> (u32, u32) {
+        if self.effective_rotation.swaps_dimensions() {
+            (FRAME_HEIGHT, FRAME_WIDTH)
+        } else {
+            (FRAME_WIDTH, FRAME_HEIGHT)
+        }
+    }
+
+    /// Map a presented display coordinate back to guest framebuffer space.
+    pub fn display_to_framebuffer(&self, display_x: i32, display_y: i32) -> (i32, i32) {
+        self.effective_rotation.unrotate(display_x, display_y)
+    }
+
+    /// Copy the current RGB565 framebuffer into 0x00RRGGBB pixels, applying
+    /// the configured display rotation.
     pub fn frame_pixels(&mut self) -> Vec<u32> {
         let mut pixels = Vec::with_capacity(240 * 400);
         for index in 0..(240 * 400) as u32 {
@@ -1245,7 +1406,7 @@ impl NicaiMachine {
             let blue = (color & 0x1f) as u32;
             pixels.push(((red * 255 / 31) << 16) | ((green * 255 / 63) << 8) | (blue * 255 / 31));
         }
-        pixels
+        rotate_frame(&pixels, FRAME_WIDTH, FRAME_HEIGHT, self.effective_rotation)
     }
 
     /// Pull up to `max_frames` stereo frames of guest audio.
@@ -1296,6 +1457,50 @@ impl NicaiMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotate_frame_swaps_dimensions_and_keeps_orientation() {
+        // 2x3 source: rows map to columns when rotated.
+        // Layout: (0,0)=1 (1,0)=2 / (0,1)=3 (1,1)=4 / (0,2)=5 (1,2)=6.
+        let source = vec![1, 2, 3, 4, 5, 6];
+
+        // Clockwise: source (x, y) -> output (height - 1 - y, x).
+        let cw = rotate_frame(&source, 2, 3, Rotation::Cw);
+        assert_eq!(cw.len(), 6);
+        assert_eq!(cw, vec![5, 3, 1, 6, 4, 2]);
+
+        // Counterclockwise: source (x, y) -> output (y, width - 1 - x).
+        let ccw = rotate_frame(&source, 2, 3, Rotation::Ccw);
+        assert_eq!(ccw.len(), 6);
+        assert_eq!(ccw, vec![2, 4, 6, 1, 3, 5]);
+
+        // No rotation returns an untouched copy.
+        assert_eq!(rotate_frame(&source, 2, 3, Rotation::None), source);
+    }
+
+    #[test]
+    fn rotation_unrotate_maps_display_back_to_framebuffer() {
+        assert_eq!(Rotation::None.unrotate(10, 20), (10, 20));
+        // Clockwise output pixel (x, y) came from framebuffer (y, 399 - x).
+        assert_eq!(Rotation::Cw.unrotate(10, 20), (20, 389));
+        assert_eq!(Rotation::Cw.unrotate(399, 239), (239, 0));
+        // Counterclockwise output pixel (x, y) came from framebuffer
+        // (239 - y, x).
+        assert_eq!(Rotation::Ccw.unrotate(10, 20), (219, 10));
+        assert_eq!(Rotation::Ccw.unrotate(399, 239), (0, 399));
+    }
+
+    #[test]
+    fn rotation_profile_rejects_unknown_content() {
+        assert_eq!(
+            rotation_for_archive(b"arbitrary game bytes"),
+            Rotation::None
+        );
+        assert_eq!(rotation_for_archive(b""), Rotation::None);
+        // The profile lookup is content-keyed: a different length with the
+        // same CRC must not match.
+        assert_ne!(rotation_for_archive(&[0; 341737]), Rotation::Ccw);
+    }
 
     #[test]
     fn manager_initializers_use_firmware_table_lengths() {
