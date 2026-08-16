@@ -46,7 +46,7 @@ nicaiemu [OPTIONS] <GAME_PATH>
 | `--volume <VOLUME>` | 0–100 | `100` | Audio volume. |
 | `--headless` | flag | off | Run without opening a window. |
 | `--frames <COUNT>` | integer | `60` | Frames to run in headless mode. |
-| `--instruction-limit <COUNT>` | integer | `20000000` | Maximum guest instructions per callback. |
+| `--instruction-limit <COUNT>` | integer | `100000000` | Maximum guest instructions per callback. |
 | `-S, --screenshot <PATH>` | path | — | Run headlessly, save a PNG screenshot, and exit. |
 | `--screenshot-frames <COUNT>` | integer | `30` | Frames to run before capture. |
 | `--save-state <PATH>` | path | — | Write a save state to this path when the emulator exits. |
