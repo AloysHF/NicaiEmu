@@ -6,16 +6,86 @@
 
   var REPO = "https://raw.githubusercontent.com/jiangxincode/NicaiEmu/master";
 
-  // Selected gallery titles that exist under docs/images/.
-  var GALLERY = [
+  // All portrait (240x400) screenshots under docs/images/, featured first.
+  var PORTRAIT = [
     "魔塔",
-    "恶魔城",
+    "孤岛",
+    "众神之战",
+    "鬼吹灯",
+    "雷霆战机",
+    "暴打小猪",
     "打地鼠",
-    "愤怒的小鸟",
+    "打火机",
+    "大家来数钱",
+    "电子邮件",
+    "动感骰子",
+    "恶魔城",
+    "恶魔城登录版",
     "割绳子",
-    "疯狂斗地主",
+    "割绳子冬季版",
     "果蔬连连看",
+    "皇牌空战",
+    "火辣美女视频",
+    "激情砖块",
+    "极品飞车2012",
+    "江湖Online",
+    "雷电",
+    "马戏团",
+    "猫和老鼠",
+    "魔鬼理发师",
+    "魔兽塔防",
+    "牧场物语",
+    "碰嘭球",
+    "枪之荣誉",
+    "热辣美图",
+    "忍者跳跃",
+    "时间同步",
+    "世纪佳缘",
+    "天气精灵",
+    "涂鸦跳跃",
+    "歪歪猫发条城历险记V100",
+    "万年历",
+    "武林外传(新品)",
+    "武林外传V10",
+    "现代情趣大全",
+    "消息盒子",
+    "小酷",
+    "笑死人",
+    "新闻",
+    "性爱宝典",
+    "性爱高手",
+    "雄霸天下",
+    "炫酷音乐彩铃",
+    "血剑Online",
+    "移淘网",
+    "英汉词典",
+    "在线书城",
+    "在线音乐",
+    "战争机器",
+    "钻石迷情3",
+    "AppStore",
+    "Google地图",
+  ];
+
+  // All landscape (400x240) screenshots under docs/images/, featured first.
+  var LANDSCAPE = [
+    "暴力摩托",
     "捕鱼猎人",
+    "愤怒的小鸟",
+    "僵尸先生",
+    "水果达人",
+    "法老祖玛2",
+    "疯狂捕鸟",
+    "疯狂斗地主",
+    "疯狂企鹅大冒险",
+    "机场指挥部",
+    "开心大富翁",
+    "美女桌球",
+    "三国群殴传",
+    "士兵突袭",
+    "吸血鬼猎人",
+    "小鸟愤怒冬季版",
+    "幸运扑克机",
   ];
 
   var I18N = {
@@ -76,7 +146,9 @@
       en: "RGB888 output, RetroPad mapping, pointer/touch input, audio, and save states, ready to use.",
     },
     "gallery.title": { zh: "游戏画廊", en: "Game Gallery" },
-    "gallery.sub": { zh: "75 款本地语料 · 每帧都由客机真实渲染", en: "75 local titles · every frame rendered by the guest" },
+    "gallery.sub": { zh: "74 款本地语料 · 每帧都由客机真实渲染", en: "74 local titles · every frame rendered by the guest" },
+    "gallery.portrait": { zh: "竖版", en: "Portrait" },
+    "gallery.landscape": { zh: "横版", en: "Landscape" },
     "gallery.more": { zh: "完整列表见 Game Compatibility 文档", en: "See the Game Compatibility doc for the full list" },
     "arch.title": { zh: "技术架构", en: "Architecture" },
     "arch.sub": { zh: "平台无关核心，双前端共享同一模拟逻辑", en: "Platform-independent core shared by two frontends" },
@@ -200,18 +272,175 @@
     if (!grid) {
       return;
     }
-    GALLERY.forEach(function (name) {
-      var figure = document.createElement("figure");
-      figure.className = "gallery-item";
-      var img = document.createElement("img");
-      img.loading = "lazy";
-      img.src = imageUrl(name);
-      img.alt = name;
-      var caption = document.createElement("figcaption");
-      caption.textContent = name;
-      figure.appendChild(img);
-      figure.appendChild(caption);
-      grid.appendChild(figure);
+    var groups = [
+      { key: "gallery.portrait", cssClass: "", games: PORTRAIT },
+      { key: "gallery.landscape", cssClass: "landscape", games: LANDSCAPE },
+    ];
+    grid.innerHTML = "";
+    groups.forEach(function (group) {
+      if (group.games.length === 0) {
+        return;
+      }
+      var groupEl = document.createElement("div");
+      groupEl.className = group.cssClass
+        ? "gallery-group " + group.cssClass
+        : "gallery-group";
+      var title = document.createElement("h3");
+      title.className = "gallery-group-title";
+      title.setAttribute("data-i18n", group.key);
+      title.textContent = I18N[group.key][currentLang];
+      groupEl.appendChild(title);
+      groupEl.appendChild(buildCarousel(group));
+      grid.appendChild(groupEl);
+    });
+    initCarousel();
+  }
+
+  function buildCarousel(group) {
+    var wrapper = document.createElement("div");
+    wrapper.className = "carousel-wrapper";
+
+    var prev = document.createElement("button");
+    prev.type = "button";
+    prev.className = "carousel-btn carousel-prev";
+    prev.setAttribute("aria-label", "Previous");
+    prev.innerHTML = "&#8249;";
+
+    var viewport = document.createElement("div");
+    viewport.className = "carousel-viewport";
+
+    var track = document.createElement("div");
+    track.className = "carousel-track";
+    group.games.forEach(function (name) {
+        var figure = document.createElement("figure");
+        figure.className = group.cssClass
+          ? "gallery-item " + group.cssClass
+          : "gallery-item";
+        var img = document.createElement("img");
+        img.loading = "lazy";
+        img.src = imageUrl(name);
+        img.alt = name;
+        var caption = document.createElement("figcaption");
+        caption.textContent = name;
+        figure.appendChild(img);
+        figure.appendChild(caption);
+        track.appendChild(figure);
+    });
+    viewport.appendChild(track);
+
+    var next = document.createElement("button");
+    next.type = "button";
+    next.className = "carousel-btn carousel-next";
+    next.setAttribute("aria-label", "Next");
+    next.innerHTML = "&#8250;";
+
+    var dots = document.createElement("div");
+    dots.className = "carousel-dots";
+
+    wrapper.appendChild(prev);
+    wrapper.appendChild(viewport);
+    wrapper.appendChild(next);
+    wrapper.appendChild(dots);
+    return wrapper;
+  }
+
+  function initCarousel() {
+    document.querySelectorAll(".carousel-wrapper").forEach(function (wrapper) {
+      var viewport = wrapper.querySelector(".carousel-viewport");
+      var track = wrapper.querySelector(".carousel-track");
+      var prevBtn = wrapper.querySelector(".carousel-prev");
+      var nextBtn = wrapper.querySelector(".carousel-next");
+      var dotsBox = wrapper.querySelector(".carousel-dots");
+      if (!viewport || !track || !dotsBox) {
+        return;
+      }
+
+      var page = 0;
+      var resizeTimer = null;
+
+      function getCardsPerView() {
+        return window.innerWidth > 768 ? 4 : (window.innerWidth > 480 ? 2 : 1);
+      }
+
+      function getTotalPages() {
+        var cards = track.querySelectorAll(".gallery-item");
+        return Math.max(1, Math.ceil(cards.length / getCardsPerView()));
+      }
+
+      function renderDots() {
+        dotsBox.innerHTML = "";
+        for (var d = 0; d < getTotalPages(); d++) {
+          var dot = document.createElement("span");
+          dot.className = "carousel-dot";
+          dot.setAttribute("data-page", d);
+          (function (idx) {
+            dot.addEventListener("click", function () {
+              goTo(idx);
+            });
+          })(d);
+          dotsBox.appendChild(dot);
+        }
+      }
+
+      function goTo(p) {
+        var total = getTotalPages();
+        page = Math.max(0, Math.min(p, total - 1));
+        var cpv = getCardsPerView();
+        var card = track.querySelector(".gallery-item");
+        var gap = parseFloat(window.getComputedStyle(track).columnGap) || 0;
+        var pageWidth = card ? cpv * (card.offsetWidth + gap) : viewport.offsetWidth;
+        var maxOffset = Math.max(0, track.scrollWidth - viewport.clientWidth);
+        var offset = Math.min(page * pageWidth, maxOffset);
+        track.style.transform = "translateX(-" + offset + "px)";
+
+        var dots = dotsBox.querySelectorAll(".carousel-dot");
+        dots.forEach(function (dot, i) {
+          dot.classList.toggle("active", i === page);
+        });
+      }
+
+      if (prevBtn) {
+        prevBtn.addEventListener("click", function () {
+          goTo(page - 1);
+        });
+      }
+      if (nextBtn) {
+        nextBtn.addEventListener("click", function () {
+          goTo(page + 1);
+        });
+      }
+
+      // Touch / swipe support.
+      var startX = 0;
+      viewport.addEventListener(
+        "touchstart",
+        function (e) {
+          startX = e.touches[0].clientX;
+        },
+        { passive: true }
+      );
+      viewport.addEventListener(
+        "touchend",
+        function (e) {
+          var diff = startX - e.changedTouches[0].clientX;
+          if (Math.abs(diff) > 50) {
+            goTo(page + (diff > 0 ? 1 : -1));
+          }
+        },
+        { passive: true }
+      );
+
+      // Recompute layout when the viewport changes.
+      window.addEventListener("resize", function () {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () {
+          renderDots();
+          goTo(page);
+        }, 150);
+      });
+
+      renderDots();
+      goTo(0);
     });
   }
 

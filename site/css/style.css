@@ -447,13 +447,36 @@ nav {
 
 /* Gallery */
 
-.gallery-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+.gallery-group + .gallery-group {
+  margin-top: 2.6rem;
+}
+
+.gallery-group-title {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  margin-bottom: 1rem;
+}
+
+.carousel-wrapper {
+  position: relative;
+}
+
+.carousel-viewport {
+  overflow: hidden;
+}
+
+.carousel-track {
+  display: flex;
   gap: 1rem;
+  transition: transform 0.45s ease;
+  will-change: transform;
 }
 
 .gallery-item {
+  flex: 0 0 calc((100% - 3rem) / 4);
   border-radius: 14px;
   overflow: hidden;
   border: 1px solid var(--panel-border);
@@ -467,10 +490,69 @@ nav {
   display: block;
 }
 
+.gallery-item.landscape img {
+  aspect-ratio: 400 / 240;
+}
+
 .gallery-item figcaption {
   padding: 0.45rem 0.7rem;
   font-size: 0.85rem;
   text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.carousel-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.carousel-btn:hover {
+  background: var(--accent);
+  color: #10151a;
+  border-color: var(--accent);
+}
+
+.carousel-prev {
+  left: -16px;
+}
+
+.carousel-next {
+  right: -16px;
+}
+
+.carousel-dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 1rem;
+}
+
+.carousel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--panel-border);
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.carousel-dot.active {
+  background: var(--accent);
+  transform: scale(1.25);
 }
 
 .gallery-more {
@@ -669,10 +751,6 @@ footer {
   .stats-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-
-  .gallery-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
 }
 
 @media (max-width: 620px) {
@@ -701,11 +779,19 @@ footer {
   .features-grid,
   .qs-grid,
   .stats-grid,
-  .gallery-grid {
-    grid-template-columns: 1fr;
-  }
-
   .footer-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .gallery-item {
+    flex: 0 0 calc((100% - 1rem) / 2);
+  }
+}
+
+@media (max-width: 480px) {
+  .gallery-item {
+    flex: 0 0 100%;
   }
 }
