@@ -487,7 +487,7 @@ fn decode_wav(data: &[u8]) -> Result<(Vec<f32>, u32, u32)> {
             b"data" => {
                 let available = data.len().saturating_sub(body);
                 let sample_count = (size / 2).min(available / 2);
-                for chunk in data[body..body + sample_count * 2].chunks_exact(2) {
+                for chunk in data[body..body + sample_count * 2].as_chunks::<2>().0 {
                     samples.push(i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0);
                 }
                 found_data = true;

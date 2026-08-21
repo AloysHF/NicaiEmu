@@ -94,7 +94,7 @@ fn normalize_firmware_png(data: &[u8]) -> Result<Vec<u8>> {
                 anyhow::bail!("Firmware PNG palette length is invalid");
             }
             let palette = &data[position + 8..position + 8 + source_length];
-            for color in palette.chunks_exact(2) {
+            for color in palette.as_chunks::<2>().0 {
                 let (red, green, blue) = rgb565_to_rgb888(u16::from_be_bytes([color[0], color[1]]));
                 normalized.extend_from_slice(&[red, green, blue]);
             }

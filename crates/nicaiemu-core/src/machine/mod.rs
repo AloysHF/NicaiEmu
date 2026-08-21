@@ -463,14 +463,14 @@ fn skip_marker(data: &[u8], mut cursor: usize) -> Result<usize> {
 }
 
 fn checksum_le(data: &[u8]) -> u32 {
-    data.chunks_exact(4).fold(0u32, |sum, bytes| {
-        sum.wrapping_add(u32::from_le_bytes(bytes.try_into().unwrap()))
+    data.as_chunks::<4>().0.iter().fold(0u32, |sum, bytes| {
+        sum.wrapping_add(u32::from_le_bytes(*bytes))
     })
 }
 
 fn checksum_be(data: &[u8]) -> u32 {
-    data.chunks_exact(4).fold(0u32, |sum, bytes| {
-        sum.wrapping_add(u32::from_be_bytes(bytes.try_into().unwrap()))
+    data.as_chunks::<4>().0.iter().fold(0u32, |sum, bytes| {
+        sum.wrapping_add(u32::from_be_bytes(*bytes))
     })
 }
 

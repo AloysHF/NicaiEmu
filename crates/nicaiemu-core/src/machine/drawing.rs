@@ -312,7 +312,9 @@ impl NicaiMachine {
         if service_trace_enabled(4, 49) {
             let opaque = decoded
                 .data
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|pixel| pixel[3] >= 128)
                 .count();
             eprintln!(
