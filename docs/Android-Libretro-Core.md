@@ -24,7 +24,7 @@ To update an installed core:
 If the Online Updater is not available, you can install the core manually:
 
 1. **Download** `nicaiemu-android-libretro.tar.gz` from the
-   [Releases](https://github.com/jiangxincode/NicaiEmu/releases) page. It
+   [Releases](https://github.com/AloysHF/NicaiEmu/releases) page. It
    contains per-ABI `nicaiemu_libretro_android.so` files for `arm64-v8a`,
    `armeabi-v7a`, `x86` and `x86_64`.
 2. **Install the core**: copy the `nicaiemu_libretro_android.so` matching

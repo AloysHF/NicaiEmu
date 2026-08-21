@@ -4,7 +4,7 @@
 (function () {
   "use strict";
 
-  var REPO = "https://raw.githubusercontent.com/jiangxincode/NicaiEmu/master";
+  var REPO = "https://raw.githubusercontent.com/AloysHF/NicaiEmu/master";
 
   // All portrait (240x400) screenshots under docs/images/, featured first.
   var PORTRAIT = [

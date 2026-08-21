@@ -14,7 +14,7 @@ loading games, keyboard controls, headless mode, and all command-line options.
 ## Installation
 
 Download the latest standalone binary for your platform from the
-[Releases](https://github.com/jiangxincode/NicaiEmu/releases) page.
+[Releases](https://github.com/AloysHF/NicaiEmu/releases) page.
 
 You can also build it from source:
 

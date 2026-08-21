@@ -63,7 +63,7 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
 
 ### 5. Review and publish the release
 
-1. Go to [Releases](https://github.com/jiangxincode/NicaiEmu/releases)
+1. Go to [Releases](https://github.com/AloysHF/NicaiEmu/releases)
 2. Find the draft release created by CI
 3. Review the auto-generated changelog — edit if needed
 4. Verify all expected artifacts are attached:
@@ -92,7 +92,7 @@ PR must be submitted to sync the changes upstream.
 
 ### CI build fails
 
-- Check the [Actions](https://github.com/jiangxincode/NicaiEmu/actions) tab
+- Check the [Actions](https://github.com/AloysHF/NicaiEmu/actions) tab
   for the failed run
 - The most common failure is a missing Linux build dependency — the CI installs
   `libasound2-dev`, `libx11-dev`, and `libxkbcommon-dev` automatically
@@ -111,7 +111,7 @@ git push origin v0.2.0
 ```
 
 If a draft release was already created by the failed run, delete it from the
-[Releases](https://github.com/jiangxincode/NicaiEmu/releases) page before
+[Releases](https://github.com/AloysHF/NicaiEmu/releases) page before
 re-pushing the tag, otherwise the new run may conflict with the existing draft.
 
 ### Release artifacts missing

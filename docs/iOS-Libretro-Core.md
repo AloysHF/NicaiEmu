@@ -17,7 +17,7 @@ CBE games on iPhone / iPad.
 - RetroArch 1.17.0 IPA
   ([official download](https://buildbot.libretro.com/stable/1.17.0/apple/ios-arm64/RetroArch.ipa))
 - Download `nicaiemu-ios-libretro.tar.gz` from the
-  [Releases](https://github.com/jiangxincode/NicaiEmu/releases) page (when available).
+  [Releases](https://github.com/AloysHF/NicaiEmu/releases) page (when available).
 - A file manager and IPA signing app (e.g. ESign, SideStore, or AltStore)
 
 ### Step 1: Rename IPA to ZIP and extract
