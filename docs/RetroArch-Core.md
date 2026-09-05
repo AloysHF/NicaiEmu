@@ -39,6 +39,10 @@ frontend can display the core metadata and supported features.
 ## Supported Features
 
 - Video output using the RGB888 pixel format
+- Automatic landscape rotation: games packaged for the original phone's
+  rotated landscape LCD are presented at 400×240 (the same content-identity
+  profile the standalone frontend uses), with pointer taps mapped back to
+  guest coordinates
 - RetroPad input handling
 - `.CBE` content loading
 - Reset support that rebuilds the emulator state

@@ -8,8 +8,8 @@ use super::constants::*;
 use super::options;
 use super::types::*;
 use nicaiemu_core::{
-    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE,
-    DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
+    decode_machine, encode_machine, rotation_for_archive, CbeArchive, NicaiMachine,
+    AUDIO_SAMPLE_RATE, DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
 };
 use std::ffi::{c_char, c_void, CStr};
 use std::path::Path;
@@ -17,6 +17,10 @@ use std::ptr;
 
 const DISPLAY_WIDTH: u32 = 240;
 const DISPLAY_HEIGHT: u32 = 400;
+/// Frontend framebuffer bounds that fit both presented orientations: the
+/// portrait 240x400 display and the rotated 400x240 landscape layout.
+const MAX_DISPLAY_WIDTH: u32 = DISPLAY_HEIGHT;
+const MAX_DISPLAY_HEIGHT: u32 = DISPLAY_HEIGHT;
 const DISPLAY_FPS: f64 = GUEST_FRAME_RATE as f64;
 const PERFORMANCE_LEVEL: u32 = 3;
 /// Loaded emulator state shared by the libretro entry points.
@@ -31,6 +35,20 @@ struct Emulator {
 
 /// Global emulator instance.
 static mut EMULATOR: Option<Emulator> = None;
+
+/// Presented display size of the loaded content.
+///
+/// Portrait titles present the native 240x400 framebuffer; landscape titles
+/// resolved by the content-identity rotation profile present it rotated to
+/// 400x240. Falls back to the portrait display when no content is loaded.
+fn display_size() -> (u32, u32) {
+    unsafe {
+        EMULATOR
+            .as_ref()
+            .map(|emulator| emulator.machine.display_size())
+            .unwrap_or((DISPLAY_WIDTH, DISPLAY_HEIGHT))
+    }
+}
 
 // ============================================================
 // Callback registration
@@ -113,14 +131,15 @@ pub extern "C" fn retro_get_system_info(info: *mut retro_system_info) {
 
 #[no_mangle]
 pub extern "C" fn retro_get_system_av_info(info: *mut retro_system_av_info) {
+    let (base_width, base_height) = display_size();
     unsafe {
         (*info) = retro_system_av_info {
             geometry: retro_game_geometry {
-                base_width: DISPLAY_WIDTH,
-                base_height: DISPLAY_HEIGHT,
-                max_width: DISPLAY_WIDTH,
-                max_height: DISPLAY_HEIGHT,
-                aspect_ratio: DISPLAY_WIDTH as f32 / DISPLAY_HEIGHT as f32,
+                base_width,
+                base_height,
+                max_width: MAX_DISPLAY_WIDTH,
+                max_height: MAX_DISPLAY_HEIGHT,
+                aspect_ratio: base_width as f32 / base_height as f32,
             },
             timing: retro_system_timing {
                 fps: DISPLAY_FPS,
@@ -241,6 +260,7 @@ pub extern "C" fn retro_run() {
         }
 
         // Present the last valid guest framebuffer even after a stop.
+        let (display_width, display_height) = emulator.machine.display_size();
         let pixels: Vec<u32> = emulator
             .machine
             .frame_pixels()
@@ -249,9 +269,9 @@ pub extern "C" fn retro_run() {
             .collect();
         callbacks::video_refresh(
             pixels.as_ptr() as *const c_void,
-            DISPLAY_WIDTH,
-            DISPLAY_HEIGHT,
-            (DISPLAY_WIDTH * 4) as usize,
+            display_width,
+            display_height,
+            (display_width * 4) as usize,
         );
 
         let samples = emulator
@@ -445,13 +465,17 @@ fn update_phone_keys(emulator: &mut Emulator) {
         .set_key(13, joypad(RETRO_DEVICE_ID_JOYPAD_Y));
 }
 
-/// Map RetroArch pointer coordinates (-0x7fff..0x7fff) to the 240x400 screen.
+/// Map RetroArch pointer coordinates (-0x7fff..0x7fff) to the displayed screen.
 fn pointer_to_screen(value: i32, screen_size: i32) -> i32 {
     let numerator = (value.saturating_add(0x7fff)) as i64 * screen_size as i64 + 0x7fff;
     (numerator / 0xFFFF).clamp(0, (screen_size - 1).max(0) as i64) as i32
 }
 
 /// Poll the libretro pointer device (mouse or touchscreen) into the machine.
+///
+/// Pointer coordinates arrive in the presented display space and are mapped
+/// back to guest framebuffer coordinates so taps stay correct on the rotated
+/// 400x240 landscape output.
 fn update_pointer(emulator: &mut Emulator) {
     if !emulator.touch_input {
         return;
@@ -461,9 +485,13 @@ fn update_pointer(emulator: &mut Emulator) {
     let pressed =
         callbacks::input_state(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED) != 0;
     if x != 0 || y != 0 || pressed {
-        let screen_x = pointer_to_screen(x as i32, 240);
-        let screen_y = pointer_to_screen(y as i32, 400);
-        emulator.machine.set_pointer(screen_x, screen_y, pressed);
+        let (display_width, display_height) = emulator.machine.display_size();
+        let display_x = pointer_to_screen(x as i32, display_width as i32);
+        let display_y = pointer_to_screen(y as i32, display_height as i32);
+        let (frame_x, frame_y) = emulator
+            .machine
+            .display_to_framebuffer(display_x, display_y);
+        emulator.machine.set_pointer(frame_x, frame_y, pressed);
     }
 }
 
@@ -539,7 +567,10 @@ pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
         }
         let buffer = std::slice::from_raw_parts(data as *const u8, size);
         match decode_machine(buffer, emulator.content_crc32) {
-            Ok(machine) => {
+            Ok(mut machine) => {
+                // Display rotation is presentation state that the save-state
+                // codec skips; re-resolve it for the loaded content.
+                machine.set_rotation(rotation_for_archive(emulator.archive.bytes()));
                 emulator.machine = machine;
                 emulator.stopped = false;
                 apply_core_options(emulator);
@@ -615,6 +646,9 @@ mod tests {
 
     static LAST_VIDEO: Mutex<Option<VideoFrame>> = Mutex::new(None);
     static AUDIO_FRAMES: Mutex<usize> = Mutex::new(0);
+    /// Serializes the real-content tests: the libretro core is a process-wide
+    /// singleton, so concurrent content loads would clobber each other.
+    static CONTENT_LOCK: Mutex<()> = Mutex::new(());
 
     unsafe extern "C" fn test_environment(cmd: u32, _data: *mut c_void) -> bool {
         matches!(
@@ -675,14 +709,15 @@ mod tests {
     }
 
     #[test]
-    fn av_info_reports_native_display_and_timing() {
+    fn av_info_defaults_to_portrait_display_without_content() {
         let mut av = std::mem::MaybeUninit::<retro_system_av_info>::zeroed();
         retro_get_system_av_info(av.as_mut_ptr());
         let av = unsafe { av.assume_init() };
         assert_eq!(av.geometry.base_width, DISPLAY_WIDTH);
         assert_eq!(av.geometry.base_height, DISPLAY_HEIGHT);
-        assert_eq!(av.geometry.max_width, DISPLAY_WIDTH);
-        assert_eq!(av.geometry.max_height, DISPLAY_HEIGHT);
+        // The bounds must also fit the rotated landscape output.
+        assert_eq!(av.geometry.max_width, MAX_DISPLAY_WIDTH);
+        assert_eq!(av.geometry.max_height, MAX_DISPLAY_HEIGHT);
         assert!(
             (av.geometry.aspect_ratio - DISPLAY_WIDTH as f32 / DISPLAY_HEIGHT as f32).abs() < 1e-6
         );
@@ -779,6 +814,7 @@ mod tests {
     #[test]
     #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
     fn real_content_boots_and_renders_frames() {
+        let _content_lock = CONTENT_LOCK.lock().unwrap();
         let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
         let game_path = std::path::PathBuf::from(game_dir).join("激情砖块.CBE");
         assert!(game_path.is_file(), "missing {}", game_path.display());
@@ -847,6 +883,80 @@ mod tests {
         retro_unload_game();
         assert!(retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM).is_null());
         assert_eq!(retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM), 0);
+        retro_deinit();
+    }
+
+    /// Regression for issue #40: landscape titles present rotated 400x240
+    /// frames, so the core must report the swapped geometry and matching
+    /// frame dimensions instead of the fixed portrait 240x400 layout.
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_landscape_content_presents_rotated_frames() {
+        let _content_lock = CONTENT_LOCK.lock().unwrap();
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("三国群殴传.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+        let game_path = CString::new(game_path.to_string_lossy().as_bytes()).unwrap();
+
+        retro_set_environment(test_environment);
+        retro_set_video_refresh(test_video_refresh);
+        retro_set_audio_sample_batch(test_audio_batch);
+        retro_set_input_poll(test_input_poll);
+        retro_set_input_state(test_input_state);
+        retro_init();
+
+        let info = retro_game_info {
+            path: game_path.as_ptr(),
+            data: ptr::null(),
+            size: 0,
+            meta: ptr::null(),
+        };
+        assert!(
+            retro_load_game(&info),
+            "failed to load {}",
+            game_path.to_string_lossy()
+        );
+
+        let mut av = std::mem::MaybeUninit::<retro_system_av_info>::zeroed();
+        retro_get_system_av_info(av.as_mut_ptr());
+        let av = unsafe { av.assume_init() };
+        assert_eq!(av.geometry.base_width, 400);
+        assert_eq!(av.geometry.base_height, 240);
+        assert_eq!(av.geometry.max_width, MAX_DISPLAY_WIDTH);
+        assert_eq!(av.geometry.max_height, MAX_DISPLAY_HEIGHT);
+        assert!((av.geometry.aspect_ratio - 400.0 / 240.0).abs() < 1e-6);
+
+        *LAST_VIDEO.lock().unwrap() = None;
+        for _ in 0..30 {
+            retro_run();
+        }
+        {
+            let last = LAST_VIDEO.lock().unwrap();
+            let (width, height, pitch, bytes) =
+                last.as_ref().expect("video refresh was never called");
+            assert_eq!(*width, 400);
+            assert_eq!(*height, 240);
+            assert_eq!(*pitch, (400 * 4) as usize);
+            assert_eq!(bytes.len(), (240 * 400 * 4) as usize);
+        }
+
+        // The rotation is presentation state skipped by the save-state codec;
+        // restoring a save state must keep presenting rotated frames.
+        let state_size = retro_serialize_size();
+        assert_eq!(state_size, SERIALIZED_SIZE);
+        let mut state = vec![0u8; state_size];
+        assert!(retro_serialize(state.as_mut_ptr().cast(), state.len()));
+        assert!(retro_unserialize(state.as_ptr().cast(), state.len()));
+        *LAST_VIDEO.lock().unwrap() = None;
+        for _ in 0..5 {
+            retro_run();
+        }
+        let last = LAST_VIDEO.lock().unwrap();
+        let (width, height, _, _) = last.as_ref().expect("video refresh was never called");
+        assert_eq!(*width, 400);
+        assert_eq!(*height, 240);
+
+        retro_unload_game();
         retro_deinit();
     }
 }
