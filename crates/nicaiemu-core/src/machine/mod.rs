@@ -1411,6 +1411,10 @@ impl NicaiMachine {
     pub fn instruction_count(&self) -> u64 {
         self.instruction_count
     }
+    /// Number of guest screen ticks executed so far (one per `run_frame`).
+    pub fn frame_count(&self) -> u64 {
+        self.frame_count
+    }
     pub fn service_calls(&self) -> &HashMap<(u32, u32), u64> {
         &self.service_calls
     }

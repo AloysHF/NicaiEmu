@@ -22,11 +22,57 @@ const DISPLAY_HEIGHT: u32 = 400;
 /// portrait 240x400 display and the rotated 400x240 landscape layout.
 const MAX_DISPLAY_WIDTH: u32 = DISPLAY_HEIGHT;
 const MAX_DISPLAY_HEIGHT: u32 = DISPLAY_HEIGHT;
-const DISPLAY_FPS: f64 = GUEST_FRAME_RATE as f64;
+/// Frontend pacing rate reported through the AV info.
+///
+/// The rate only decides how often the frontend calls `retro_run`; the
+/// guest still advances its own 100 ms screen tick on every
+/// [`PACING_FPS`] / [`GUEST_FRAME_RATE`] th call. It must be a rate the
+/// frontend can pace on its own: RetroArch derives the automatic swap
+/// interval from this value and caps it at 4, so reporting the 10 Hz
+/// guest rate made silent games run at the display refresh rate
+/// (issue #43). 60 Hz matches the common display refresh rates exactly,
+/// and the audio stream always flows at this rate (silence-padded while
+/// the guest is quiet), so audio-sync pacing keeps the speed exact
+/// everywhere else.
+const PACING_FPS: u32 = 60;
+/// Stereo frames submitted to the frontend per `retro_run` call. The
+/// guest produces `AUDIO_SAMPLE_RATE / GUEST_FRAME_RATE` frames per
+/// tick, so the constant flow averages to the same 44.1 kHz stream.
+const PACING_SAMPLES_PER_RUN: usize = (AUDIO_SAMPLE_RATE / PACING_FPS) as usize;
 const PERFORMANCE_LEVEL: u32 = 3;
 /// Optional user rotation overrides looked up in the frontend system
 /// directory, loaded once per process before content loading.
 const ROTATION_PROFILE_FILE: &str = "nicaiemu_rotation.csv";
+
+/// Converts frontend frames into guest screen ticks.
+///
+/// Each `retro_run` call contributes `GUEST_FRAME_RATE / PACING_FPS` of
+/// a guest tick; the tick runs when the accumulated credit reaches a
+/// whole tick. This keeps the guest rate exact at
+/// `GUEST_FRAME_RATE` ticks per second regardless of how often the
+/// frontend paces the core.
+struct GuestTickPacer {
+    /// Outstanding credit in 1/PACING_FPS frontend-frame units.
+    credit: u32,
+}
+
+impl GuestTickPacer {
+    fn new() -> Self {
+        Self { credit: 0 }
+    }
+
+    /// Record one frontend frame and return the due guest tick count.
+    fn advance(&mut self) -> u32 {
+        self.credit += GUEST_FRAME_RATE;
+        let mut ticks = 0;
+        while self.credit >= PACING_FPS {
+            self.credit -= PACING_FPS;
+            ticks += 1;
+        }
+        ticks
+    }
+}
+
 /// Loaded emulator state shared by the libretro entry points.
 struct Emulator {
     archive: CbeArchive,
@@ -38,6 +84,8 @@ struct Emulator {
     /// Display size last reported to the frontend, to detect geometry changes
     /// from a live rotation override.
     presented_size: (u32, u32),
+    /// Guest tick credit accumulated from the frontend pacing rate.
+    tick_pacer: GuestTickPacer,
 }
 
 /// Global emulator instance.
@@ -149,7 +197,7 @@ pub extern "C" fn retro_get_system_av_info(info: *mut retro_system_av_info) {
                 aspect_ratio: base_width as f32 / base_height as f32,
             },
             timing: retro_system_timing {
-                fps: DISPLAY_FPS,
+                fps: PACING_FPS as f64,
                 sample_rate: AUDIO_SAMPLE_RATE as f64,
             },
         };
@@ -217,6 +265,7 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
                     touch_input: true,
                     content_crc32,
                     presented_size,
+                    tick_pacer: GuestTickPacer::new(),
                 });
                 if let Some(emulator) = EMULATOR.as_mut() {
                     apply_core_options(emulator);
@@ -275,9 +324,12 @@ pub extern "C" fn retro_run() {
         update_pointer(emulator);
 
         if !emulator.stopped {
-            if let Err(error) = emulator.machine.run_frame(emulator.instruction_limit) {
-                log::warn!("CBE frame callback stopped: {error:#}");
-                emulator.stopped = true;
+            for _ in 0..emulator.tick_pacer.advance() {
+                if let Err(error) = emulator.machine.run_frame(emulator.instruction_limit) {
+                    log::warn!("CBE frame callback stopped: {error:#}");
+                    emulator.stopped = true;
+                    break;
+                }
             }
         }
 
@@ -295,12 +347,13 @@ pub extern "C" fn retro_run() {
             (display_width * 4) as usize,
         );
 
-        let samples = emulator
-            .machine
-            .take_audio_samples((AUDIO_SAMPLE_RATE / GUEST_FRAME_RATE) as usize);
-        if !samples.is_empty() {
-            callbacks::audio_sample_batch(samples.as_ptr(), samples.len() / 2);
-        }
+        // Keep the sample flow at exactly the reported pacing rate: the
+        // frontend paces the core by audio sync, so a silent guest must
+        // still submit silence or the frontend would fall back to
+        // display-rate pacing and the game would run too fast (issue #43).
+        let mut samples = emulator.machine.take_audio_samples(PACING_SAMPLES_PER_RUN);
+        samples.resize(PACING_SAMPLES_PER_RUN * 2, 0);
+        callbacks::audio_sample_batch(samples.as_ptr(), PACING_SAMPLES_PER_RUN);
     }
 }
 
@@ -726,6 +779,10 @@ mod tests {
 
     static LAST_VIDEO: Mutex<Option<VideoFrame>> = Mutex::new(None);
     static AUDIO_FRAMES: Mutex<usize> = Mutex::new(0);
+    /// Stereo frames received with nonzero content. The core pads silent
+    /// stretches with zeros to keep the sample flow constant, so guest
+    /// audio delivery must be judged on nonzero samples.
+    static AUDIO_NONZERO_FRAMES: Mutex<usize> = Mutex::new(0);
     /// Serializes the real-content tests: the libretro core is a process-wide
     /// singleton, so concurrent content loads would clobber each other.
     static CONTENT_LOCK: Mutex<()> = Mutex::new(());
@@ -762,8 +819,13 @@ mod tests {
         0
     }
 
-    unsafe extern "C" fn test_audio_batch(_data: *const i16, frames: usize) -> usize {
+    unsafe extern "C" fn test_audio_batch(data: *const i16, frames: usize) -> usize {
         *AUDIO_FRAMES.lock().unwrap() += frames;
+        if !data.is_null() {
+            let samples = std::slice::from_raw_parts(data, frames * 2);
+            let nonzero = samples.iter().filter(|&&sample| sample != 0).count();
+            *AUDIO_NONZERO_FRAMES.lock().unwrap() += nonzero;
+        }
         frames
     }
 
@@ -801,8 +863,24 @@ mod tests {
         assert!(
             (av.geometry.aspect_ratio - DISPLAY_WIDTH as f32 / DISPLAY_HEIGHT as f32).abs() < 1e-6
         );
-        assert_eq!(av.timing.fps, DISPLAY_FPS);
+        assert_eq!(av.timing.fps, PACING_FPS as f64);
         assert_eq!(av.timing.sample_rate, AUDIO_SAMPLE_RATE as f64);
+    }
+
+    /// Regression for issue #43: the guest must advance its 10 Hz screen
+    /// tick on every sixth frontend frame while the core reports a 60 Hz
+    /// pacing rate the frontend can actually pace (RetroArch caps the
+    /// automatic swap interval at 4, so a reported 10 Hz rate made silent
+    /// games run at the display refresh rate).
+    #[test]
+    fn pacer_advances_guest_ticks_at_the_guest_frame_rate() {
+        let mut pacer = GuestTickPacer::new();
+        let pattern: Vec<u32> = (0..12).map(|_| pacer.advance()).collect();
+        assert_eq!(pattern, [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1]);
+
+        let mut pacer = GuestTickPacer::new();
+        let ticks: u32 = (0..600).map(|_| pacer.advance()).sum();
+        assert_eq!(ticks, 100);
     }
 
     #[test]
@@ -956,7 +1034,7 @@ mod tests {
         }
         assert!(LAST_VIDEO.lock().unwrap().is_some());
         assert!(
-            *AUDIO_FRAMES.lock().unwrap() > 0,
+            *AUDIO_NONZERO_FRAMES.lock().unwrap() > 0,
             "guest audio never reached the libretro sample callback"
         );
 
@@ -1035,6 +1113,56 @@ mod tests {
         let (width, height, _, _) = last.as_ref().expect("video refresh was never called");
         assert_eq!(*width, 400);
         assert_eq!(*height, 240);
+
+        retro_unload_game();
+        retro_deinit();
+    }
+
+    /// Regression for issue #43: the frontend paces `retro_run` at the
+    /// reported 60 Hz rate, so sixty calls must advance exactly ten guest
+    /// screen ticks while the sample callback keeps receiving a constant
+    /// 735-frame flow (silence included) for audio-sync pacing.
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_guest_ticks_track_the_pacing_rate() {
+        let _content_lock = CONTENT_LOCK.lock().unwrap();
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("孤岛.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+        let game_path = CString::new(game_path.to_string_lossy().as_bytes()).unwrap();
+
+        retro_set_environment(test_environment);
+        retro_set_video_refresh(test_video_refresh);
+        retro_set_audio_sample_batch(test_audio_batch);
+        retro_set_input_poll(test_input_poll);
+        retro_set_input_state(test_input_state);
+        retro_init();
+
+        let info = retro_game_info {
+            path: game_path.as_ptr(),
+            data: ptr::null(),
+            size: 0,
+            meta: ptr::null(),
+        };
+        assert!(
+            retro_load_game(&info),
+            "failed to load {}",
+            game_path.to_string_lossy()
+        );
+
+        *AUDIO_FRAMES.lock().unwrap() = 0;
+        let ticks_before = unsafe { EMULATOR.as_ref().unwrap().machine.frame_count() };
+        for _ in 0..60 {
+            retro_run();
+        }
+        let ticks_after = unsafe { EMULATOR.as_ref().unwrap().machine.frame_count() };
+        assert_eq!(ticks_after - ticks_before, 10);
+        assert_eq!(
+            *AUDIO_FRAMES.lock().unwrap(),
+            60 * PACING_SAMPLES_PER_RUN,
+            "sample flow must stay at the reported pacing rate"
+        );
+        assert!(LAST_VIDEO.lock().unwrap().is_some());
 
         retro_unload_game();
         retro_deinit();
