@@ -622,6 +622,12 @@ pub struct NicaiMachine {
     executable: CbeExecutable,
     state: MachineState,
     heap_cursor: u32,
+    // Pen origin carried by the GetScreenImage (LCD group 4 index 1) call
+    // that immediately precedes DrawText (index 10). Games draw text through
+    // a helper that passes the origin there and submits DrawText with zero
+    // coordinates; see the LCD service notes in drawing.rs.
+    #[serde(skip, default)]
+    latched_text_origin: (i32, i32),
     #[serde(skip, default)]
     heap_allocations: BTreeMap<u32, u32>,
     #[serde(skip, default)]
@@ -739,6 +745,7 @@ impl NicaiMachine {
             executable,
             state: MachineState::Created,
             heap_cursor: HEAP_BASE,
+            latched_text_origin: (0, 0),
             heap_allocations: BTreeMap::new(),
             free_heap_blocks: Vec::new(),
             app_main: 0,
@@ -2237,5 +2244,47 @@ mod tests {
         machine.set_auto_bgm(false);
         assert_eq!(machine.audio.state(), 1);
         assert!(machine.audio.buffered_frames() > 0);
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_landscape_text_renders_at_the_latched_origin() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("僵尸先生.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        // The installer screen draws its progress text every frame while it
+        // unpacks its data packages, so frame 120 is safely inside the
+        // text-bearing window.
+        for _ in 0..120 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+        assert_eq!(machine.state(), MachineState::Ready);
+
+        // frame_pixels presents the rotated 400x240 landscape display. The
+        // firmware text should now appear as upright, horizontally centered
+        // install progress ("安装进度/文件总数/正在解压…"). Before the fix
+        // every glyph piled up at the framebuffer origin as a single ~225
+        // pixel blob in the bottom-left corner of the presentation.
+        let width = machine.display_size().0 as usize;
+        let pixels = machine.frame_pixels();
+        let bright =
+            |pixel: u32| ((pixel >> 16) & 0xFF) + ((pixel >> 8) & 0xFF) + (pixel & 0xFF) > 600;
+        let bright_count = pixels.iter().copied().filter(|p| bright(*p)).count();
+        assert!(
+            bright_count > 600,
+            "installer progress text did not render: {bright_count} bright pixels"
+        );
+        let centered = pixels
+            .iter()
+            .enumerate()
+            .any(|(index, pixel)| bright(*pixel) && index % width > 100 && index / width < 200);
+        assert!(
+            centered,
+            "installer progress text rendered outside the centered display area"
+        );
     }
 }

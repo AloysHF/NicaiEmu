@@ -26,10 +26,27 @@ impl NicaiMachine {
         }
     }
 
+    // Text-origin ABI, recovered from guest behavior (issue #45): games draw
+    // progress/status text through a helper whose position never reaches
+    // DrawText (index 10) directly. Instead the helper submits GetScreenImage
+    // (index 1) immediately before each DrawText with the pen origin in r1 (x)
+    // / r2 (y) and issues DrawText with zero coordinates. The measured origins
+    // match the guest's intended layout exactly (僵尸先生 centers its installer
+    // text on the 400-wide display and advances by the measured glyph width),
+    // so index 1 latches the origin and index 10 falls back to it when its own
+    // coordinates are zero.
     pub(crate) fn handle_lcd_service(&mut self, index: u32) {
         match index {
             0 => self.set_result(SCREEN_IMAGE_STRUCT),
-            1 => self.set_result(SCREEN_IMAGE),
+            1 => {
+                // GetScreenImage also latches the pen origin for the DrawText
+                // call that follows; see the module notes above handle_lcd_service.
+                self.latched_text_origin = (
+                    signed_coord(self.register(1)),
+                    signed_coord(self.register(2)),
+                );
+                self.set_result(SCREEN_IMAGE);
+            }
             5 => self.set_result(if self.register(0) == 0 { 8 } else { 16 }),
             6 => self.set_result(16),
             7 => {
@@ -55,8 +72,17 @@ impl NicaiMachine {
             }
             10 => {
                 let string = self.register(1);
-                let x = signed_coord(self.register(2));
-                let y = signed_coord(self.register(3));
+                let raw_x = signed_coord(self.register(2));
+                let raw_y = signed_coord(self.register(3));
+                // Games that position text through the GetScreenImage latch
+                // submit DrawText with zero coordinates; only fall back to the
+                // latched origin in that case so explicit coordinates keep
+                // their previous meaning.
+                let (x, y) = if raw_x == 0 && raw_y == 0 {
+                    self.latched_text_origin
+                } else {
+                    (raw_x, raw_y)
+                };
                 let color = self.memory.r16(self.register(reg::SP));
                 if service_trace_enabled(4, 10) {
                     let bytes = self.read_c_bytes(string, 256);
@@ -592,6 +618,13 @@ impl NicaiMachine {
     fn draw_text(&mut self, address: u32, x: i32, y: i32, color: u16) {
         let bytes = self.read_c_bytes(address, 4096);
         let (text, _, _) = GBK.decode(&bytes);
+        // Text coordinates live in the presented display space: the firmware
+        // renders the glyphs itself, so a landscape-packaged game issues them
+        // with 400x240 coordinates that have to be mapped back into the
+        // 240x400 framebuffer pixel by pixel (identity for portrait games).
+        let swaps = self.effective_rotation.swaps_dimensions();
+        let (display_width, display_height) = if swaps { (400, 240) } else { (240, 400) };
+        let rotation = self.effective_rotation;
         let mut pen_x = x;
         for character in text.chars() {
             let Some(glyph) = unifont::get_glyph(character) else {
@@ -599,15 +632,20 @@ impl NicaiMachine {
                 continue;
             };
             for glyph_y in 0..16i32 {
-                let screen_y = y + glyph_y;
-                if !(0..400).contains(&screen_y) {
+                let display_y = y + glyph_y;
+                if !(0..display_height).contains(&display_y) {
                     continue;
                 }
                 for glyph_x in 0..glyph.get_width() as i32 {
-                    let screen_x = pen_x + glyph_x;
-                    if (0..240).contains(&screen_x)
+                    let display_x = pen_x + glyph_x;
+                    if (0..display_width).contains(&display_x)
                         && glyph.get_pixel(glyph_x as usize, glyph_y as usize)
                     {
+                        let (screen_x, screen_y) = if swaps {
+                            rotation.unrotate(display_x, display_y)
+                        } else {
+                            (display_x, display_y)
+                        };
                         let offset = (screen_y as u32 * 240 + screen_x as u32) * 2;
                         self.memory.w16(SCREEN_IMAGE + offset, color);
                     }
