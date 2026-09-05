@@ -40,6 +40,7 @@ nicaiemu [OPTIONS] <GAME_PATH>
 | `-H, --height <HEIGHT>` | integer | `800` | Initial window height. |
 | `--filter <FILTER>` | `nearest` \| `bilinear` \| `bicubic` \| `xbrz` | `nearest` | Pixel scaling filter for display output. |
 | `--rotate <ROTATION>` | `auto` \| `none` \| `cw` \| `ccw` | `auto` | Rotate the guest framebuffer before presentation. `auto` uses the built-in landscape-game profile; explicit values override it. |
+| `--rotation-profile <FILE>` | path | — | Load extra display-rotation entries from a CSV file before starting (see [Screen rotation](#screen-rotation)). |
 | `--remap <GUEST_KEY:KEY>` | `GUEST_KEY:KEY` | — | Remap a guest key to a host key. Repeatable. |
 | `--show-gamepad` | flag | off | Draw a virtual gamepad overlay over the game frame. |
 | `--fullscreen` | flag | off | Run in borderless fullscreen. |
@@ -130,6 +131,29 @@ upscaler:
 `--show-gamepad` draws a virtual phone keypad over the game frame, highlighting
 the currently held keys. The overlay is rendered at native resolution before
 scaling, so it stays crisp at any window size.
+
+## Screen Rotation
+
+Games packaged for the original phone's rotated landscape LCD are presented
+at 400×240 automatically through a built-in content profile keyed by archive
+CRC-32 and size. Use `--rotate none|cw|ccw` to override the detection for a
+single run.
+
+For a landscape game outside the built-in profile, supply extra entries with
+`--rotation-profile <FILE>` instead of waiting for a core update. The file is
+CSV text with one `crc32,length,rotation` entry per line (`crc32` in hex with
+an optional `0x` prefix, `length` in decimal bytes, `rotation` one of `none`,
+`cw`, `ccw`; blank lines and `#` comments are ignored). Compute the identity
+of a game file with any CRC-32 tool:
+
+```text
+# crc32,length,rotation
+282fe73d,1143317,ccw
+0x9c5e0674,958874,ccw
+```
+
+User entries win over built-in ones with the same identity, so they can also
+force `none` to un-rotate a misprofiled game.
 
 ## Audio
 

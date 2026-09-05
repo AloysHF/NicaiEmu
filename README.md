@@ -35,7 +35,8 @@ by supported games.
 - **240×400 display** — native WQVGA resolution with resizable desktop window
 - **Automatic landscape rotation** — games packaged for the original phone's
   rotated landscape LCD are presented at 400×240 automatically, with a
-  `--rotate` override for manual control
+  `--rotate` override for manual control and a `--rotation-profile` file for
+  titles outside the built-in profile
 - **Display scaling** — nearest, bilinear, bicubic, and xbrz filters with
   aspect-ratio-preserving centering (`--filter`)
 - **Key remapping** — rebind any guest key to any host key (`--remap`)
@@ -63,7 +64,9 @@ by supported games.
   RetroArch
 - **Libretro integration** — playable libretro core with RGB888 video output,
   RetroPad input, content loading, save states, reset, and memory exposure
-  (core options cover volume, touch input, auto BGM, and debug logging)
+  (core options cover volume, touch input, auto BGM, display rotation, and
+  debug logging); landscape titles are presented rotated at 400×240, matching
+  the standalone frontend
 
 ## Usage
 

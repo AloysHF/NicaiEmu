@@ -3,6 +3,7 @@
 use super::callbacks;
 use super::constants::*;
 use super::types::retro_variable;
+use nicaiemu_core::Rotation;
 use std::ffi::{c_void, CStr};
 use std::ptr;
 
@@ -11,6 +12,7 @@ pub const OPTION_VOLUME: &CStr = c"nicaiemu_volume";
 pub const OPTION_TOUCH_INPUT: &CStr = c"nicaiemu_touch_input";
 pub const OPTION_DEBUG_LOGGING: &CStr = c"nicaiemu_debug_logging";
 pub const OPTION_AUTO_BGM: &CStr = c"nicaiemu_auto_bgm";
+pub const OPTION_ROTATION: &CStr = c"nicaiemu_rotation";
 
 /// Resolved core option values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +21,7 @@ pub struct CoreOptions {
     pub touch_input: bool,
     pub debug_logging: bool,
     pub auto_bgm: bool,
+    pub rotation: Rotation,
 }
 
 impl Default for CoreOptions {
@@ -28,6 +31,7 @@ impl Default for CoreOptions {
             touch_input: true,
             debug_logging: false,
             auto_bgm: false,
+            rotation: Rotation::Auto,
         }
     }
 }
@@ -48,7 +52,7 @@ pub fn set_core_options() {
 }
 
 /// The option list advertised to the frontend, terminated by a null entry.
-fn core_option_variables() -> [retro_variable; 5] {
+fn core_option_variables() -> [retro_variable; 6] {
     [
         retro_variable {
             key: OPTION_VOLUME.as_ptr(),
@@ -65,6 +69,10 @@ fn core_option_variables() -> [retro_variable; 5] {
         retro_variable {
             key: OPTION_AUTO_BGM.as_ptr(),
             value: c"Auto BGM (packaged MIDI); disabled|enabled".as_ptr(),
+        },
+        retro_variable {
+            key: OPTION_ROTATION.as_ptr(),
+            value: c"Display Rotation; auto|none|cw|ccw".as_ptr(),
         },
         // Terminator.
         retro_variable {
@@ -137,7 +145,20 @@ pub fn read_core_options(mut get: impl FnMut(&CStr) -> Option<String>) -> CoreOp
             options.auto_bgm = false;
         }
     }
+    if let Some(rotation) = get(OPTION_ROTATION) {
+        options.rotation = parse_rotation(&rotation);
+    }
     options
+}
+
+/// Parse a display rotation choice, falling back to Auto for unknown values.
+fn parse_rotation(value: &str) -> Rotation {
+    match value {
+        "none" => Rotation::None,
+        "cw" => Rotation::Cw,
+        "ccw" => Rotation::Ccw,
+        _ => Rotation::Auto,
+    }
 }
 
 #[cfg(test)]
@@ -182,6 +203,7 @@ mod tests {
             (OPTION_TOUCH_INPUT, "disabled"),
             (OPTION_DEBUG_LOGGING, "enabled"),
             (OPTION_AUTO_BGM, "enabled"),
+            (OPTION_ROTATION, "ccw"),
         ]));
         assert_eq!(
             options,
@@ -190,6 +212,7 @@ mod tests {
                 touch_input: false,
                 debug_logging: true,
                 auto_bgm: true,
+                rotation: Rotation::Ccw,
             }
         );
     }
@@ -207,8 +230,19 @@ mod tests {
             (OPTION_TOUCH_INPUT, "sometimes"),
             (OPTION_DEBUG_LOGGING, "verbose"),
             (OPTION_AUTO_BGM, "sometimes"),
+            (OPTION_ROTATION, "sideways"),
         ]));
         assert_eq!(options, CoreOptions::default());
+    }
+
+    #[test]
+    fn rotation_choices_parse_to_all_modes() {
+        assert_eq!(parse_rotation("auto"), Rotation::Auto);
+        assert_eq!(parse_rotation("none"), Rotation::None);
+        assert_eq!(parse_rotation("cw"), Rotation::Cw);
+        assert_eq!(parse_rotation("ccw"), Rotation::Ccw);
+        assert_eq!(parse_rotation(""), Rotation::Auto);
+        assert_eq!(parse_rotation("90"), Rotation::Auto);
     }
 
     #[test]
@@ -218,6 +252,7 @@ mod tests {
             (OPTION_TOUCH_INPUT, "enabled"),
             (OPTION_DEBUG_LOGGING, "disabled"),
             (OPTION_AUTO_BGM, "disabled"),
+            (OPTION_ROTATION, "auto"),
         ];
         for (key, expected_default) in cases {
             let variables = core_option_variables();
