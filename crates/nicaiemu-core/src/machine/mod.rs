@@ -1320,12 +1320,16 @@ impl NicaiMachine {
     /// The guest audio manager always wins: the layer stops permanently as
     /// soon as the game issues any audio-manager call of its own.
     pub fn set_auto_bgm(&mut self, enabled: bool) {
+        let was_enabled = self.auto_bgm;
         self.auto_bgm = enabled;
         if enabled {
             // Re-enabling the layer also lets it take over again after the
             // guest previously issued its own audio-manager calls.
             self.auto_bgm_gave_way = false;
-        } else {
+        } else if was_enabled && !self.auto_bgm_gave_way {
+            // Only the layer's own playback stops when the layer is turned
+            // off. Frontends apply options after boot, so an unconditional
+            // stop here would also wipe BGM the guest started itself.
             self.audio.stop();
         }
     }
@@ -2153,5 +2157,108 @@ mod tests {
         engine.play_bytes(&resource.data).unwrap();
         assert!(engine.buffered_frames() > 0);
         assert_eq!(engine.state(), 1);
+    }
+
+    /// Build a machine from a fabricated structurally valid CBE file: header
+    /// markers with tiny code, data, and embedded-package segments plus an
+    /// empty resource package. No guest code exists; only machine-level
+    /// service state is exercised.
+    fn machine_from_minimal_archive() -> NicaiMachine {
+        const SEGMENT: [u8; 4] = [0; 4]; // checksum_le(zeros) == 0
+        let mut data = vec![0u8; 196];
+        fn write_marker(data: &mut [u8], offset: usize) {
+            data[offset..offset + 8].fill(0xfe);
+        }
+        // Executable header: five 8-byte markers with big-endian fields
+        // between them.
+        write_marker(&mut data, 0);
+        data[8..12].copy_from_slice(&0x0010_0000u32.to_be_bytes());
+        write_marker(&mut data, 12);
+        data[20..24].copy_from_slice(&0x2000u32.to_be_bytes());
+        write_marker(&mut data, 24);
+        data[32..36].copy_from_slice(&0x0010_1000u32.to_be_bytes());
+        write_marker(&mut data, 36);
+        write_marker(&mut data, 48);
+        // Segment header: six markers starting at 68 with segment sizes and
+        // checksums between them. Every segment is four zero bytes, whose
+        // little-endian word checksum is 0.
+        for index in 0..6 {
+            write_marker(&mut data, 68 + index * 12);
+        }
+        data[76..80].copy_from_slice(&(SEGMENT.len() as u32).to_be_bytes());
+        data[100..104].copy_from_slice(&(SEGMENT.len() as u32).to_be_bytes());
+        data[124..128].copy_from_slice(&(SEGMENT.len() as u32).to_be_bytes());
+        // Segment locators: one 8-byte separator in front of each segment,
+        // followed by the segment payload itself.
+        write_marker(&mut data, 140);
+        data[148..152].copy_from_slice(&SEGMENT);
+        write_marker(&mut data, 152);
+        data[160..164].copy_from_slice(&SEGMENT);
+        write_marker(&mut data, 164);
+        data[172..176].copy_from_slice(&SEGMENT);
+        // Resource package: separator, zero length, then its separator.
+        write_marker(&mut data, 176);
+        write_marker(&mut data, 188);
+
+        let path = std::env::temp_dir().join(format!(
+            "nicaiemu-test-minimal-{}-{}.cbe",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, &data).unwrap();
+        let archive = CbeArchive::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        NicaiMachine::new(&archive).unwrap()
+    }
+
+    #[test]
+    fn disabling_auto_bgm_keeps_guest_started_audio() {
+        let mut machine = machine_from_minimal_archive();
+        // The guest queued and started its own audio during boot.
+        machine
+            .audio
+            .play_bytes(&midi_resource_header(&tiny_midi_payload()))
+            .unwrap();
+        assert_eq!(machine.audio.state(), 1);
+
+        // Frontends apply options after boot: applying a disabled option on
+        // a machine whose layer never ran must not stop guest playback.
+        machine.set_auto_bgm(false);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+        assert!(!machine.take_audio_samples(16).is_empty());
+    }
+
+    #[test]
+    fn disabling_auto_bgm_stops_the_layers_own_playback() {
+        let mut machine = machine_from_minimal_archive();
+        machine.set_auto_bgm(true);
+        // The layer queued its soundtrack and is playing it.
+        machine
+            .audio
+            .play_bytes(&midi_resource_header(&tiny_midi_payload()))
+            .unwrap();
+        machine.set_auto_bgm(false);
+        assert_eq!(machine.audio.state(), 0);
+        assert_eq!(machine.audio.buffered_frames(), 0);
+    }
+
+    #[test]
+    fn disabling_auto_bgm_after_guest_takeover_keeps_guest_audio() {
+        let mut machine = machine_from_minimal_archive();
+        machine.set_auto_bgm(true);
+        // The guest issued its own audio-manager call: the layer handed
+        // audio over and the guest's playback is what is queued now.
+        machine.auto_bgm_gave_way = true;
+        machine
+            .audio
+            .play_bytes(&midi_resource_header(&tiny_midi_payload()))
+            .unwrap();
+        machine.set_auto_bgm(false);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
     }
 }
