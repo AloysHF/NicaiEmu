@@ -87,9 +87,9 @@ nicaiemu path/to/game.CBE --list
 | Exit | Escape |
 
 The window also accepts mouse clicks as touch input on the 240×400 screen,
-which touch-driven games (such as 魔塔 and 孤岛) use for menus and in-game
-controls. 孤岛's main menu uses one click to select an item and a second click
-to activate it.
+which touch-driven games (such as 魔塔, 孤岛, 大家来数钱, and 魔鬼理发师) use
+for menus and in-game controls. 孤岛's main menu uses one click to select an
+item and a second click to activate it.
 
 The `--remap` option rebinds a guest key to any host key using
 `GUEST_KEY:KEY` syntax. Guest key names are `0`–`9`, `q`, `e`, `enter`,

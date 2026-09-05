@@ -139,6 +139,7 @@ const DREAM_FACTORY_MEMORY_BLOCK_SLOT: u32 = MANAGER_BASE + 0x7ff4;
 const DREAM_FACTORY_FORMAT_BUFFER: u32 = MANAGER_BASE + 0x7f80;
 const DREAM_FACTORY_FORMAT_BUFFER_SIZE: usize = 64;
 const KEY_EVENT_ARG: u32 = MANAGER_BASE + 0x7fdc;
+const TOUCH_EVENT_ARG: u32 = MANAGER_BASE + 0x7fd8;
 const DATA_PACKAGE_SIZE: u32 = 108;
 const SCREEN_IMAGE_STRUCT: u32 = MEMORY_BLOCK_PTR + 0x408;
 const SCREEN_IMAGE: u32 = SCREEN_IMAGE_STRUCT + 24;
@@ -1191,6 +1192,39 @@ impl NicaiMachine {
                 return Ok(());
             }
         }
+        if key_event.is_none() {
+            // The firmware routes taps through the same screen logic callback:
+            // event type 3 (down), 4 (up), or 5 (drag) with packed screen
+            // coordinates at the payload pointer, one event per tick and
+            // shared with key events. Tap-driven menus rely on this path.
+            let touch_type = if self.pointer.down {
+                Some(3)
+            } else if self.pointer.up {
+                Some(4)
+            } else if self.pointer.dragging() {
+                Some(5)
+            } else {
+                None
+            };
+            if let Some(touch_type) = touch_type {
+                let packed = (self.pointer.x as u32) | ((self.pointer.y as u32) << 16);
+                self.memory.w32(TOUCH_EVENT_ARG, packed);
+                self.invoke_callback(
+                    logic,
+                    screen_this,
+                    touch_type,
+                    TOUCH_EVENT_ARG,
+                    instruction_limit,
+                )?;
+                if self.finish_screen_callback_frame() {
+                    return Ok(());
+                }
+                if self.pending_screen != 0 && self.pending_screen != screen {
+                    self.pointer.end_frame();
+                    return Ok(());
+                }
+            }
+        }
         self.invoke_callback(logic, screen_this, 6, 0, instruction_limit)?;
         if self.finish_screen_callback_frame() {
             return Ok(());
@@ -2046,6 +2080,69 @@ mod tests {
         assert_eq!(pointed.frame_pixels(), keyed.frame_pixels());
     }
 
+    /// Tap-driven menus need the firmware touch events (logic event types
+    /// 3/4/5) plus the LCD manager's point-in-rect hit test (group 4 index
+    /// 40) to react; the issue #47 games were dead to input without them.
+    /// Taps once at frame 100 and returns (final state, menu screen before
+    /// the tap, screen after the tap, LCD hit-test call count).
+    fn run_tap_scenario(game: &str, x: i32, y: i32) -> (MachineState, u32, u32, u64) {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join(game);
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        let mut menu_screen = 0;
+        for frame in 0..150 {
+            if frame == 100 {
+                menu_screen = machine.active_screen();
+                assert_ne!(menu_screen, 0, "{game} never reached its menu screen");
+            }
+            if frame == 100 {
+                machine.set_pointer(x, y, true);
+            }
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            if frame == 100 {
+                machine.set_pointer(x, y, false);
+            }
+        }
+        let hit_tests = machine.service_calls().get(&(4, 40)).copied().unwrap_or(0);
+        (
+            machine.state(),
+            menu_screen,
+            machine.active_screen(),
+            hit_tests,
+        )
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_touch_tap_opens_barber_help_screen() {
+        let (state, menu_screen, after_screen, hit_tests) =
+            run_tap_scenario("魔鬼理发师.CBE", 54, 247);
+        assert_eq!(state, MachineState::Ready);
+        assert_ne!(
+            after_screen, menu_screen,
+            "tap on the menu never switched screens"
+        );
+        assert!(
+            hit_tests > 0,
+            "barber menu never used the LCD hit-test service"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_touch_tap_switches_money_title_screen() {
+        let (state, menu_screen, after_screen, _) = run_tap_scenario("大家来数钱.CBE", 160, 200);
+        assert_eq!(state, MachineState::Ready);
+        assert_ne!(
+            after_screen, menu_screen,
+            "tap on the title screen never switched screens"
+        );
+    }
+
     #[test]
     fn pointer_press_holds_drag_and_release_edges() {
         let mut pointer = PointerState::new();
@@ -2076,6 +2173,24 @@ mod tests {
         assert_eq!((pointer.x, pointer.y), (0, 399));
         pointer.set(1000, -10, true);
         assert_eq!((pointer.x, pointer.y), (239, 0));
+    }
+
+    #[test]
+    fn lcd_hit_test_service_reports_points_inside_the_rectangle() {
+        let mut machine = machine_from_minimal_archive();
+        let mut hit = |x: u32, y: u32| {
+            machine.cpu.reg_set(Mode::User, 0, x | (y << 16));
+            machine.cpu.reg_set(Mode::User, 1, 10 | (135 << 16));
+            machine.cpu.reg_set(Mode::User, 2, 105 | (283 << 16));
+            machine.handle_lcd_service(40);
+            machine.register(0)
+        };
+
+        assert_eq!(hit(54, 247), 1, "center must hit");
+        assert_eq!(hit(106, 247), 0, "past the right edge must miss");
+        assert_eq!(hit(54, 134), 0, "above the top edge must miss");
+        assert_eq!(hit(10, 135), 1, "top-left corner is inclusive");
+        assert_eq!(hit(105, 283), 1, "bottom-right corner is inclusive");
     }
 
     /// A minimal MIDI resource in the packaged CBE audio format: u16 type

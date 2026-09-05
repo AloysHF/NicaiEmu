@@ -245,6 +245,19 @@ impl NicaiMachine {
             54..=56 => self.set_result(1),
             57 => self.set_result(0),
             62 => self.set_result(16),
+            // Touch-menu hit test: r0 packs the point and r1/r2 pack the
+            // top-left and bottom-right corners as x | (y << 16). Nonzero
+            // means the point is inside the inclusive rectangle.
+            40 => {
+                let x = self.register(0) & 0xffff;
+                let y = self.register(0) >> 16;
+                let left = self.register(1) & 0xffff;
+                let top = self.register(1) >> 16;
+                let right = self.register(2) & 0xffff;
+                let bottom = self.register(2) >> 16;
+                let inside = x >= left && x <= right && y >= top && y <= bottom;
+                self.set_result(u32::from(inside));
+            }
             90..=92 => self.set_result(0),
             _ => self.set_result(0),
         }
