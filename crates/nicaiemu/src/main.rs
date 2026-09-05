@@ -11,8 +11,8 @@ use clap::Parser;
 use log::{info, warn};
 use minifb::{Key, Window, WindowOptions};
 use nicaiemu_core::{
-    decode_machine, encode_machine, CbeArchive, NicaiMachine, Rotation, AUDIO_SAMPLE_RATE,
-    DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
+    decode_machine, encode_machine, load_rotation_overrides, CbeArchive, NicaiMachine, Rotation,
+    AUDIO_SAMPLE_RATE, DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
 };
 use standalone::gamepad_overlay::GamepadOverlay;
 use standalone::input::{KeyboardMapper, RemapSpec};
@@ -67,6 +67,11 @@ struct Cli {
     /// landscape games; explicit values override detection).
     #[arg(long, value_enum, default_value_t = RotationArg::Auto)]
     rotate: RotationArg,
+
+    /// Load extra display-rotation entries from a CSV file
+    /// (`crc32,length,rotation` per line) before starting.
+    #[arg(long, value_name = "FILE")]
+    rotation_profile: Option<PathBuf>,
 
     /// Remap a guest key in GUEST_KEY:KEY format.
     #[arg(long = "remap", value_name = "GUEST_KEY:KEY")]
@@ -134,6 +139,14 @@ fn main() -> Result<()> {
     let archive = CbeArchive::load(&cli.file)
         .with_context(|| format!("failed to load CBE file: {}", cli.file.display()))?;
     info!("{}", archive.summary());
+    if let Some(path) = &cli.rotation_profile {
+        let count = load_rotation_overrides(path)
+            .with_context(|| format!("failed to load rotation profile: {}", path.display()))?;
+        info!(
+            "Loaded {count} display-rotation entries from {}",
+            path.display()
+        );
+    }
     if cli.list {
         for (index, resource) in archive.resources().iter().enumerate() {
             println!(
@@ -471,6 +484,21 @@ mod tests {
 
         assert_eq!(cli.save_state, Some(PathBuf::from("game.sav")));
         assert_eq!(cli.load_state, Some(PathBuf::from("old.sav")));
+    }
+
+    #[test]
+    fn rotation_profile_defaults_to_none_and_parses_a_path() {
+        let default = Cli::try_parse_from(["nicaiemu", "game.CBE"]).unwrap();
+        assert_eq!(default.rotation_profile, None);
+
+        let cli = Cli::try_parse_from([
+            "nicaiemu",
+            "game.CBE",
+            "--rotation-profile",
+            "rotations.csv",
+        ])
+        .unwrap();
+        assert_eq!(cli.rotation_profile, Some(PathBuf::from("rotations.csv")));
     }
 
     #[test]

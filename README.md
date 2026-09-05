@@ -35,7 +35,8 @@ by supported games.
 - **240×400 display** — native WQVGA resolution with resizable desktop window
 - **Automatic landscape rotation** — games packaged for the original phone's
   rotated landscape LCD are presented at 400×240 automatically, with a
-  `--rotate` override for manual control
+  `--rotate` override for manual control and a `--rotation-profile` file for
+  titles outside the built-in profile
 - **Display scaling** — nearest, bilinear, bicubic, and xbrz filters with
   aspect-ratio-preserving centering (`--filter`)
 - **Key remapping** — rebind any guest key to any host key (`--remap`)

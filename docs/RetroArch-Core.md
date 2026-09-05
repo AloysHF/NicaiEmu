@@ -82,6 +82,13 @@ override: the core rotates the pixels itself, so a frontend rotation stacks
 on top of it and turns profiled games sideways again. Pointer input is mapped
 back through the active rotation, so taps stay correct in every mode.
 
+Additional titles can be covered without a core update by placing a
+`nicaiemu_rotation.csv` file in RetroArch's **system directory** (Settings >
+Directory > System/BIOS). The format is one `crc32,length,rotation` entry per
+line (`crc32` hex, `length` decimal bytes, `rotation` one of `none`, `cw`,
+`ccw`), matching the standalone `--rotation-profile` file; user entries win
+over built-in ones and are loaded once per run.
+
 ## RetroPad Button Mapping
 
 | RetroPad Button | Action |

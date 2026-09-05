@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio_engine::{AudioDiagnostics, AudioEngine};
 use crate::cbe::CbeArchive;
+use crate::rotation_profile::rotation_for_archive;
 
 mod cpu_bridge;
 mod drawing;
@@ -70,47 +71,6 @@ impl Rotation {
             Rotation::Cw => (display_y, (FRAME_HEIGHT - 1) as i32 - display_x),
             Rotation::Ccw => ((FRAME_WIDTH - 1) as i32 - display_y, display_x),
         }
-    }
-}
-
-/// Content-identity rotation profile for the local CBE corpus.
-///
-/// These games draw landscape (400x240) art pre-rotated into the portrait
-/// 240x400 framebuffer and rely on the original phone's rotated LCD output,
-/// so the emulator must present the raw framebuffer rotated 90 degrees
-/// counterclockwise. Keying by archive CRC-32 plus byte length instead of the
-/// file name keeps the profile valid across renames.
-const LANDSCAPE_ROTATION_PROFILE: &[(u32, u64)] = &[
-    (0xEE5A53AC, 341737),  // 暴力摩托
-    (0x7A5C0A30, 728876),  // 捕鱼猎人
-    (0x50528857, 961146),  // 法老祖玛2
-    (0x9C5E0674, 958874),  // 愤怒的小鸟
-    (0x52DAD535, 611925),  // 疯狂捕鸟
-    (0xF3283516, 606493),  // 疯狂斗地主
-    (0x7BCDA1EB, 396952),  // 疯狂企鹅大冒险
-    (0x4A849388, 910806),  // 机场指挥部
-    (0x701C7D4B, 539016),  // 僵尸先生
-    (0x5F320C34, 1413319), // 开心大富翁
-    (0x8EDDE44F, 1292332), // 美女桌球
-    (0x282FE73D, 1143317), // 三国群殴传
-    (0xC6488351, 400101),  // 士兵突袭
-    (0xBC3CD75C, 734986),  // 水果达人
-    (0x2CB6103B, 1074317), // 吸血鬼猎人
-    (0x145C46B4, 1016330), // 小鸟愤怒冬季版
-    (0x5E8B5904, 319424),  // 幸运扑克机
-];
-
-/// Resolve the automatic rotation from the content-identity profile.
-pub fn rotation_for_archive(bytes: &[u8]) -> Rotation {
-    let crc = crc32fast::hash(bytes);
-    let length = bytes.len() as u64;
-    if LANDSCAPE_ROTATION_PROFILE
-        .iter()
-        .any(|&(expected_crc, expected_length)| crc == expected_crc && length == expected_length)
-    {
-        Rotation::Ccw
-    } else {
-        Rotation::None
     }
 }
 

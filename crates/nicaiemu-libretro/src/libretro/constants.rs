@@ -36,6 +36,8 @@ pub const RETRO_ENVIRONMENT_GET_VARIABLE: u32 = 15;
 pub const RETRO_ENVIRONMENT_SET_VARIABLES: u32 = 16;
 pub const RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: u32 = 17;
 pub const RETRO_ENVIRONMENT_GET_LOG_INTERFACE: u32 = 27;
+/// Query the frontend's system directory for core support files.
+pub const RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: u32 = 45;
 pub const RETRO_ENVIRONMENT_SET_MEMORY_MAPS: u32 = 36 | 0x1_0000;
 /// Notification that the presented game geometry (base size or aspect)
 /// changed while content is running.

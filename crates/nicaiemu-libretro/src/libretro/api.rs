@@ -8,12 +8,13 @@ use super::constants::*;
 use super::options;
 use super::types::*;
 use nicaiemu_core::{
-    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE,
-    DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
+    decode_machine, encode_machine, load_rotation_overrides, CbeArchive, NicaiMachine,
+    AUDIO_SAMPLE_RATE, DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
 };
 use std::ffi::{c_char, c_void, CStr};
 use std::path::Path;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const DISPLAY_WIDTH: u32 = 240;
 const DISPLAY_HEIGHT: u32 = 400;
@@ -23,6 +24,9 @@ const MAX_DISPLAY_WIDTH: u32 = DISPLAY_HEIGHT;
 const MAX_DISPLAY_HEIGHT: u32 = DISPLAY_HEIGHT;
 const DISPLAY_FPS: f64 = GUEST_FRAME_RATE as f64;
 const PERFORMANCE_LEVEL: u32 = 3;
+/// Optional user rotation overrides looked up in the frontend system
+/// directory, loaded once per process before content loading.
+const ROTATION_PROFILE_FILE: &str = "nicaiemu_rotation.csv";
 /// Loaded emulator state shared by the libretro entry points.
 struct Emulator {
     archive: CbeArchive,
@@ -192,6 +196,10 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
             &PERFORMANCE_LEVEL as *const _ as *mut c_void,
         );
 
+        // User rotation entries must be registered before the machine is
+        // created, which is where the automatic profile is resolved.
+        load_user_rotation_profile();
+
         match load_machine(Path::new(path)) {
             Ok((archive, mut machine)) => {
                 if let Err(error) = machine.boot(DEFAULT_INSTRUCTION_LIMIT) {
@@ -300,6 +308,42 @@ fn load_machine(path: &Path) -> anyhow::Result<(CbeArchive, NicaiMachine)> {
     let archive = CbeArchive::load(path)?;
     let machine = NicaiMachine::new(&archive)?;
     Ok((archive, machine))
+}
+
+/// Load the optional user rotation profile once per process.
+///
+/// The file is `<system_dir>/nicaiemu_rotation.csv`; a missing or invalid
+/// file is non-fatal because the built-in profile still applies.
+fn load_user_rotation_profile() {
+    static LOADED: AtomicBool = AtomicBool::new(false);
+    if LOADED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let mut system_dir: *const c_char = ptr::null();
+    let ok = callbacks::environment(
+        RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY,
+        &mut system_dir as *mut _ as *mut c_void,
+    );
+    if !ok || system_dir.is_null() {
+        log::info!("No frontend system directory; user rotation profile not loaded");
+        return;
+    }
+    let Ok(dir) = unsafe { CStr::from_ptr(system_dir) }.to_str() else {
+        log::warn!("Frontend system directory is not valid UTF-8");
+        return;
+    };
+    if dir.is_empty() {
+        log::info!("Frontend system directory is empty; user rotation profile not loaded");
+        return;
+    }
+    let path = Path::new(dir).join(ROTATION_PROFILE_FILE);
+    match load_rotation_overrides(&path) {
+        Ok(count) => log::info!(
+            "Loaded {count} user rotation entries from {}",
+            path.display()
+        ),
+        Err(error) => log::info!("No user rotation profile applied: {error:#}"),
+    }
 }
 
 fn input_descriptors() -> [retro_input_descriptor; 10] {
