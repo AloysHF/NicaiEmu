@@ -158,6 +158,10 @@ fn main() -> Result<()> {
     machine.set_volume(cli.volume);
     machine.set_auto_bgm(cli.auto_bgm);
     machine.set_rotation(cli.rotate.into());
+    // Restored machines skip NicaiMachine::new, which is where the automatic
+    // rotation profile is normally resolved; re-resolve it so landscape games
+    // loaded from a save state stay rotated.
+    machine.resolve_auto_rotation(&archive);
 
     if let Some(path) = &cli.screenshot {
         capture_screenshot(
