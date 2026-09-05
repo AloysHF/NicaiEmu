@@ -8,8 +8,8 @@ use super::constants::*;
 use super::options;
 use super::types::*;
 use nicaiemu_core::{
-    decode_machine, encode_machine, rotation_for_archive, CbeArchive, NicaiMachine,
-    AUDIO_SAMPLE_RATE, DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
+    decode_machine, encode_machine, CbeArchive, NicaiMachine, AUDIO_SAMPLE_RATE,
+    DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
 };
 use std::ffi::{c_char, c_void, CStr};
 use std::path::Path;
@@ -31,6 +31,9 @@ struct Emulator {
     stopped: bool,
     touch_input: bool,
     content_crc32: u32,
+    /// Display size last reported to the frontend, to detect geometry changes
+    /// from a live rotation override.
+    presented_size: (u32, u32),
 }
 
 /// Global emulator instance.
@@ -197,6 +200,7 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
                 }
                 log::info!("Game loaded: {path}");
                 let content_crc32 = crc32fast::hash(archive.bytes());
+                let presented_size = machine.display_size();
                 EMULATOR = Some(Emulator {
                     archive,
                     machine,
@@ -204,9 +208,11 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
                     stopped: false,
                     touch_input: true,
                     content_crc32,
+                    presented_size,
                 });
                 if let Some(emulator) = EMULATOR.as_mut() {
                     apply_core_options(emulator);
+                    emulator.presented_size = emulator.machine.display_size();
                     register_memory_maps(emulator);
                 }
                 true
@@ -248,6 +254,14 @@ pub extern "C" fn retro_run() {
             apply_core_options(emulator);
         }
 
+        // A live rotation override swaps the presented geometry; tell the
+        // frontend so it resizes instead of stretching the old viewport.
+        let (display_width, display_height) = emulator.machine.display_size();
+        if (display_width, display_height) != emulator.presented_size {
+            notify_display_geometry(display_width, display_height);
+            emulator.presented_size = (display_width, display_height);
+        }
+
         callbacks::input_poll();
         update_phone_keys(emulator);
         update_pointer(emulator);
@@ -260,7 +274,6 @@ pub extern "C" fn retro_run() {
         }
 
         // Present the last valid guest framebuffer even after a stop.
-        let (display_width, display_height) = emulator.machine.display_size();
         let pixels: Vec<u32> = emulator
             .machine
             .frame_pixels()
@@ -428,14 +441,37 @@ fn apply_core_options(emulator: &mut Emulator) {
     emulator.machine.set_volume(options.volume);
     emulator.touch_input = options.touch_input;
     emulator.machine.set_auto_bgm(options.auto_bgm);
+    emulator.machine.set_rotation(options.rotation);
+    emulator.machine.resolve_auto_rotation(&emulator.archive);
     super::logger::set_debug_logging(options.debug_logging);
     log::info!(
-        "Core options applied: volume={} touch_input={} auto_bgm={} debug_logging={}",
+        "Core options applied: volume={} touch_input={} auto_bgm={} debug_logging={} rotation={:?}",
         options.volume,
         options.touch_input,
         options.auto_bgm,
-        options.debug_logging
+        options.debug_logging,
+        options.rotation
     );
+}
+
+/// Report a changed presented geometry (from a live rotation override) so the
+/// frontend resizes instead of stretching the previous viewport.
+fn notify_display_geometry(width: u32, height: u32) {
+    let geometry = retro_game_geometry {
+        base_width: width,
+        base_height: height,
+        max_width: MAX_DISPLAY_WIDTH,
+        max_height: MAX_DISPLAY_HEIGHT,
+        aspect_ratio: width as f32 / height as f32,
+    };
+    if callbacks::environment(
+        RETRO_ENVIRONMENT_SET_GEOMETRY,
+        &geometry as *const _ as *mut c_void,
+    ) {
+        log::info!("Frontend accepted display geometry {width}x{height}");
+    } else {
+        log::warn!("Frontend did not accept display geometry {width}x{height}");
+    }
 }
 
 /// Map RetroPad buttons to phone keypad ABI key codes.
@@ -567,13 +603,13 @@ pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
         }
         let buffer = std::slice::from_raw_parts(data as *const u8, size);
         match decode_machine(buffer, emulator.content_crc32) {
-            Ok(mut machine) => {
-                // Display rotation is presentation state that the save-state
-                // codec skips; re-resolve it for the loaded content.
-                machine.set_rotation(rotation_for_archive(emulator.archive.bytes()));
+            Ok(machine) => {
                 emulator.machine = machine;
                 emulator.stopped = false;
+                // apply_core_options re-resolves the display rotation: it is
+                // presentation state skipped by the save-state codec.
                 apply_core_options(emulator);
+                emulator.presented_size = emulator.machine.display_size();
                 log::info!("Game state restored");
                 true
             }

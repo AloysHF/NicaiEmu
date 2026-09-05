@@ -1371,6 +1371,19 @@ impl NicaiMachine {
         }
     }
 
+    /// Re-resolve the automatic display rotation from the content-identity
+    /// profile.
+    ///
+    /// Only a requested `Auto` mode consults the profile; explicit `None`/`Cw`/
+    /// `Ccw` overrides win. Presentation state is skipped by the save-state
+    /// codec, so frontends call this after restoring a saved machine or
+    /// applying a frontend rotation setting.
+    pub fn resolve_auto_rotation(&mut self, archive: &CbeArchive) {
+        if self.rotation == Rotation::Auto {
+            self.effective_rotation = rotation_for_archive(archive.bytes());
+        }
+    }
+
     /// The display rotation applied by [`NicaiMachine::frame_pixels`].
     pub fn rotation(&self) -> Rotation {
         self.rotation
