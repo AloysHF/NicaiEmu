@@ -7,6 +7,14 @@
 //! length (stable across renames, sensitive to any repack); frontends can
 //! register additional entries from a user-supplied CSV so new games do not
 //! require a core code change.
+//!
+//! The content-identity keying is deliberate: the landscape layout is an
+//! authoring convention with no runtime signal to detect. Landscape games
+//! blit through the same LCD services with in-bounds portrait coordinates
+//! (the sprites themselves are stored pre-rotated), the executable header
+//! carries no screen-geometry metadata, and the guest never rewrites the
+//! 240x400 screen-struct fields. A repacked variant of a known title
+//! therefore needs a new profile entry rather than re-detection.
 
 use crate::machine::Rotation;
 use anyhow::{bail, Context, Result};
