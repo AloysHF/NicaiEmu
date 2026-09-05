@@ -57,6 +57,16 @@ frontend can display the core metadata and supported features.
   live while a game is running
 - Platform-accurate 10 Hz guest screen timing with continuous held-key state
 
+## Timing and Speed
+
+The guest advances its screen logic at the platform's native 10 Hz rate; the
+core reports a 60 Hz frontend pacing rate and advances one guest tick on every
+sixth frame, so games run at real-time speed regardless of the display refresh
+rate. The audio stream flows constantly at the reported rate (silence-padded
+while the guest is quiet) so frontends that pace by audio sync stay exact too.
+No user configuration is needed; do not compensate with the fast-forward or
+slow-motion settings.
+
 ## Core Options
 
 Open **Settings > Core Options** in RetroArch to configure the core. Changes
