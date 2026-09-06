@@ -190,6 +190,12 @@ display. 74 out of 74 tested games render startup frames successfully.
 |--------|-------|
 | ✅ Pass | 74 |
 | ❌ Fail | 0 |
+| 🌐 Requires network | 17 |
+
+Applications that require the original phone's GPRS connection (online games,
+news/book/music/map/email services, operator download services) are marked
+🌐 Required in the full list; the emulator implements no network stack, so
+they stop at their login, self-update, or connection-error screens.
 
 For the full game list with screenshots, see [Game Compatibility](docs/Game-Compatibility.md).
 
