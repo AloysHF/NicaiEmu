@@ -4,7 +4,9 @@ CBE applications in the local validation corpus were run by the standalone emula
 
 The Network column in the application list identifies applications that
 require the original phone's GPRS connection and cannot be played or used
-offline in the emulator.
+offline. These services belong to a long-gone WAP/GPRS era: their back-end
+servers were shut down years ago, so they no longer work even on original
+hardware, regardless of emulator network support.
 
 Games packaged for the original phone's rotated landscape display present the
 240×400 framebuffer rotated 90 degrees counterclockwise as 400×240. The
@@ -18,9 +20,11 @@ The current core recognizes little- and big-endian ARM/Thumb CBE executables des
 
 Validated behavior includes executable initialization, startup and narrative screens, archive extraction, file-backed resource-image decoding, Chinese text and HUD rendering, keypad input, fixed-point trigonometry, packed-rectangle collision detection, and continued frame execution. Headless capture preserves a valid guest-rendered framebuffer if a later callback stops.
 
-The firmware network manager is not bridged, so applications that need GPRS
-connectivity cannot proceed past their login, self-update, or connection-error
-screens; they are marked 🌐 Required in the list below.
+These applications are marked 🌐 Required in the list below. They are
+unusable today primarily because their service providers shut the servers
+down long ago; the firmware network manager also being unimplemented in the
+emulator only moves that failure earlier, to the login, self-update, or
+connection-error screens the screenshots show.
 
 ## Summary
 
@@ -40,7 +44,9 @@ download services (ringback tones, videos). The flags follow from guest calls
 to the firmware network manager observed in headless service traces and from
 the applications' own login or network screens shown in the screenshots.
 Applications that only read billing identifiers at startup but remain fully
-playable offline are not flagged.
+playable offline are not flagged. Note that the flag describes the
+application as designed, not a limitation that better emulator network
+support could lift: the services behind these titles no longer exist.
 
 | # | Application | File | Screenshot | Network | Status |
 | ---: | --- | --- | --- | --- | --- |
@@ -122,7 +128,7 @@ playable offline are not flagged.
 ## Known Limitations
 
 - Persistent guest file storage is not implemented.
-- The firmware network manager is not implemented; applications that require GPRS connectivity (marked 🌐 Required above) stop at their login, self-update, or connection-error screens.
+- Applications that require GPRS connectivity (marked 🌐 Required above) stop at their login, self-update, or connection-error screens. Their back-end servers were shut down years ago, so they would remain unusable even with a complete firmware network-manager implementation (which is itself not implemented).
 - Core options are not yet available.
 - File-based MP3 control is not implemented yet.
 - The full 74-application validation corpus produces usable guest-rendered startup frames.
