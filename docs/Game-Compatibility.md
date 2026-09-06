@@ -2,11 +2,10 @@
 
 CBE applications in the local validation corpus were run by the standalone emulator with default or application-specific capture timing. Every screenshot below is the RGB565 framebuffer produced by guest execution. If an application stops, times out, or leaves a single-color framebuffer, the batch does not create a screenshot. A successful startup capture does not guarantee that every screen or gameplay path works correctly.
 
-The Network column in the application list identifies applications that
-require the original phone's GPRS connection and cannot be played or used
-offline. These services belong to a long-gone WAP/GPRS era: their back-end
-servers were shut down years ago, so they no longer work even on original
-hardware, regardless of emulator network support.
+The Network column in the application list flags applications that require
+the original phone's GPRS connection and cannot be used offline: their
+WAP/GPRS-era back-end servers were shut down years ago, so they no longer
+work even on original hardware.
 
 Games packaged for the original phone's rotated landscape display present the
 240×400 framebuffer rotated 90 degrees counterclockwise as 400×240. The
@@ -19,12 +18,6 @@ the titles appear on the original hardware.
 The current core recognizes little- and big-endian ARM/Thumb CBE executables designed for a 240×400 display, including variable segment headers and fixed-address manager-directory variants. It implements the firmware subsets needed for memory blocks, native and installed data packages, image and text drawing, screen changes, sandboxed guest files, timers, and keypad input.
 
 Validated behavior includes executable initialization, startup and narrative screens, archive extraction, file-backed resource-image decoding, Chinese text and HUD rendering, keypad input, fixed-point trigonometry, packed-rectangle collision detection, and continued frame execution. Headless capture preserves a valid guest-rendered framebuffer if a later callback stops.
-
-These applications are marked 🌐 Required in the list below. They are
-unusable today primarily because their service providers shut the servers
-down long ago; the firmware network manager also being unimplemented in the
-emulator only moves that failure earlier, to the login, self-update, or
-connection-error screens the screenshots show.
 
 ## Summary
 
@@ -44,9 +37,7 @@ download services (ringback tones, videos). The flags follow from guest calls
 to the firmware network manager observed in headless service traces and from
 the applications' own login or network screens shown in the screenshots.
 Applications that only read billing identifiers at startup but remain fully
-playable offline are not flagged. Note that the flag describes the
-application as designed, not a limitation that better emulator network
-support could lift: the services behind these titles no longer exist.
+playable offline are not flagged.
 
 | # | Application | File | Screenshot | Network | Status |
 | ---: | --- | --- | --- | --- | --- |
@@ -128,7 +119,7 @@ support could lift: the services behind these titles no longer exist.
 ## Known Limitations
 
 - Persistent guest file storage is not implemented.
-- Applications that require GPRS connectivity (marked 🌐 Required above) stop at their login, self-update, or connection-error screens. Their back-end servers were shut down years ago, so they would remain unusable even with a complete firmware network-manager implementation (which is itself not implemented).
+- The firmware network manager is not implemented, so applications marked 🌐 Required above stop at their login, self-update, or connection-error screens.
 - Core options are not yet available.
 - File-based MP3 control is not implemented yet.
 - The full 74-application validation corpus produces usable guest-rendered startup frames.

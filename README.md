@@ -194,10 +194,9 @@ display. 74 out of 74 tested games render startup frames successfully.
 
 Applications that require the original phone's GPRS connection (online games,
 news/book/music/map/email services, operator download services) are marked
-🌐 Required in the full list. Those services' back-end servers were shut down
-years ago — they are unusable even on original hardware — and the emulator
-also implements no network stack, so they stop at their login, self-update,
-or connection-error screens.
+🌐 Required in the full list. Their WAP/GPRS-era servers were shut down years
+ago and the emulator implements no network stack, so they stop at their
+login, self-update, or connection-error screens.
 
 For the full game list with screenshots, see [Game Compatibility](docs/Game-Compatibility.md).
 
