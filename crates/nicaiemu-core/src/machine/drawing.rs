@@ -117,7 +117,9 @@ impl NicaiMachine {
                 self.set_result(1);
             }
             16 => {
-                self.draw_rect(false, true);
+                if !self.draw_packed_screen_rect(true) {
+                    self.draw_rect(false, true);
+                }
                 self.set_result(1);
             }
             17 => {
@@ -125,7 +127,9 @@ impl NicaiMachine {
                 self.set_result(1);
             }
             18 => {
-                self.draw_rect(false, false);
+                if !self.draw_packed_screen_rect(false) {
+                    self.draw_rect(false, false);
+                }
                 self.set_result(1);
             }
             19 => {
@@ -550,7 +554,7 @@ impl NicaiMachine {
     }
 
     fn draw_rect(&mut self, has_destination: bool, outline: bool) {
-        let (mut destination, mut x, mut y, mut width) = if has_destination {
+        let (destination, x, y, width) = if has_destination {
             (
                 self.register(0),
                 signed_coord(self.register(1)),
@@ -566,7 +570,7 @@ impl NicaiMachine {
             )
         };
         let stack = self.register(reg::SP);
-        let mut height = signed_coord(self.memory.r32(stack));
+        let height = signed_coord(self.memory.r32(stack));
         let color = self.memory.r32(stack + 4) as u16;
         let mut pixels = self.memory.r32(destination);
         let mut destination_width = self.memory.r16(destination + 4) as i32;
@@ -578,11 +582,74 @@ impl NicaiMachine {
             || destination_width > 240
             || destination_height > 400
         {
-            destination = SCREEN_IMAGE_STRUCT;
             pixels = SCREEN_IMAGE;
             destination_width = 240;
             destination_height = 400;
         }
+        self.paint_rect(
+            x,
+            y,
+            width,
+            height,
+            color,
+            outline,
+            destination_width,
+            destination_height,
+            pixels,
+        );
+    }
+
+    /// Draw a screen rectangle from the firmware's packed form: r0 and r1
+    /// hold the inclusive corner coordinates (y<<16|x) and r2 the color.
+    /// Returns false when the registers do not carry packed coordinates so
+    /// the caller falls back to the stack-based form.
+    fn draw_packed_screen_rect(&mut self, outline: bool) -> bool {
+        let first = self.register(0);
+        let second = self.register(1);
+        if (first | second) & 0xffff_0000 == 0 {
+            return false;
+        }
+        let x0 = signed_coord(first);
+        let y0 = signed_coord(first >> 16);
+        let x1 = signed_coord(second);
+        let y1 = signed_coord(second >> 16);
+        // Data pointers share these registers; reject coordinate halves far
+        // outside the screen so such calls keep their stack-form meaning.
+        let horizontally_plausible = (-240..=480).contains(&x0) && (-240..=480).contains(&x1);
+        let vertically_plausible = (-400..=800).contains(&y0) && (-400..=800).contains(&y1);
+        if !horizontally_plausible || !vertically_plausible {
+            return false;
+        }
+        let (x0, x1) = (x0.min(x1), x0.max(x1));
+        let (y0, y1) = (y0.min(y1), y0.max(y1));
+        let color = self.register(2) as u16;
+        self.paint_rect(
+            x0,
+            y0,
+            x1 - x0 + 1,
+            y1 - y0 + 1,
+            color,
+            outline,
+            240,
+            400,
+            SCREEN_IMAGE,
+        );
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_rect(
+        &mut self,
+        mut x: i32,
+        mut y: i32,
+        mut width: i32,
+        mut height: i32,
+        color: u16,
+        outline: bool,
+        destination_width: i32,
+        destination_height: i32,
+        pixels: u32,
+    ) {
         let mut source_x = 0;
         let mut source_y = 0;
         clip_axis(
@@ -612,7 +679,6 @@ impl NicaiMachine {
                 self.memory.w16(pixels + offset, color);
             }
         }
-        let _ = destination;
     }
 
     fn draw_text(&mut self, address: u32, x: i32, y: i32, color: u16) {

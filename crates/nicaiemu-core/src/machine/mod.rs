@@ -2287,4 +2287,70 @@ mod tests {
             "installer progress text rendered outside the centered display area"
         );
     }
+
+    /// Drive LCD service `index` with r0-r3 and a scratch stack holding
+    /// `stack` words, then return the screen pixel at (x, y).
+    fn lcd_rect_service_pixel(
+        machine: &mut NicaiMachine,
+        index: u32,
+        registers: [u32; 4],
+        stack: &[u32],
+        x: u32,
+        y: u32,
+    ) -> u16 {
+        let spill = machine.allocate(16);
+        for (word, value) in stack.iter().enumerate() {
+            machine.memory.w32(spill + word as u32 * 4, *value);
+        }
+        for (number, value) in registers.iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, number as u8, *value);
+        }
+        machine.cpu.reg_set(Mode::User, reg::SP, spill);
+        machine.handle_lcd_service(index);
+        machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2)
+    }
+
+    #[test]
+    fn packed_fill_rect_covers_its_inclusive_corners() {
+        let mut machine = machine_from_minimal_archive();
+        // vMFillRect packed form: r0 = y0<<16|x0, r1 = y1<<16|x1, r2 = color.
+        // The stack garbage must be ignored in this form.
+        let stack = [0xdead_beef, 0xdead_beef];
+        let registers = [10 | (20 << 16), 29 | (39 << 16), 0xeeb8, 0];
+        let mut pixel = |x, y| lcd_rect_service_pixel(&mut machine, 18, registers, &stack, x, y);
+        assert_eq!(pixel(10, 20), 0xeeb8);
+        assert_eq!(pixel(29, 39), 0xeeb8);
+        assert_eq!(pixel(9, 20), 0);
+        assert_eq!(pixel(30, 39), 0);
+        assert_eq!(pixel(29, 40), 0);
+    }
+
+    #[test]
+    fn packed_outline_rect_draws_only_its_border() {
+        let mut machine = machine_from_minimal_archive();
+        // vMDrawRect packed form: same registers as the fill, but only the
+        // 1-pixel border of the rectangle is painted.
+        let stack = [0xdead_beef, 0xdead_beef];
+        let registers = [5 | (5 << 16), 15 | (10 << 16), 0x0abc, 0];
+        let mut pixel = |x, y| lcd_rect_service_pixel(&mut machine, 16, registers, &stack, x, y);
+        assert_eq!(pixel(5, 5), 0x0abc);
+        assert_eq!(pixel(15, 10), 0x0abc);
+        assert_eq!(pixel(10, 5), 0x0abc);
+        assert_eq!(pixel(10, 8), 0);
+        assert_eq!(pixel(16, 10), 0);
+    }
+
+    #[test]
+    fn stack_form_fill_rect_still_draws() {
+        let mut machine = machine_from_minimal_archive();
+        // Plain form: r0 = x, r1 = y, r2 = width, [sp] = height, [sp+4] =
+        // color. Both high halves are zero, so the packed form must not win.
+        let stack = [12, 0x1234];
+        let registers = [10, 20, 30, 0];
+        let mut pixel = |x, y| lcd_rect_service_pixel(&mut machine, 18, registers, &stack, x, y);
+        assert_eq!(pixel(10, 20), 0x1234);
+        assert_eq!(pixel(39, 31), 0x1234);
+        assert_eq!(pixel(40, 31), 0);
+        assert_eq!(pixel(39, 32), 0);
+    }
 }
