@@ -2403,6 +2403,85 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_godwar_intro_idle_exit_halts_gracefully() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("战争机器.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+
+        // Two Enter presses reach the background-intro screens. Idling there
+        // makes the guest load the level-0 map ("map0d.map" from a zero level
+        // counter), fail, divide by zero in its C runtime, and exit() through
+        // the ARM semihosting interface. The frontend must keep presenting the
+        // halted machine instead of closing with the old unmapped-fetch fault
+        // at the SWI vector (issue #53).
+        let mut exit_frame = None;
+        for frame in 0..400 {
+            if matches!(frame, 40 | 70) {
+                machine.set_key(14, true);
+            }
+            let result = machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT);
+            if matches!(frame, 40 | 70) {
+                machine.set_key(14, false);
+            }
+            if let Err(error) = result {
+                panic!("guest frame {frame} aborted: {error:#}");
+            }
+            if machine.state() == MachineState::Halted {
+                exit_frame = Some(frame);
+                break;
+            }
+        }
+        let exit_frame = exit_frame.expect("guest never exited during the idle intro run");
+        assert!(exit_frame >= 70, "guest exited before the intro screens");
+
+        // Halted frames stay idle and error-free.
+        for _ in 0..10 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+        assert_eq!(machine.state(), MachineState::Halted);
+    }
+
+    /// The guest C library terminates through the Angel semihosting exit:
+    /// ARM `SWI #0x123456` with r0 = 0x18 (ReportException) and r1 = stop
+    /// reason. Issue #53: the unhandled SWI used to raise the uninstalled
+    /// exception vector at 0x8 and fault the machine, which closed the whole
+    /// standalone frontend window.
+    #[test]
+    fn arm_semihosting_exit_halts_instead_of_faulting() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w32(entry, 0xef12_3456); // SWI #0x123456
+        machine.cpu.reg_set(Mode::User, reg::PC, entry);
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10); // ARM state
+        machine.cpu.reg_set(Mode::User, 0, 0x18); // ReportException
+        machine.cpu.reg_set(Mode::User, 1, 0x0002_0026); // ADP_Stopped_ApplicationExit
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(machine.state(), MachineState::Halted);
+    }
+
+    #[test]
+    fn thumb_semihosting_exit_halts_instead_of_faulting() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0xdfab); // SVC #0xAB
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 0, 0x18);
+        machine.cpu.reg_set(Mode::User, 1, 0x0002_0026);
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(machine.state(), MachineState::Halted);
+    }
+
     /// Drive LCD service `index` with r0-r3 and a scratch stack holding
     /// `stack` words, then return the screen pixel at (x, y).
     fn lcd_rect_service_pixel(
