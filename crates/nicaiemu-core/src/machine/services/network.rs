@@ -287,12 +287,22 @@ impl NicaiMachine {
 
     /// Default mock body: a single success byte is enough for status probes.
     fn build_mock_http_response(&self, url: &str) -> Vec<u8> {
+        if std::env::var("CBE_TRACE").is_ok() {
+            eprintln!("network mock http url={url}");
+        }
         let _ = url;
         vec![1]
     }
 
     /// Default mock body for raw uplink packets.
     fn build_mock_uplink_response(&self) -> Vec<u8> {
+        if std::env::var("CBE_TRACE").is_ok() {
+            eprintln!(
+                "network mock uplink len={} head={:02x?}",
+                self.net_last_uplink.len(),
+                &self.net_last_uplink[..self.net_last_uplink.len().min(16)]
+            );
+        }
         vec![1]
     }
 }

@@ -1512,6 +1512,21 @@ impl NicaiMachine {
         self.memory.r32(address)
     }
 
+    /// Total bytes accepted by network `send` calls.
+    pub fn network_uplink_bytes(&self) -> u64 {
+        self.net_uplink_bytes
+    }
+
+    /// Total bytes delivered to guest network callbacks by the mock layer.
+    pub fn network_downlink_bytes(&self) -> u64 {
+        self.net_downlink_bytes
+    }
+
+    /// Last URL requested through the network HTTP service, if any.
+    pub fn network_last_http_url(&self) -> &str {
+        &self.net_last_http_url
+    }
+
     /// Construct a blank machine with the standard memory map for unit tests
     /// that exercise host-side service state without a CBE archive.
     #[cfg(test)]
@@ -2205,6 +2220,46 @@ mod tests {
         assert!(
             machine.service_calls().get(&(14, 6)).copied().unwrap_or(0) > 0,
             "game never removed its final screen"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_login_title_reaches_menu_via_network_mock() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("恶魔城登录版.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for _ in 0..80 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert!(
+            machine
+                .service_calls()
+                .keys()
+                .any(|(group, index)| *group == 9 && *index == 3),
+            "game never called the network HTTP service"
+        );
+        assert!(
+            machine.network_downlink_bytes() > 0,
+            "network mock never delivered a response body"
+        );
+        let pixels = machine.frame_pixels();
+        let mut colors = std::collections::HashSet::new();
+        for pixel in &pixels {
+            colors.insert(*pixel);
+        }
+        // The pre-mock login wait screen is a flat 6-color drawing. Reaching
+        // the title menu requires the network mock and a rich guest palette.
+        assert!(
+            colors.len() > 32,
+            "frame still looks like the login wait screen ({} colors)",
+            colors.len()
         );
     }
 
