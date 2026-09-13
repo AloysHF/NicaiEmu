@@ -40,6 +40,9 @@ by supported games.
 - **Display scaling** — nearest, bilinear, bicubic, and xbrz filters with
   aspect-ratio-preserving centering (`--filter`)
 - **Key remapping** — rebind any guest key to any host key (`--remap`)
+- **Physical gamepad input** — first connected pad drives guest keys via gilrs,
+  RetroPad-compatible mapping, keyboard and pad combine as a logical OR
+  (`--no-gamepad` disables the pad)
 - **Virtual gamepad overlay** — visual phone keypad over the game frame
   (`--show-gamepad`)
 - **Fullscreen and volume** — borderless fullscreen and 0–100 playback volume
@@ -80,8 +83,8 @@ nicaiemu path/to/game.CBE
 ```
 
 See the [Standalone Emulator](docs/Standalone-Emulator.md) guide for
-installation, keyboard controls, headless mode, screenshots, and all
-command-line options.
+installation, keyboard and gamepad controls, headless mode, screenshots, and
+all command-line options.
 
 ### RetroArch Mode
 
@@ -144,7 +147,7 @@ crates/
 ├── nicaiemu/              # Standalone binary (→ nicaiemu)
 │   └── src/
 │       ├── main.rs           # Window loop, CLI, input, audio output
-│       └── standalone/       # Display scalers, gamepad overlay, key mapper
+│       └── standalone/       # Display scalers, gamepad overlay, key/gamepad mappers
 ├── nicaiemu-tools/        # Archive analysis and headless diagnostics
 │   └── src/
 │       ├── bin/

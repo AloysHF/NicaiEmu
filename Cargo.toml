@@ -36,6 +36,7 @@ unifont = "1.1"            # Embedded Unicode bitmap font
 unarm = "2.1"              # ARM/Thumb diagnostics
 clap = { version = "4", features = ["derive"] }  # CLI argument parsing (standalone)
 minifb = "0.28"           # Window creation and pixel rendering (standalone)
+gilrs = "0.11"            # Physical gamepad polling (standalone)
 rodio = "0.22"            # Audio output (standalone)
 env_logger = "0.11"       # Log output to stderr (standalone)
 
