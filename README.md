@@ -188,22 +188,11 @@ walk smoothly without flooding tile-based games with 30 updates per second.
 
 ## Game Compatibility
 
-The emulator supports CBE applications for Nicai/MStar phones with 240×400
-display. 74 out of 74 tested games render startup frames successfully.
-
 | Status | Count |
 |--------|-------|
 | ✅ Pass | 74 |
 | ❌ Fail | 0 |
 | 🌐 Requires network | 17 |
-
-Applications that require the original phone's GPRS connection (online games,
-news/book/music/map/email services, operator download services) are marked
-🌐 Required in the full list. Their WAP/GPRS-era servers were shut down years
-ago. The core now includes a minimal offline network manager mock, so some
-login-gated titles (for example 恶魔城登录版) can leave the wait screen and
-render their title menu; there is still no live server or persistent online
-session.
 
 For the full game list with screenshots, see [Game Compatibility](docs/Game-Compatibility.md).
 
