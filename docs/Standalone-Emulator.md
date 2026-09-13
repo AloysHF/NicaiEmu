@@ -1,7 +1,8 @@
 # Standalone Emulator
 
 This guide covers installing and running the standalone `nicaiemu` binary,
-loading games, keyboard controls, headless mode, and all command-line options.
+loading games, keyboard and physical gamepad controls, headless mode, and all
+command-line options.
 
 ## Supported Platforms
 
@@ -43,6 +44,7 @@ nicaiemu [OPTIONS] <GAME_PATH>
 | `--rotation-profile <FILE>` | path | — | Load extra display-rotation entries from a CSV file before starting (see [Screen rotation](#screen-rotation)). |
 | `--remap <GUEST_KEY:KEY>` | `GUEST_KEY:KEY` | — | Remap a guest key to a host key. Repeatable. |
 | `--show-gamepad` | flag | off | Draw a virtual gamepad overlay over the game frame. |
+| `--no-gamepad` | flag | off | Disable physical gamepad input (keyboard remains available). |
 | `--fullscreen` | flag | off | Run in borderless fullscreen. |
 | `--volume <VOLUME>` | 0–100 | `100` | Audio volume. |
 | `--headless` | flag | off | Run without opening a window. |
@@ -102,6 +104,35 @@ nicaiemu path/to/game.CBE --remap enter:space
 
 # Put the dpad on WASD and confirm on Space
 nicaiemu path/to/game.CBE --remap up:w --remap down:s --remap left:a --remap right:d --remap enter:space
+```
+
+## Physical Gamepads
+
+Physical controllers (Xbox-style pads, DualShock/DualSense, generic USB or
+Bluetooth gamepads) are polled each frame in addition to the keyboard. The
+first connected pad is used; keyboard and gamepad inputs combine as a logical
+OR. Use `--no-gamepad` to force keyboard-only input.
+
+Default mapping (RetroPad-compatible, matching the libretro core):
+
+| Control | Phone input |
+| --- | --- |
+| D-pad or left/right stick (0.5 deadzone) | Direction pad |
+| South (Xbox A / PS Cross) | Confirm |
+| East (Xbox B / PS Circle) | Confirm |
+| Start | Confirm |
+| North (Xbox Y / PS Triangle) | Left soft key (Q) |
+| West (Xbox X / PS Square) | Right soft key (E) |
+| Left bumper / trigger | Left soft key (Q) |
+| Right bumper / trigger | Right soft key (E) |
+| Select / Back | Additional key (N) |
+
+```bash
+# Keyboard only
+nicaiemu path/to/game.CBE --no-gamepad
+
+# Visualize the merged keyboard + gamepad mask
+nicaiemu path/to/game.CBE --show-gamepad
 ```
 
 ## Headless Mode

@@ -95,7 +95,9 @@ PR must be submitted to sync the changes upstream.
 - Check the [Actions](https://github.com/AloysHF/NicaiEmu/actions) tab
   for the failed run
 - The most common failure is a missing Linux build dependency — the CI installs
-  `libasound2-dev`, `libx11-dev`, and `libxkbcommon-dev` automatically
+  `libasound2-dev`, `libx11-dev`, `libxkbcommon-dev`, and `libudev-dev`
+  automatically (`libudev-dev` is required by the standalone `gilrs` gamepad
+  backend)
 
 ### Re-triggering a release
 

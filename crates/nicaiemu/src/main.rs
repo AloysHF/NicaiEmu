@@ -14,6 +14,7 @@ use nicaiemu_core::{
     decode_machine, encode_machine, load_rotation_overrides, CbeArchive, NicaiMachine, Rotation,
     AUDIO_SAMPLE_RATE, DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
 };
+use standalone::gamepad::GamepadMapper;
 use standalone::gamepad_overlay::GamepadOverlay;
 use standalone::input::{KeyboardMapper, RemapSpec};
 use standalone::scaler::{DisplayScaler, ScaleFilter};
@@ -80,6 +81,10 @@ struct Cli {
     /// Show a virtual gamepad overlay over the game frame.
     #[arg(long)]
     show_gamepad: bool,
+
+    /// Disable physical gamepad input (keyboard remains available).
+    #[arg(long)]
+    no_gamepad: bool,
 
     /// Run in fullscreen mode.
     #[arg(long)]
@@ -230,11 +235,13 @@ fn main() -> Result<()> {
         warn!("Audio output unavailable; running without sound");
     }
 
-    info!("Controls: arrows/WASD move, Enter/F confirms, Q/E soft keys, R resets, Esc exits");
+    info!("Controls: arrows/WASD or gamepad move, Enter/F confirms, Q/E soft keys, R resets, Esc exits");
     let mut display_scaler = DisplayScaler::new(cli.filter);
     let keyboard = KeyboardMapper::new(&cli.remappings);
+    let mut gamepad = GamepadMapper::new(!cli.no_gamepad);
     while window.is_open() && !window.is_key_down(Key::Escape) {
         keyboard.apply(&window, &mut machine);
+        gamepad.hold_pressed(&mut machine);
         if let Some((mouse_x, mouse_y)) = window.get_mouse_pos(minifb::MouseMode::Clamp) {
             let (display_width, display_height) = machine.display_size();
             let x = (mouse_x * display_width as f32 / cli.width as f32) as i32;
@@ -535,6 +542,15 @@ mod tests {
 
         assert_eq!(cli.remappings.len(), 2);
         assert_eq!(cli.remappings[0].to_string(), "enter:space");
+    }
+
+    #[test]
+    fn no_gamepad_flag_is_parsed() {
+        let defaults = Cli::try_parse_from(["nicaiemu", "game.CBE"]).unwrap();
+        assert!(!defaults.no_gamepad);
+
+        let cli = Cli::try_parse_from(["nicaiemu", "game.CBE", "--no-gamepad"]).unwrap();
+        assert!(cli.no_gamepad);
     }
 
     #[test]
