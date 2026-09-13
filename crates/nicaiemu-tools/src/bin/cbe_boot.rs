@@ -132,6 +132,9 @@ fn main() -> Result<()> {
                 }
             }
             result = machine.run_frame(cli.instruction_limit);
+            // Consume guest audio like a frontend so drained one-shots report
+            // stopped and looping BGM restarts through the engine path.
+            let _ = machine.take_audio_samples(4410);
             if cli.press_frame.contains(&frame) {
                 if let Some(key) = cli.press_key {
                     machine.set_key(key, false);
@@ -157,6 +160,16 @@ fn main() -> Result<()> {
         "rotation requested={:?} effective={:?}",
         machine.rotation(),
         machine.effective_rotation()
+    );
+    let audio = machine.audio_diagnostics();
+    eprintln!(
+        "audio submitted_bytes={} decoded_frames={} nonzero_samples={} rejected={} underflow={} max_buffered={}",
+        audio.submitted_bytes,
+        audio.decoded_frames,
+        audio.nonzero_samples,
+        audio.rejected_writes,
+        audio.underflow_frames,
+        audio.max_buffered_frames
     );
     let pixels = machine.frame_pixels();
     let nonzero = pixels.iter().filter(|pixel| **pixel != 0).count();

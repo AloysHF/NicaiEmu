@@ -34,6 +34,9 @@ pub struct AudioEngine {
     playing: bool,
     paused: bool,
     samples: VecDeque<i16>,
+    /// Encoded bytes of a looping cue; re-decoded when the queue drains.
+    #[serde(skip, default)]
+    loop_source: Option<Vec<u8>>,
     submitted_bytes: u64,
     decoded_frames: u64,
     nonzero_samples: u64,
@@ -55,6 +58,7 @@ impl AudioEngine {
             playing: false,
             paused: false,
             samples: VecDeque::new(),
+            loop_source: None,
             submitted_bytes: 0,
             decoded_frames: 0,
             nonzero_samples: 0,
@@ -131,6 +135,18 @@ impl AudioEngine {
         Ok(())
     }
 
+    /// Arm infinite looping of `source` (encoded WAV/MP3/MIDI resource bytes).
+    ///
+    /// Firmware `vMAudioPlayForGame` is often issued once for background
+    /// music; the hardware then loops until `vMAudioStop`.
+    pub fn set_loop_source(&mut self, source: Vec<u8>) {
+        self.loop_source = Some(source);
+    }
+
+    pub fn clear_loop(&mut self) {
+        self.loop_source = None;
+    }
+
     pub fn pause(&mut self) {
         self.paused = true;
     }
@@ -143,6 +159,7 @@ impl AudioEngine {
         self.samples.clear();
         self.playing = false;
         self.paused = false;
+        self.loop_source = None;
     }
 
     /// Playback state: 0 stopped, 1 playing, 2 paused.
@@ -170,8 +187,20 @@ impl AudioEngine {
             return Vec::new();
         }
         if self.samples.is_empty() {
-            self.underflow_frames = self.underflow_frames.saturating_add(max_frames as u64);
-            return Vec::new();
+            // Restart a looping cue; otherwise the cue has finished.
+            if let Some(source) = self.loop_source.clone() {
+                if self.play_bytes_repeats(&source, 0).is_ok() {
+                    self.loop_source = Some(source);
+                } else {
+                    self.playing = false;
+                }
+            } else {
+                self.underflow_frames = self.underflow_frames.saturating_add(max_frames as u64);
+                // A fully drained one-shot means the cue finished. Report
+                // stopped so guest GetState polling can start the next call.
+                self.playing = false;
+                return Vec::new();
+            }
         }
 
         let take = max_frames * 2;
@@ -182,6 +211,9 @@ impl AudioEngine {
                 break;
             };
             output.push(((sample as i32 * volume_scale) / 100) as i16);
+        }
+        if self.samples.is_empty() && self.loop_source.is_none() {
+            self.playing = false;
         }
         output
     }
