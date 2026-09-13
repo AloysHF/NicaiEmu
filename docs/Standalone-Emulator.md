@@ -37,8 +37,8 @@ nicaiemu [OPTIONS] <GAME_PATH>
 |---|---|---|---|
 | `<GAME_PATH>` | path | *required* | Path to the CBE game file. |
 | `-l, --list` | flag | off | List packaged resources and exit. |
-| `-w, --width <WIDTH>` | integer | `480` | Initial window width. |
-| `-H, --height <HEIGHT>` | integer | `800` | Initial window height. |
+| `-w, --width <WIDTH>` | integer | `480` portrait / `800` landscape | Initial window width. Defaults follow the presented orientation. |
+| `-H, --height <HEIGHT>` | integer | `800` portrait / `480` landscape | Initial window height. Defaults follow the presented orientation. |
 | `--filter <FILTER>` | `nearest` \| `bilinear` \| `bicubic` \| `xbrz` | `nearest` | Pixel scaling filter for display output. |
 | `--rotate <ROTATION>` | `auto` \| `none` \| `cw` \| `ccw` | `auto` | Rotate the guest framebuffer before presentation. `auto` uses the built-in landscape-game profile; explicit values override it. |
 | `--rotation-profile <FILE>` | path | — | Load extra display-rotation entries from a CSV file before starting (see [Screen rotation](#screen-rotation)). |
@@ -168,7 +168,10 @@ scaling, so it stays crisp at any window size.
 Games packaged for the original phone's rotated landscape LCD are presented
 at 400×240 automatically through a built-in content profile keyed by archive
 CRC-32 and size. Use `--rotate none|cw|ccw` to override the detection for a
-single run.
+single run. When the presentation swaps dimensions, the default desktop window
+is also landscape (800×480) so the frame fills the window instead of sitting
+in a portrait shell with large black bars. Pass `--width` / `--height` to
+choose any other size.
 
 For a landscape game outside the built-in profile, supply extra entries with
 `--rotation-profile <FILE>` instead of waiting for a core update. The file is

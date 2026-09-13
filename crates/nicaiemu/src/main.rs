@@ -19,6 +19,59 @@ use standalone::gamepad_overlay::GamepadOverlay;
 use standalone::input::{KeyboardMapper, RemapSpec};
 use standalone::scaler::{DisplayScaler, ScaleFilter};
 
+/// Default window size for portrait content (2x of the 240x400 framebuffer).
+const DEFAULT_PORTRAIT_WIDTH: usize = 480;
+const DEFAULT_PORTRAIT_HEIGHT: usize = 800;
+
+/// Resolve the initial window size from CLI overrides and presented content.
+///
+/// Landscape content (400x240) opens a landscape window by default (800x480)
+/// so the desktop window aspect matches the frame instead of letterboxing a
+/// portrait shell with large black bars (issue #57). Explicit `--width` /
+/// `--height` values always win.
+fn resolve_window_size(
+    width: Option<usize>,
+    height: Option<usize>,
+    swaps_dimensions: bool,
+) -> (usize, usize) {
+    let (default_width, default_height) = if swaps_dimensions {
+        (DEFAULT_PORTRAIT_HEIGHT, DEFAULT_PORTRAIT_WIDTH)
+    } else {
+        (DEFAULT_PORTRAIT_WIDTH, DEFAULT_PORTRAIT_HEIGHT)
+    };
+    (
+        width.unwrap_or(default_width),
+        height.unwrap_or(default_height),
+    )
+}
+
+/// Map a window-space mouse position to presented display coordinates,
+/// accounting for the centered aspect-ratio-preserving letterbox.
+fn window_point_to_display(
+    mouse_x: f32,
+    mouse_y: f32,
+    window_width: usize,
+    window_height: usize,
+    display_width: u32,
+    display_height: u32,
+) -> (i32, i32) {
+    let window_width = window_width.max(1) as f32;
+    let window_height = window_height.max(1) as f32;
+    let display_width = display_width.max(1) as f32;
+    let display_height = display_height.max(1) as f32;
+
+    // Fit the presented frame inside the window the same way DisplayScaler does.
+    let scale = (window_width / display_width).min(window_height / display_height);
+    let content_width = (display_width * scale).max(1.0);
+    let content_height = (display_height * scale).max(1.0);
+    let offset_x = ((window_width - content_width) * 0.5).max(0.0);
+    let offset_y = ((window_height - content_height) * 0.5).max(0.0);
+
+    let x = ((mouse_x - offset_x) * display_width / content_width).floor() as i32;
+    let y = ((mouse_y - offset_y) * display_height / content_height).floor() as i32;
+    (x, y)
+}
+
 /// Display rotation requested on the command line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 enum RotationArg {
@@ -52,13 +105,15 @@ struct Cli {
     #[arg(short, long)]
     list: bool,
 
-    /// Initial window width.
-    #[arg(short, long, default_value_t = 480)]
-    width: usize,
+    /// Initial window width (defaults to 480 for portrait content and 800
+    /// for landscape content).
+    #[arg(short, long)]
+    width: Option<usize>,
 
-    /// Initial window height.
-    #[arg(short = 'H', long, default_value_t = 800)]
-    height: usize,
+    /// Initial window height (defaults to 800 for portrait content and 480
+    /// for landscape content).
+    #[arg(short = 'H', long)]
+    height: Option<usize>,
 
     /// Pixel scaling filter for display output.
     #[arg(long, value_enum, default_value_t = ScaleFilter::Nearest)]
@@ -213,10 +268,14 @@ fn main() -> Result<()> {
         .and_then(|name| name.to_str())
         .unwrap_or("CBE Game");
     let title = format!("NicaiEmu - {game_name}");
+    let (display_width, display_height) = machine.display_size();
+    let (window_width, window_height) =
+        resolve_window_size(cli.width, cli.height, display_width > display_height);
+    info!("Presenting {display_width}x{display_height} in a {window_width}x{window_height} window");
     let mut window = Window::new(
         &title,
-        cli.width,
-        cli.height,
+        window_width,
+        window_height,
         WindowOptions {
             resize: !cli.fullscreen,
             borderless: cli.fullscreen,
@@ -244,8 +303,15 @@ fn main() -> Result<()> {
         gamepad.hold_pressed(&mut machine);
         if let Some((mouse_x, mouse_y)) = window.get_mouse_pos(minifb::MouseMode::Clamp) {
             let (display_width, display_height) = machine.display_size();
-            let x = (mouse_x * display_width as f32 / cli.width as f32) as i32;
-            let y = (mouse_y * display_height as f32 / cli.height as f32) as i32;
+            let (live_width, live_height) = window.get_size();
+            let (x, y) = window_point_to_display(
+                mouse_x,
+                mouse_y,
+                live_width,
+                live_height,
+                display_width,
+                display_height,
+            );
             let (x, y) = machine.display_to_framebuffer(x, y);
             let down = window.get_mouse_down(minifb::MouseButton::Left);
             machine.set_pointer(x, y, down);
@@ -587,6 +653,65 @@ mod tests {
         assert!(!cli.headless);
         assert_eq!(cli.frames, 60);
         assert_eq!(cli.instruction_limit, DEFAULT_INSTRUCTION_LIMIT);
+        assert_eq!(cli.width, None);
+        assert_eq!(cli.height, None);
+    }
+
+    #[test]
+    fn parses_explicit_window_size() {
+        let cli =
+            Cli::try_parse_from(["nicaiemu", "game.CBE", "--width", "600", "--height", "1000"])
+                .unwrap();
+
+        assert_eq!(cli.width, Some(600));
+        assert_eq!(cli.height, Some(1000));
+    }
+
+    #[test]
+    fn window_size_defaults_to_portrait_for_portrait_content() {
+        assert_eq!(
+            resolve_window_size(None, None, false),
+            (DEFAULT_PORTRAIT_WIDTH, DEFAULT_PORTRAIT_HEIGHT)
+        );
+    }
+
+    #[test]
+    fn window_size_defaults_to_landscape_for_landscape_content() {
+        assert_eq!(
+            resolve_window_size(None, None, true),
+            (DEFAULT_PORTRAIT_HEIGHT, DEFAULT_PORTRAIT_WIDTH)
+        );
+    }
+
+    #[test]
+    fn explicit_window_size_overrides_orientation_default() {
+        assert_eq!(resolve_window_size(Some(640), Some(360), false), (640, 360));
+        assert_eq!(resolve_window_size(Some(640), Some(360), true), (640, 360));
+        assert_eq!(
+            resolve_window_size(Some(960), None, true),
+            (960, DEFAULT_PORTRAIT_WIDTH)
+        );
+    }
+
+    #[test]
+    fn window_point_mapping_ignores_letterbox_bars() {
+        // 400x240 content centered in an 800x480 window fills it exactly.
+        assert_eq!(
+            window_point_to_display(0.0, 0.0, 800, 480, 400, 240),
+            (0, 0)
+        );
+        assert_eq!(
+            window_point_to_display(799.0, 479.0, 800, 480, 400, 240),
+            (399, 239)
+        );
+
+        // 400x240 content in a 800x800 window letterboxes vertically: the
+        // content sits in rows 160..640, so a click in the top bar clamps
+        // outside the frame while the content center maps to the display center.
+        assert_eq!(
+            window_point_to_display(400.0, 400.0, 800, 800, 400, 240),
+            (200, 120)
+        );
     }
 
     #[test]
