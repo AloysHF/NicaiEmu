@@ -21,8 +21,14 @@ impl NicaiMachine {
             }
             // vMAudioPlayByData(pointer, length)
             1 => self.play_guest_audio(self.register(0), self.register(1)),
-            // vMAudioPlayWithDataPackage: data-package ABI not recovered yet.
-            2 => self.set_result(0),
+            // vMAudioPlayWithDataPackage(id, repeats) — same resource-id ABI
+            // as PlayForGame. Corpus evidence (碰嘭球): r0=270 maps to the
+            // packaged `game.mid`; r2 is an unused package/context pointer.
+            2 => {
+                let id = self.register(0);
+                let repeats = self.register(1);
+                self.play_resource_by_id(id, repeats, true);
+            }
             // vMAudioPlayForGame(id, repeats) / vMAudioPlayForApp(id, repeats).
             // Guest r0 is the package resource id; r1 is the firmware repeat
             // count. PlayForGame is the corpus's dominant BGM path and is
@@ -73,9 +79,37 @@ impl NicaiMachine {
                 self.playing_resource_id = None;
                 self.set_result(0);
             }
-            // File-based MP3 control and progress remain neutral until the
-            // file-service ABI is recovered.
-            13..=17 => self.set_result(0),
+            // vm_mp3PlayByFile(path, repeats) — path is a GBK/UCS2 guest
+            // string resolved through the sandboxed VFS, with a fallback to
+            // packaged resources that share the same basename.
+            13 => {
+                let path = self.read_file_path(self.register(0));
+                let repeats = self.register(1);
+                self.play_file_audio(&path, repeats);
+            }
+            // vm_mp3PauseByFile / ResumeByFile / StopByFile. The corpus has
+            // no caller yet; pause/resume/stop the single engine channel.
+            14 => {
+                self.audio.pause();
+                self.set_result(0);
+            }
+            15 => {
+                self.audio.resume();
+                self.set_result(0);
+            }
+            16 => {
+                self.audio.stop();
+                self.playing_resource_id = None;
+                self.set_result(0);
+            }
+            // vMAudioget_progress_time — no playback clock yet.
+            17 => self.set_result(0),
+            // vm_mp3PlayByFileEx — treated as the same path-based play.
+            25 => {
+                let path = self.read_file_path(self.register(0));
+                let repeats = self.register(1);
+                self.play_file_audio(&path, repeats);
+            }
             _ => self.set_result(0),
         }
     }
@@ -154,6 +188,59 @@ impl NicaiMachine {
                     .next()
                     .unwrap_or(&resource.name);
                 candidate.eq_ignore_ascii_case(&basename)
+            })
+            .map(|resource| resource.data.clone())
+    }
+
+    /// Queue audio from a guest filesystem path (`vm_mp3PlayByFile*`).
+    ///
+    /// Looks up the sandboxed VFS first, then falls back to packaged CBE
+    /// resources that share the same basename (some titles store BGM in the
+    /// package but address it by filename).
+    pub(crate) fn play_file_audio(&mut self, path: &str, repeats: u32) {
+        if path.is_empty() {
+            log::warn!("PlayByFile: empty path");
+            self.set_result(0);
+            return;
+        }
+        let bytes = self.virtual_fs.read_file(path).or_else(|| {
+            let basename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+            self.resource_bytes_by_file_name(basename)
+        });
+        let Some(bytes) = bytes else {
+            log::warn!("PlayByFile: path {path:?} was not found");
+            self.set_result(0);
+            return;
+        };
+        match self.audio.play_bytes_repeats(&bytes, repeats) {
+            Ok(()) => {
+                self.playing_resource_id = None;
+                self.audio.clear_loop();
+                log::debug!(
+                    "PlayByFile queued path={path:?} bytes={} repeats={repeats}",
+                    bytes.len()
+                );
+            }
+            Err(error) => log::warn!("PlayByFile rejected path={path:?}: {error:#}"),
+        }
+        self.set_result(0);
+    }
+
+    fn resource_bytes_by_file_name(&mut self, basename: &str) -> Option<Vec<u8>> {
+        self.resources
+            .iter()
+            .chain(
+                self.resource_packages
+                    .iter()
+                    .flat_map(|package| package.resources.iter()),
+            )
+            .find(|resource| {
+                let candidate = resource
+                    .name
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(&resource.name);
+                candidate.eq_ignore_ascii_case(basename)
             })
             .map(|resource| resource.data.clone())
     }

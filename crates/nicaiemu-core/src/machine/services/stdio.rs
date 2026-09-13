@@ -113,7 +113,7 @@ impl NicaiMachine {
         }
     }
 
-    fn read_file_path(&mut self, address: u32) -> String {
+    pub(crate) fn read_file_path(&mut self, address: u32) -> String {
         if address == 0 {
             return String::new();
         }

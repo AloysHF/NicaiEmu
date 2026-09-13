@@ -143,6 +143,21 @@ impl VirtualFileSystem {
         normalize_path(path).is_some_and(|path| self.files.contains_key(&path))
     }
 
+    /// Read an entire file by path without allocating a handle.
+    pub(crate) fn read_file(&self, path: &str) -> Option<Vec<u8>> {
+        let path = normalize_path(path)?;
+        self.files.get(&path).cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn write_file(&mut self, path: &str, data: Vec<u8>) -> bool {
+        let Some(path) = normalize_path(path) else {
+            return false;
+        };
+        self.files.insert(path, data);
+        true
+    }
+
     pub(crate) fn directory_exists(&self, path: &str) -> bool {
         normalize_path(path).is_some_and(|path| {
             path.is_empty()

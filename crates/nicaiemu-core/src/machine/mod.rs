@@ -2431,6 +2431,51 @@ mod tests {
     }
 
     #[test]
+    fn play_with_data_package_uses_resource_id_like_play_for_game() {
+        use crate::machine::packages::HostResource;
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        machine.resources.push(HostResource {
+            name: "game.mid".to_owned(),
+            data: midi.clone(),
+        });
+        let pointer = machine.allocate(midi.len() as u32);
+        machine.memory.write_bytes(pointer, &midi);
+        machine.resource_data.push(pointer);
+
+        // 碰嘭球 calls PlayWithDataPackage(270) which is game.mid in its
+        // sequential package id table — same ABI as PlayForGame.
+        machine.play_resource_by_id(0, 0, true);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+    }
+
+    #[test]
+    fn play_by_file_reads_virtual_filesystem_path() {
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        assert!(machine.virtual_fs.write_file("audio/bgm.mid", midi.clone()));
+        machine.play_file_audio("audio/bgm.mid", 0);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+        assert!(machine.take_audio_samples(8).iter().any(|s| *s != 0));
+    }
+
+    #[test]
+    fn play_by_file_falls_back_to_packaged_basename() {
+        use crate::machine::packages::HostResource;
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        machine.resources.push(HostResource {
+            name: "menu.mid".to_owned(),
+            data: midi,
+        });
+        machine.play_file_audio("C:/game/menu.mid", 0);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+    }
+
+    #[test]
     #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
     fn real_content_landscape_text_renders_at_the_latched_origin() {
         let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
