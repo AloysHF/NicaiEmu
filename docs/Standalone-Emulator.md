@@ -37,8 +37,7 @@ nicaiemu [OPTIONS] <GAME_PATH>
 |---|---|---|---|
 | `<GAME_PATH>` | path | *required* | Path to the CBE game file. |
 | `-l, --list` | flag | off | List packaged resources and exit. |
-| `-w, --width <WIDTH>` | integer | `480` portrait / `800` landscape | Initial window width. Defaults follow the presented orientation. |
-| `-H, --height <HEIGHT>` | integer | `800` portrait / `480` landscape | Initial window height. Defaults follow the presented orientation. |
+| `--scale <SCALE>` | integer 1–8 | `1` | Integer window scale factor. Default 1 matches the guest display (240×400 portrait or 400×240 landscape). |
 | `--filter <FILTER>` | `nearest` \| `bilinear` \| `bicubic` \| `xbrz` | `nearest` | Pixel scaling filter for display output. |
 | `--rotate <ROTATION>` | `auto` \| `none` \| `cw` \| `ccw` | `auto` | Rotate the guest framebuffer before presentation. `auto` uses the built-in landscape-game profile; explicit values override it. |
 | `--rotation-profile <FILE>` | path | — | Load extra display-rotation entries from a CSV file before starting (see [Screen rotation](#screen-rotation)). |
@@ -65,8 +64,8 @@ The standalone emulator accepts `.CBE` files:
 # Load a game directly
 nicaiemu path/to/game.CBE
 
-# Load with custom window size
-nicaiemu path/to/game.CBE --width 600 --height 1000
+# Open a 2x window (480×800 for portrait, 800×480 for landscape)
+nicaiemu path/to/game.CBE --scale 2
 
 # Run fullscreen with the xbrz pixel-art scaler
 nicaiemu path/to/game.CBE --fullscreen --filter xbrz
@@ -150,9 +149,11 @@ nicaiemu path/to/game.CBE --screenshot /dev/null --screenshot-frames 120
 
 ## Display Scaling
 
-The guest framebuffer is 240×400. The window renders it centered with black
-bars while preserving the aspect ratio, and the `--filter` option selects the
-upscaler:
+The guest framebuffer is 240×400. By default the window opens at the native
+display size (1:1). Use `--scale` for an integer upscale (1–8); the window is
+then `resolution × scale` with no letterboxing. Inside that window the frame
+is centered with black bars while preserving the aspect ratio, and the
+`--filter` option selects the upscaler:
 
 - `nearest` keeps hard pixel edges (best for pixel art);
 - `bilinear` smooths pixels with 2×2 interpolation;
@@ -169,9 +170,8 @@ Games packaged for the original phone's rotated landscape LCD are presented
 at 400×240 automatically through a built-in content profile keyed by archive
 CRC-32 and size. Use `--rotate none|cw|ccw` to override the detection for a
 single run. When the presentation swaps dimensions, the default desktop window
-is also landscape (800×480) so the frame fills the window instead of sitting
-in a portrait shell with large black bars. Pass `--width` / `--height` to
-choose any other size.
+is also landscape so the frame fills the window instead of sitting in a
+portrait shell with large black bars. Pass `--scale` to open a larger window.
 
 For a landscape game outside the built-in profile, supply extra entries with
 `--rotation-profile <FILE>` instead of waiting for a core update. The file is
@@ -260,8 +260,8 @@ are reported as failures. Use `-Frames`, `-Binary`, `-GameDirectory`, or
 # Basic usage
 nicaiemu path/to/game.CBE
 
-# Custom window size
-nicaiemu path/to/game.CBE --width 600 --height 1000
+# 2x integer window scale
+nicaiemu path/to/game.CBE --scale 2
 
 # Fullscreen with the xbrz filter and gamepad overlay
 nicaiemu path/to/game.CBE --fullscreen --filter xbrz --show-gamepad

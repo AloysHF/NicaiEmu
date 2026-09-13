@@ -32,10 +32,11 @@ by supported games.
   file-backed resource packages
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
 - **Text rendering** — GBK decoding with embedded Unicode bitmap font
-- **240×400 display** — native WQVGA resolution with resizable desktop window
+- **240×400 display** — native WQVGA resolution; standalone window opens at
+  1:1 by default and supports integer `--scale` (1–8)
 - **Automatic landscape rotation** — games packaged for the original phone's
   rotated landscape LCD are presented at 400×240 automatically, with a
-  landscape default window (800×480) matching the frame, a `--rotate` override
+  landscape default window matching the frame, a `--rotate` override
   for manual control, and a `--rotation-profile` file for titles outside the
   built-in profile
 - **Display scaling** — nearest, bilinear, bicubic, and xbrz filters with

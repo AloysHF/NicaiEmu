@@ -19,29 +19,12 @@ use standalone::gamepad_overlay::GamepadOverlay;
 use standalone::input::{KeyboardMapper, RemapSpec};
 use standalone::scaler::{DisplayScaler, ScaleFilter};
 
-/// Default window size for portrait content (2x of the 240x400 framebuffer).
-const DEFAULT_PORTRAIT_WIDTH: usize = 480;
-const DEFAULT_PORTRAIT_HEIGHT: usize = 800;
-
-/// Resolve the initial window size from CLI overrides and presented content.
-///
-/// Landscape content (400x240) opens a landscape window by default (800x480)
-/// so the desktop window aspect matches the frame instead of letterboxing a
-/// portrait shell with large black bars (issue #57). Explicit `--width` /
-/// `--height` values always win.
-fn resolve_window_size(
-    width: Option<usize>,
-    height: Option<usize>,
-    swaps_dimensions: bool,
-) -> (usize, usize) {
-    let (default_width, default_height) = if swaps_dimensions {
-        (DEFAULT_PORTRAIT_HEIGHT, DEFAULT_PORTRAIT_WIDTH)
-    } else {
-        (DEFAULT_PORTRAIT_WIDTH, DEFAULT_PORTRAIT_HEIGHT)
-    };
+/// Resolve the initial window size as an integer multiple of the presented
+/// guest display (240x400 portrait or 400x240 landscape).
+fn resolve_window_size(display_width: u32, display_height: u32, scale: u32) -> (usize, usize) {
     (
-        width.unwrap_or(default_width),
-        height.unwrap_or(default_height),
+        (display_width * scale) as usize,
+        (display_height * scale) as usize,
     )
 }
 
@@ -105,15 +88,10 @@ struct Cli {
     #[arg(short, long)]
     list: bool,
 
-    /// Initial window width (defaults to 480 for portrait content and 800
-    /// for landscape content).
-    #[arg(short, long)]
-    width: Option<usize>,
-
-    /// Initial window height (defaults to 800 for portrait content and 480
-    /// for landscape content).
-    #[arg(short = 'H', long)]
-    height: Option<usize>,
+    /// Integer window scale factor (1-8). Default 1 matches the guest
+    /// display size (240x400 portrait or 400x240 landscape).
+    #[arg(long, default_value = "1", value_parser = clap::value_parser!(u32).range(1..=8))]
+    scale: u32,
 
     /// Pixel scaling filter for display output.
     #[arg(long, value_enum, default_value_t = ScaleFilter::Nearest)]
@@ -270,8 +248,8 @@ fn main() -> Result<()> {
     let title = format!("NicaiEmu - {game_name}");
     let (display_width, display_height) = machine.display_size();
     let (window_width, window_height) =
-        resolve_window_size(cli.width, cli.height, display_width > display_height);
-    info!("Presenting {display_width}x{display_height} in a {window_width}x{window_height} window");
+        resolve_window_size(display_width, display_height, cli.scale);
+    info!("Presenting {display_width}x{display_height} in a {window_width}x{window_height} window ({}x scale)", cli.scale);
     let mut window = Window::new(
         &title,
         window_width,
@@ -653,44 +631,32 @@ mod tests {
         assert!(!cli.headless);
         assert_eq!(cli.frames, 60);
         assert_eq!(cli.instruction_limit, DEFAULT_INSTRUCTION_LIMIT);
-        assert_eq!(cli.width, None);
-        assert_eq!(cli.height, None);
+        assert_eq!(cli.scale, 1);
     }
 
     #[test]
-    fn parses_explicit_window_size() {
-        let cli =
-            Cli::try_parse_from(["nicaiemu", "game.CBE", "--width", "600", "--height", "1000"])
-                .unwrap();
+    fn parses_explicit_scale() {
+        let cli = Cli::try_parse_from(["nicaiemu", "game.CBE", "--scale", "3"]).unwrap();
 
-        assert_eq!(cli.width, Some(600));
-        assert_eq!(cli.height, Some(1000));
+        assert_eq!(cli.scale, 3);
     }
 
     #[test]
-    fn window_size_defaults_to_portrait_for_portrait_content() {
-        assert_eq!(
-            resolve_window_size(None, None, false),
-            (DEFAULT_PORTRAIT_WIDTH, DEFAULT_PORTRAIT_HEIGHT)
-        );
+    fn rejects_out_of_range_scale() {
+        assert!(Cli::try_parse_from(["nicaiemu", "game.CBE", "--scale", "0"]).is_err());
+        assert!(Cli::try_parse_from(["nicaiemu", "game.CBE", "--scale", "9"]).is_err());
     }
 
     #[test]
-    fn window_size_defaults_to_landscape_for_landscape_content() {
-        assert_eq!(
-            resolve_window_size(None, None, true),
-            (DEFAULT_PORTRAIT_HEIGHT, DEFAULT_PORTRAIT_WIDTH)
-        );
+    fn window_size_defaults_to_native_display_at_scale_one() {
+        assert_eq!(resolve_window_size(240, 400, 1), (240, 400));
+        assert_eq!(resolve_window_size(400, 240, 1), (400, 240));
     }
 
     #[test]
-    fn explicit_window_size_overrides_orientation_default() {
-        assert_eq!(resolve_window_size(Some(640), Some(360), false), (640, 360));
-        assert_eq!(resolve_window_size(Some(640), Some(360), true), (640, 360));
-        assert_eq!(
-            resolve_window_size(Some(960), None, true),
-            (960, DEFAULT_PORTRAIT_WIDTH)
-        );
+    fn window_size_multiplies_display_by_scale() {
+        assert_eq!(resolve_window_size(240, 400, 2), (480, 800));
+        assert_eq!(resolve_window_size(400, 240, 3), (1200, 720));
     }
 
     #[test]
