@@ -691,6 +691,20 @@ pub struct NicaiMachine {
     native_property_info: u32,
     #[serde(skip, default)]
     virtual_fs: VirtualFileSystem,
+    #[serde(skip, default)]
+    pub(crate) net_channels: Vec<services::network::NetChannel>,
+    #[serde(skip, default)]
+    pub(crate) net_events: std::collections::VecDeque<services::network::NetEvent>,
+    #[serde(skip, default)]
+    pub(crate) next_net_connect_id: u32,
+    #[serde(skip, default)]
+    pub(crate) net_uplink_bytes: u64,
+    #[serde(skip, default)]
+    pub(crate) net_downlink_bytes: u64,
+    #[serde(skip, default)]
+    pub(crate) net_last_uplink: Vec<u8>,
+    #[serde(skip, default)]
+    pub(crate) net_last_http_url: String,
 }
 
 impl std::fmt::Debug for NicaiMachine {
@@ -733,6 +747,9 @@ impl NicaiMachine {
         memory.map(STACK_BASE, STACK_SIZE, false);
         memory.map(HEAP_BASE, HEAP_SIZE, false);
         memory.map(MANAGER_BASE, MANAGER_SIZE, false);
+        // Guest firmware tables live at SERVICE_BASE and are read as data
+        // (function pointers, manager descriptors) before being invoked.
+        memory.map(SERVICE_BASE, SERVICE_SIZE as usize, false);
         memory.load(
             code_address,
             &archive.bytes()[executable.code_offset..executable.code_offset + executable.code_size],
@@ -839,6 +856,16 @@ impl NicaiMachine {
             native_system_info: 0,
             native_property_info: 0,
             virtual_fs: VirtualFileSystem::default(),
+            net_channels: vec![
+                services::network::NetChannel::default();
+                services::network::MAX_NET_CHANNELS
+            ],
+            net_events: std::collections::VecDeque::new(),
+            next_net_connect_id: 0,
+            net_uplink_bytes: 0,
+            net_downlink_bytes: 0,
+            net_last_uplink: Vec::new(),
+            net_last_http_url: String::new(),
         };
         machine.initialize_tables();
         machine.initialize_screen();
@@ -1100,6 +1127,10 @@ impl NicaiMachine {
         }
         self.maybe_run_auto_bgm();
         self.frame_count = self.frame_count.wrapping_add(1);
+        self.dispatch_network_events(instruction_limit)?;
+        if self.finish_halted_frame() {
+            return Ok(());
+        }
         let had_screen_before_timers =
             self.active_screen != 0 || self.pending_screen != 0 || !self.screen_stack.is_empty();
         self.dispatch_timers(instruction_limit)?;
@@ -1480,11 +1511,222 @@ impl NicaiMachine {
     pub fn read_u32(&mut self, address: u32) -> u32 {
         self.memory.r32(address)
     }
+
+    /// Total bytes accepted by network `send` calls.
+    pub fn network_uplink_bytes(&self) -> u64 {
+        self.net_uplink_bytes
+    }
+
+    /// Total bytes delivered to guest network callbacks by the mock layer.
+    pub fn network_downlink_bytes(&self) -> u64 {
+        self.net_downlink_bytes
+    }
+
+    /// Last URL requested through the network HTTP service, if any.
+    pub fn network_last_http_url(&self) -> &str {
+        &self.net_last_http_url
+    }
+
+    /// Construct a blank machine with the standard memory map for unit tests
+    /// that exercise host-side service state without a CBE archive.
+    #[cfg(test)]
+    pub(crate) fn new_blank_for_tests() -> Self {
+        let mut memory = MachineMemory::new(false);
+        memory.map(STACK_BASE, STACK_SIZE, false);
+        memory.map(HEAP_BASE, HEAP_SIZE, false);
+        memory.map(MANAGER_BASE, MANAGER_SIZE, false);
+        memory.map(SERVICE_BASE, SERVICE_SIZE as usize, false);
+        Self {
+            cpu: Cpu::new(),
+            memory,
+            audio: AudioEngine::new(),
+            executable: CbeExecutable {
+                preferred_code_address: 0,
+                code_image_size: 0x1000,
+                preferred_data_address: 0,
+                data_image_size: 0,
+                code_offset: 0,
+                code_size: 0,
+                data_offset: 0,
+                initialized_data_size: 0,
+                embedded_package_offset: 0,
+                embedded_package_size: 0,
+                resource_package_offset: 0,
+                resource_package_size: 0,
+                big_endian: false,
+            },
+            state: MachineState::Ready,
+            heap_cursor: HEAP_BASE,
+            latched_text_origin: (0, 0),
+            heap_allocations: BTreeMap::new(),
+            free_heap_blocks: Vec::new(),
+            app_main: 0,
+            app_exit: 0,
+            service_calls: HashMap::new(),
+            recent_services: VecDeque::new(),
+            instruction_count: 0,
+            frame_count: 0,
+            last_pc: 0,
+            recent_pcs: VecDeque::new(),
+            pending_screen: 0,
+            active_screen: 0,
+            screen_stack: Vec::new(),
+            screen_initialized: false,
+            resource_load_pending: false,
+            resource_load_screen: 0,
+            key_down: 0,
+            key_held: 0,
+            key_held_physical: 0,
+            _legacy_key_press_frame: [u32::MAX; 31],
+            _legacy_key_frame_counter: 0,
+            pending_key_events: VecDeque::new(),
+            auto_bgm: false,
+            auto_bgm_data: None,
+            auto_bgm_gave_way: false,
+            playing_resource_id: None,
+            rotation: Rotation::None,
+            effective_rotation: Rotation::None,
+            pointer: PointerState::new(),
+            timers: vec![
+                GuestTimer {
+                    active: false,
+                    callback: 0,
+                    context: 0,
+                    remaining_frames: 0,
+                };
+                MAX_TIMERS
+            ],
+            resources: Vec::new(),
+            resource_packages: Vec::new(),
+            resource_data: Vec::new(),
+            resource_names: Vec::new(),
+            app_image_package: 0,
+            inner_image_package: 0,
+            current_image_package: 0,
+            native_app_parser: 0,
+            native_app_init: 0,
+            native_system_info: 0,
+            native_property_info: 0,
+            virtual_fs: VirtualFileSystem::default(),
+            net_channels: vec![
+                services::network::NetChannel::default();
+                services::network::MAX_NET_CHANNELS
+            ],
+            net_events: VecDeque::new(),
+            next_net_connect_id: 0,
+            net_uplink_bytes: 0,
+            net_downlink_bytes: 0,
+            net_last_uplink: Vec::new(),
+            net_last_http_url: String::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_user_register(&mut self, register: u8, value: u32) {
+        self.cpu.reg_set(armv4t_emu::Mode::User, register, value);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_base_region_accepts_guest_data_reads() {
+        let mut memory = MachineMemory::new(false);
+        memory.map(SERVICE_BASE, SERVICE_SIZE as usize, false);
+        memory.w32(SERVICE_BASE + 4, 0x0c00_0040);
+        assert_eq!(memory.r32(SERVICE_BASE + 4), 0x0c00_0040);
+        assert!(memory.bad_accesses.is_empty());
+        // Nearby low addresses must still be rejected so null-pointer walks
+        // remain visible instead of silently reading zeros.
+        assert_eq!(memory.r32(0x0000_0004), 0);
+        assert!(memory.bad_accesses.contains(&0x0000_0004));
+    }
+
+    #[test]
+    fn network_connect_registers_channel_and_queues_ready_event() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.set_user_register(2, 0x0100_1235);
+        machine.set_user_register(3, HEAP_BASE + 0x100);
+        machine.handle_network_service(0);
+        assert_eq!(machine.register(0), 1);
+        let connect_id = machine.memory.r32(HEAP_BASE + 0x100);
+        assert_ne!(connect_id, 0);
+        assert!(machine
+            .net_channels
+            .iter()
+            .any(|channel| channel.active && channel.connect_id == connect_id));
+        assert!(machine
+            .net_events
+            .iter()
+            .any(|event| event.event_type == services::network::NET_EVENT_CHANNEL_READY));
+    }
+
+    #[test]
+    fn network_http_get_queues_data_and_complete_events() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.set_user_register(1, 0x0100_2001);
+        machine.set_user_register(2, 0x1122_3344);
+        machine.handle_network_service(3);
+        assert_eq!(machine.register(0), 1);
+        assert_eq!(machine.net_events.len(), 2);
+        assert_eq!(
+            machine.net_events[0].event_type,
+            services::network::NET_EVENT_DATA
+        );
+        assert_eq!(
+            machine.net_events[1].event_type,
+            services::network::NET_EVENT_COMPLETE
+        );
+        assert_eq!(machine.net_events[0].callback, 0x0100_2001);
+        assert!(machine.net_downlink_bytes > 0);
+    }
+
+    #[test]
+    fn network_close_deactivates_channel() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.set_user_register(2, 0x0100_3001);
+        machine.handle_network_service(0);
+        let connect_id = machine
+            .net_channels
+            .iter()
+            .find(|channel| channel.active)
+            .map(|channel| channel.connect_id)
+            .expect("connect should register a channel");
+        machine.set_user_register(0, connect_id);
+        machine.handle_network_service(2);
+        assert!(!machine
+            .net_channels
+            .iter()
+            .any(|channel| channel.active && channel.connect_id == connect_id));
+    }
+
+    #[test]
+    fn network_dispatch_delivers_event_after_delay() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        // Return-immediately stub at a mapped code address.
+        let stub = SERVICE_BASE + 0x8000;
+        // BX LR (Thumb): 0x4770
+        machine.memory.w16(stub, 0x4770);
+        machine.set_user_register(1, stub | 1);
+        machine.set_user_register(2, 0);
+        machine.handle_network_service(3);
+        assert_eq!(machine.net_events.len(), 2);
+        // First tick only decrements the delay.
+        machine.dispatch_network_events(10_000).unwrap();
+        assert_eq!(machine.net_events.len(), 2);
+        // Second tick fires the data event.
+        machine.dispatch_network_events(10_000).unwrap();
+        assert_eq!(machine.net_events.len(), 1);
+        assert_eq!(
+            machine.net_events[0].event_type,
+            services::network::NET_EVENT_COMPLETE
+        );
+        // Third tick fires completion.
+        machine.dispatch_network_events(10_000).unwrap();
+        assert!(machine.net_events.is_empty());
+    }
 
     #[test]
     fn rotate_frame_swaps_dimensions_and_keeps_orientation() {
@@ -1978,6 +2220,46 @@ mod tests {
         assert!(
             machine.service_calls().get(&(14, 6)).copied().unwrap_or(0) > 0,
             "game never removed its final screen"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_login_title_reaches_menu_via_network_mock() {
+        let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("恶魔城登录版.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = NicaiMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for _ in 0..80 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert!(
+            machine
+                .service_calls()
+                .keys()
+                .any(|(group, index)| *group == 9 && *index == 3),
+            "game never called the network HTTP service"
+        );
+        assert!(
+            machine.network_downlink_bytes() > 0,
+            "network mock never delivered a response body"
+        );
+        let pixels = machine.frame_pixels();
+        let mut colors = std::collections::HashSet::new();
+        for pixel in &pixels {
+            colors.insert(*pixel);
+        }
+        // The pre-mock login wait screen is a flat 6-color drawing. Reaching
+        // the title menu requires the network mock and a rich guest palette.
+        assert!(
+            colors.len() > 32,
+            "frame still looks like the login wait screen ({} colors)",
+            colors.len()
         );
     }
 

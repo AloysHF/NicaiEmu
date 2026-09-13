@@ -5,6 +5,7 @@ mod data;
 mod download;
 mod game;
 mod memory;
+pub(crate) mod network;
 mod screen;
 mod stdio;
 mod system;

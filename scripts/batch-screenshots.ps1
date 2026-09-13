@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Capture screenshots for CBE files.
 

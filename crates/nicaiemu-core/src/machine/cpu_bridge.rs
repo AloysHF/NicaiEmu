@@ -282,6 +282,7 @@ impl NicaiMachine {
             5 => self.handle_file_service(index),
             6 => self.handle_stdio_service(index),
             7 => self.handle_timer_service(index),
+            9 => self.handle_network_service(index),
             10 => self.handle_game_util_service(index),
             11 => self.handle_df_engine_service(index),
             13 => self.handle_ucs2_service(index),
@@ -355,6 +356,36 @@ impl NicaiMachine {
         self.cpu.reg_set(Mode::User, 0, r0);
         self.cpu.reg_set(Mode::User, 1, r1);
         self.cpu.reg_set(Mode::User, 2, r2);
+        self.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        self.cpu.reg_set(Mode::User, reg::PC, entry & !1);
+        let mut cpsr = self.cpu.reg_get(Mode::User, reg::CPSR);
+        if entry & 1 != 0 {
+            cpsr |= 1 << 5;
+        } else {
+            cpsr &= !(1 << 5);
+        }
+        self.cpu.reg_set(Mode::User, reg::CPSR, cpsr);
+        self.run_until_return(instruction_limit)
+    }
+
+    /// Invoke a guest callback with the four-argument firmware ABI used by
+    /// asynchronous network events (`r3` carries the event type).
+    pub(super) fn invoke_callback_with_r3(
+        &mut self,
+        entry: u32,
+        r0: u32,
+        r1: u32,
+        r2: u32,
+        r3: u32,
+        instruction_limit: u64,
+    ) -> Result<()> {
+        if entry == 0 {
+            return Ok(());
+        }
+        self.cpu.reg_set(Mode::User, 0, r0);
+        self.cpu.reg_set(Mode::User, 1, r1);
+        self.cpu.reg_set(Mode::User, 2, r2);
+        self.cpu.reg_set(Mode::User, 3, r3);
         self.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
         self.cpu.reg_set(Mode::User, reg::PC, entry & !1);
         let mut cpsr = self.cpu.reg_get(Mode::User, reg::CPSR);
