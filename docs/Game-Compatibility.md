@@ -17,7 +17,7 @@ the titles appear on the original hardware.
 
 The current core recognizes little- and big-endian ARM/Thumb CBE executables designed for a 240×400 display, including variable segment headers and fixed-address manager-directory variants. It implements the firmware subsets needed for memory blocks, native and installed data packages, image and text drawing, screen changes, sandboxed guest files, timers, keypad input, and touch input.
 
-Validated behavior includes executable initialization, startup and narrative screens, archive extraction, file-backed resource-image decoding, Chinese text and HUD rendering, keypad input, screen-logic touch events (tap down/up/drag) with the LCD manager's point-in-rect hit test for tap-driven menus, fixed-point trigonometry, packed-rectangle collision detection, and continued frame execution. Headless capture preserves a valid guest-rendered framebuffer if a later callback stops.
+Validated behavior includes executable initialization, startup and narrative screens, archive extraction, file-backed resource-image decoding, Chinese text and HUD rendering, keypad input, screen-logic touch events (tap down/up/drag) with the LCD manager's point-in-rect hit test for tap-driven menus, fixed-point trigonometry, packed-rectangle collision detection, and continued frame execution. Guest-initiated exits through the ARM/Thumb semihosting interface are treated as normal halts, and headless capture preserves a valid guest-rendered framebuffer if a later callback stops.
 
 ## Summary
 
@@ -120,6 +120,7 @@ playable offline are not flagged.
 
 - Persistent guest file storage is not implemented.
 - The firmware network manager is not implemented, so applications marked 🌐 Required above stop at their login, self-update, or connection-error screens.
+- 战争机器 exits itself a few seconds after the background-intro screens are left idle: its intro timer loads the level-0 map (`map0d.map`), which the package does not contain, and the game's C runtime hits a divide-by-zero and calls `exit()`. The emulator now treats that semihosting exit as a normal halt, so the frontend keeps showing the last frame (press `R` to restart) instead of closing.
 - Core options are not yet available.
 - File-based MP3 control is not implemented yet.
 - The full 74-application validation corpus produces usable guest-rendered startup frames.

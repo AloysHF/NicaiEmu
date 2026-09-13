@@ -2,6 +2,7 @@
 
 use anyhow::{bail, Result};
 use armv4t_emu::{reg, Memory, Mode};
+use log::info;
 
 use super::{
     arm_blx_immediate_target, fixed_manager_specs, service_trace_enabled, thumb_add_pc_target,
@@ -42,8 +43,10 @@ impl NicaiMachine {
             }
             if (SERVICE_BASE..SERVICE_BASE + SERVICE_SIZE).contains(&pc) {
                 self.handle_service(pc)?;
-            } else if self.cpu.thumb_mode() && self.memory.r16(pc) == 0xdfab {
-                self.handle_semihosting(pc)?;
+            } else if self.is_semihosting_call(pc) {
+                if self.handle_semihosting(pc)? {
+                    return Ok(());
+                }
             } else if self.handle_thumb_add_pc(pc) || self.handle_interworking_branch(pc) {
             } else if self
                 .memory
@@ -137,7 +140,21 @@ impl NicaiMachine {
         true
     }
 
-    fn handle_semihosting(&mut self, pc: u32) -> Result<()> {
+    /// Detects the semihosting SWI in either instruction set: Thumb `SVC #0xAB`
+    /// and ARM `SWI #0x123456` (the Angel interface also accepts `#0xAB`).
+    fn is_semihosting_call(&mut self, pc: u32) -> bool {
+        if self.cpu.thumb_mode() {
+            self.memory.r16(pc) == 0xdfab
+        } else {
+            let instruction = self.memory.r32(pc);
+            instruction & 0xff00_0000 == 0xef00_0000
+                && matches!(instruction & 0x00ff_ffff, 0x123456 | 0xab)
+        }
+    }
+
+    /// Handles a semihosting call and returns `true` when the guest terminated
+    /// itself (semihosting exit), which halts the machine like a normal stop.
+    fn handle_semihosting(&mut self, pc: u32) -> Result<bool> {
         let reason = self.register(0);
         let argument = self.register(1);
         match reason {
@@ -160,10 +177,23 @@ impl NicaiMachine {
                     eprint!("{message}");
                 }
             }
+            0x18 => {
+                // Angel ReportException: the guest C library called exit().
+                // r1 holds the stop reason; 0x20026 is ADP_Stopped_ApplicationExit.
+                info!("guest requested exit through semihosting report 0x{argument:08X}");
+                self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
+                self.state = super::MachineState::Halted;
+                return Ok(true);
+            }
             _ => bail!("unhandled semihosting call reason={reason} at 0x{pc:08X}"),
         }
-        self.cpu.reg_set(Mode::User, reg::PC, pc + 2);
-        Ok(())
+        let next_pc = if self.cpu.thumb_mode() {
+            pc + 2
+        } else {
+            pc + 4
+        };
+        self.cpu.reg_set(Mode::User, reg::PC, next_pc);
+        Ok(false)
     }
 
     fn handle_service(&mut self, address: u32) -> Result<()> {

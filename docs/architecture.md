@@ -15,6 +15,10 @@ NicaiEmu executes native CBE applications instead of replacing their game logic 
 
 The machine uses checked sparse regions rather than reserving the entire 32-bit address space. Guest reads and writes honor the executable's byte order. Initialized data, stack, heap, service-manager state, and framebuffer storage are writable. Unmapped accesses are recorded for diagnostics, and an unmapped instruction fetch stops execution with an error.
 
+## Guest termination
+
+The ARM C runtimes linked into CBE applications terminate through the Angel semihosting interface: ARM `SWI #0x123456` or Thumb `SVC #0xAB` with operation `0x18` (ReportException). The machine treats such an exit as a normal halt: the frame loop stays idle and error-free, and frontends keep presenting the last framebuffer. Semihosting `WRITEC`/`WRITE0` console output is captured under `CBE_TRACE` and is useful for reading guest-side diagnostics such as C runtime arithmetic-exception messages.
+
 ## Service bridge
 
 Native applications receive guest-callable tables whose entries lead to emulator trampolines. Implemented service families include:
