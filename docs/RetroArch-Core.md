@@ -41,7 +41,9 @@ frontend can display the core metadata and supported features.
 - Video output using the RGB888 pixel format
 - Automatic landscape rotation: games packaged for the original phone's
   rotated landscape LCD are presented at 400×240 (the same content-identity
-  profile the standalone frontend uses), with pointer taps mapped back to
+  profile the standalone frontend uses). The core reports the matching
+  geometry and aspect ratio to the frontend, so RetroArch opens a landscape
+  viewport without large letterbox bars; pointer taps are mapped back to
   guest coordinates
 - RetroPad input handling
 - `.CBE` content loading
