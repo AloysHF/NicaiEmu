@@ -664,6 +664,10 @@ pub struct NicaiMachine {
     auto_bgm_data: Option<Vec<u8>>,
     #[serde(skip, default)]
     auto_bgm_gave_way: bool,
+    /// Resource id last accepted by PlayForGame/PlayForApp. Used to ignore
+    /// the per-tick restart storm games issue while BGM is already queued.
+    #[serde(skip, default)]
+    playing_resource_id: Option<u32>,
     // Display rotation is a frontend presentation concern rather than guest
     // state; frontends re-apply it after load/reset.
     #[serde(skip, default)]
@@ -772,6 +776,7 @@ impl NicaiMachine {
             auto_bgm: false,
             auto_bgm_data: None,
             auto_bgm_gave_way: false,
+            playing_resource_id: None,
             rotation: Rotation::Auto,
             effective_rotation: Rotation::None,
             pointer: PointerState::new(),
@@ -1291,10 +1296,11 @@ impl NicaiMachine {
         if !self.auto_bgm || self.auto_bgm_gave_way {
             return;
         }
-        // State 1 (playing) with an empty queue means the previous pass was
-        // fully consumed; state 0 means nothing was ever queued. In both cases
-        // (re)start the soundtrack.
-        if self.audio.state() == 1 && self.audio.buffered_frames() != 0 {
+        // Still playing with samples left, or paused: leave the cue alone.
+        // A finished one-shot now reports stopped with an empty queue, so
+        // both drained and never-started states fall through to (re)start.
+        let state = self.audio.state();
+        if (state == 1 && self.audio.buffered_frames() != 0) || state == 2 {
             return;
         }
         if self.auto_bgm_data.is_none() {
@@ -2244,14 +2250,14 @@ mod tests {
         let first = engine.diagnostics();
         assert!(first.decoded_frames > 0);
 
-        // Drain every buffered frame; the engine then reports playing with an
+        // Drain every buffered frame; the engine then reports stopped with an
         // empty queue, which is exactly the state `maybe_run_auto_bgm` treats
         // as "previous pass consumed".
         let frames = engine.buffered_frames();
         let drained = engine.pull_samples(frames);
         assert_eq!(drained.len(), frames * 2);
         assert_eq!(engine.buffered_frames(), 0);
-        assert_eq!(engine.state(), 1);
+        assert_eq!(engine.state(), 0);
 
         engine.play_bytes(&resource.data).unwrap();
         assert!(engine.buffered_frames() > 0);
@@ -2357,6 +2363,114 @@ mod tests {
             .play_bytes(&midi_resource_header(&tiny_midi_payload()))
             .unwrap();
         machine.set_auto_bgm(false);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+    }
+
+    #[test]
+    fn play_for_game_queues_packaged_resource_and_skips_tick_restart() {
+        use crate::machine::packages::HostResource;
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        machine.resources.push(HostResource {
+            name: "bgm.mid".to_owned(),
+            data: midi.clone(),
+        });
+        let pointer = machine.allocate(midi.len() as u32);
+        machine.memory.write_bytes(pointer, &midi);
+        machine.resource_data.push(pointer);
+
+        machine.play_resource_by_id(0, 0, false);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+        let after_first = machine.audio.diagnostics().decoded_frames;
+        assert!(after_first > 0);
+
+        // Games re-issue PlayForGame every tick; the same id must not
+        // re-decode while samples remain queued.
+        machine.play_resource_by_id(0, 0, false);
+        assert_eq!(machine.audio.diagnostics().decoded_frames, after_first);
+
+        // A different id is a new cue and is queued.
+        machine.resources.push(HostResource {
+            name: "sfx.mid".to_owned(),
+            data: midi.clone(),
+        });
+        let other = machine.allocate(midi.len() as u32);
+        machine.memory.write_bytes(other, &midi);
+        machine.resource_data.push(other);
+        machine.play_resource_by_id(1, 0, false);
+        assert!(machine.audio.diagnostics().decoded_frames > after_first);
+    }
+
+    #[test]
+    fn looping_play_for_game_restarts_after_drain() {
+        use crate::machine::packages::HostResource;
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        machine.resources.push(HostResource {
+            name: "bgm.mid".to_owned(),
+            data: midi.clone(),
+        });
+        let pointer = machine.allocate(midi.len() as u32);
+        machine.memory.write_bytes(pointer, &midi);
+        machine.resource_data.push(pointer);
+
+        // PlayForGame arms the firmware BGM loop.
+        machine.play_resource_by_id(0, 0, true);
+        assert_eq!(machine.audio.state(), 1);
+        let frames = machine.audio.buffered_frames();
+        assert!(frames > 0);
+        let _ = machine.take_audio_samples(frames);
+        assert_eq!(machine.audio.buffered_frames(), 0);
+        // The next pull restarts the same cue from the armed loop source.
+        let restarted = machine.take_audio_samples(16);
+        assert!(!restarted.is_empty());
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+    }
+
+    #[test]
+    fn play_with_data_package_uses_resource_id_like_play_for_game() {
+        use crate::machine::packages::HostResource;
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        machine.resources.push(HostResource {
+            name: "game.mid".to_owned(),
+            data: midi.clone(),
+        });
+        let pointer = machine.allocate(midi.len() as u32);
+        machine.memory.write_bytes(pointer, &midi);
+        machine.resource_data.push(pointer);
+
+        // 碰嘭球 calls PlayWithDataPackage(270) which is game.mid in its
+        // sequential package id table — same ABI as PlayForGame.
+        machine.play_resource_by_id(0, 0, true);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+    }
+
+    #[test]
+    fn play_by_file_reads_virtual_filesystem_path() {
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        assert!(machine.virtual_fs.write_file("audio/bgm.mid", midi.clone()));
+        machine.play_file_audio("audio/bgm.mid", 0);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+        assert!(machine.take_audio_samples(8).iter().any(|s| *s != 0));
+    }
+
+    #[test]
+    fn play_by_file_falls_back_to_packaged_basename() {
+        use crate::machine::packages::HostResource;
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        machine.resources.push(HostResource {
+            name: "menu.mid".to_owned(),
+            data: midi,
+        });
+        machine.play_file_audio("C:/game/menu.mid", 0);
         assert_eq!(machine.audio.state(), 1);
         assert!(machine.audio.buffered_frames() > 0);
     }
