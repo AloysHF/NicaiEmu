@@ -733,6 +733,9 @@ impl NicaiMachine {
         memory.map(STACK_BASE, STACK_SIZE, false);
         memory.map(HEAP_BASE, HEAP_SIZE, false);
         memory.map(MANAGER_BASE, MANAGER_SIZE, false);
+        // Guest firmware tables live at SERVICE_BASE and are read as data
+        // (function pointers, manager descriptors) before being invoked.
+        memory.map(SERVICE_BASE, SERVICE_SIZE as usize, false);
         memory.load(
             code_address,
             &archive.bytes()[executable.code_offset..executable.code_offset + executable.code_size],
@@ -1485,6 +1488,19 @@ impl NicaiMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_base_region_accepts_guest_data_reads() {
+        let mut memory = MachineMemory::new(false);
+        memory.map(SERVICE_BASE, SERVICE_SIZE as usize, false);
+        memory.w32(SERVICE_BASE + 4, 0x0c00_0040);
+        assert_eq!(memory.r32(SERVICE_BASE + 4), 0x0c00_0040);
+        assert!(memory.bad_accesses.is_empty());
+        // Nearby low addresses must still be rejected so null-pointer walks
+        // remain visible instead of silently reading zeros.
+        assert_eq!(memory.r32(0x0000_0004), 0);
+        assert!(memory.bad_accesses.contains(&0x0000_0004));
+    }
 
     #[test]
     fn rotate_frame_swaps_dimensions_and_keeps_orientation() {
