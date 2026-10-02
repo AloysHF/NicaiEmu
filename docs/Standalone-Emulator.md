@@ -45,6 +45,7 @@ nicaiemu [OPTIONS] <GAME_PATH>
 | `--show-gamepad` | flag | off | Draw a virtual gamepad overlay over the game frame. |
 | `--no-gamepad` | flag | off | Disable physical gamepad input (keyboard remains available). |
 | `--fullscreen` | flag | off | Run in borderless fullscreen. |
+| `--window-backend <BACKEND>` | `auto` \| `x11` \| `wayland` | `auto` | Window backend on Linux/BSD (see [Window backend](#window-backend)). Ignored on Windows and macOS. |
 | `--volume <VOLUME>` | 0–100 | `100` | Audio volume. |
 | `--headless` | flag | off | Run without opening a window. |
 | `--frames <COUNT>` | integer | `60` | Frames to run in headless mode. |
@@ -188,6 +189,36 @@ of a game file with any CRC-32 tool:
 
 User entries win over built-in ones with the same identity, so they can also
 force `none` to un-rotate a misprofiled game.
+
+## Window Backend
+
+On Linux/BSD the standalone talks to the desktop through either X11 (XWayland
+on Wayland sessions) or the native Wayland protocol. X11 windows receive the
+standard title bar with minimize/maximize/close buttons from the window
+manager. minifb's Wayland backend only gets those decorations on compositors
+that implement the xdg-decoration protocol, so on GNOME the window otherwise
+opens with no title bar and no buttons.
+
+`--window-backend` selects the backend:
+
+- `auto` (default) prefers X11 whenever `DISPLAY` is set and falls back to
+  Wayland otherwise;
+- `x11` forces X11 and fails when `DISPLAY` is not set;
+- `wayland` forces native Wayland and fails outside a Wayland session.
+
+Windows and macOS builds only have their native windowing system and ignore
+the option.
+
+On a scaled Wayland session, XWayland's X11 coordinate space is denser than
+logical pixels: a 125 % desktop with a 1536×864 logical size exposes a
+3072×1728 X screen, i.e. one logical pixel spans 2 X11 pixels. The X11
+backend multiplies the requested window size by that density factor — read
+from the session's XSETTINGS `Gdk/WindowScalingFactor`, falling back to
+`Xft.dpi ÷ 96` — so the window keeps the same on-screen size it would have
+under the Wayland backend. Without either signal the factor is 1, and native
+X11 sessions (where X11 pixels already *are* the desktop pixels) are never
+rescaled. A `XWayland X11 density 2x: opening 480x800 window ...` log line
+reports the adjustment when it applies.
 
 ## Audio
 

@@ -4,3 +4,4 @@ pub mod gamepad;
 pub mod gamepad_overlay;
 pub mod input;
 pub mod scaler;
+pub mod window_backend;

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use log::{info, warn};
-use minifb::{Key, Window, WindowOptions};
+use minifb::{Key, WindowOptions};
 use nicaiemu_core::{
     decode_machine, encode_machine, load_rotation_overrides, CbeArchive, NicaiMachine, Rotation,
     AUDIO_SAMPLE_RATE, DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
@@ -18,6 +18,7 @@ use standalone::gamepad::GamepadMapper;
 use standalone::gamepad_overlay::GamepadOverlay;
 use standalone::input::{KeyboardMapper, RemapSpec};
 use standalone::scaler::{DisplayScaler, ScaleFilter};
+use standalone::window_backend::{create_window, WindowBackendArg};
 
 /// Resolve the initial window size as an integer multiple of the presented
 /// guest display (240x400 portrait or 400x240 landscape).
@@ -122,6 +123,12 @@ struct Cli {
     /// Run in fullscreen mode.
     #[arg(long)]
     fullscreen: bool,
+
+    /// Window backend on Linux/BSD. `auto` prefers X11 (XWayland) so the
+    /// desktop window manager supplies standard window buttons; Wayland is
+    /// used when no X11 display is reachable. Ignored on Windows and macOS.
+    #[arg(long, value_enum, default_value_t = WindowBackendArg::Auto)]
+    window_backend: WindowBackendArg,
 
     /// Audio volume (0-100).
     #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(0..=100))]
@@ -250,7 +257,8 @@ fn main() -> Result<()> {
     let (window_width, window_height) =
         resolve_window_size(display_width, display_height, cli.scale);
     info!("Presenting {display_width}x{display_height} in a {window_width}x{window_height} window ({}x scale)", cli.scale);
-    let mut window = Window::new(
+    let mut window = create_window(
+        cli.window_backend,
         &title,
         window_width,
         window_height,
@@ -260,8 +268,7 @@ fn main() -> Result<()> {
             scale_mode: minifb::ScaleMode::Stretch,
             ..WindowOptions::default()
         },
-    )
-    .context("failed to create emulator window")?;
+    )?;
     if cli.fullscreen {
         window.topmost(true);
         window.set_position(0, 0);
@@ -620,6 +627,24 @@ mod tests {
         assert_eq!(cli.volume, 35);
         assert!(cli.headless);
         assert_eq!(cli.frames, 120);
+    }
+
+    #[test]
+    fn window_backend_defaults_to_auto_and_parses_explicit_choices() {
+        let defaults = Cli::try_parse_from(["nicaiemu", "game.CBE"]).unwrap();
+        assert_eq!(defaults.window_backend, WindowBackendArg::Auto);
+
+        for (name, expected) in [
+            ("auto", WindowBackendArg::Auto),
+            ("x11", WindowBackendArg::X11),
+            ("wayland", WindowBackendArg::Wayland),
+        ] {
+            let cli =
+                Cli::try_parse_from(["nicaiemu", "game.CBE", "--window-backend", name]).unwrap();
+            assert_eq!(cli.window_backend, expected);
+        }
+
+        assert!(Cli::try_parse_from(["nicaiemu", "game.CBE", "--window-backend", "x95"]).is_err());
     }
 
     #[test]
