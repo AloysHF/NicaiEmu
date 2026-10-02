@@ -6,6 +6,7 @@ pub const RETRO_API_VERSION: u32 = 1;
 /// Device types.
 pub const RETRO_DEVICE_NONE: u32 = 0;
 pub const RETRO_DEVICE_JOYPAD: u32 = 1;
+pub const RETRO_DEVICE_ANALOG: u32 = 5;
 pub const RETRO_DEVICE_POINTER: u32 = 6;
 
 /// RetroPad button identifiers.
@@ -21,6 +22,14 @@ pub const RETRO_DEVICE_ID_JOYPAD_A: u32 = 8;
 pub const RETRO_DEVICE_ID_JOYPAD_X: u32 = 9;
 pub const RETRO_DEVICE_ID_JOYPAD_L: u32 = 10;
 pub const RETRO_DEVICE_ID_JOYPAD_R: u32 = 11;
+pub const RETRO_DEVICE_ID_JOYPAD_L2: u32 = 12;
+pub const RETRO_DEVICE_ID_JOYPAD_R2: u32 = 13;
+
+/// Analog stick identifiers (index selects the stick, id selects the axis).
+pub const RETRO_DEVICE_INDEX_ANALOG_LEFT: u32 = 0;
+pub const RETRO_DEVICE_INDEX_ANALOG_RIGHT: u32 = 1;
+pub const RETRO_DEVICE_ID_ANALOG_X: u32 = 0;
+pub const RETRO_DEVICE_ID_ANALOG_Y: u32 = 1;
 
 /// Pointer device identifiers.
 pub const RETRO_DEVICE_ID_POINTER_X: u32 = 0;

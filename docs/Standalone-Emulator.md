@@ -84,7 +84,8 @@ nicaiemu path/to/game.CBE --list
 | Left soft key | Q |
 | Right soft key | E |
 | Numeric keypad | 0–9 |
-| Additional keys | N / M |
+| Star (`*`) key | N |
+| Hash (`#`) key | M |
 | Reset | R |
 | Exit | Escape |
 
@@ -113,7 +114,8 @@ Bluetooth gamepads) are polled each frame in addition to the keyboard. The
 first connected pad is used; keyboard and gamepad inputs combine as a logical
 OR. Use `--no-gamepad` to force keyboard-only input.
 
-Default mapping (RetroPad-compatible, matching the libretro core):
+Default mapping (RetroPad-compatible, matching the libretro core one-to-one;
+every non-digit guest key is reachable):
 
 | Control | Phone input |
 | --- | --- |
@@ -122,10 +124,12 @@ Default mapping (RetroPad-compatible, matching the libretro core):
 | East (Xbox B / PS Circle) | Confirm |
 | Start | Confirm |
 | North (Xbox Y / PS Triangle) | Left soft key (Q) |
+| Left bumper (L1) | Left soft key (Q) |
 | West (Xbox X / PS Square) | Right soft key (E) |
-| Left bumper / trigger | Left soft key (Q) |
-| Right bumper / trigger | Right soft key (E) |
-| Select / Back | Additional key (N) |
+| Right bumper (R1) | Right soft key (E) |
+| Select / Back | Star key (N, `*`) |
+| Left trigger (L2) | Star key (N, `*`) |
+| Right trigger (R2) | Hash key (M, `#`) |
 
 ```bash
 # Keyboard only

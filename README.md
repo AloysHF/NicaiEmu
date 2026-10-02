@@ -177,19 +177,22 @@ See [Architecture](docs/architecture.md) for implementation details.
 
 ## Key Mappings (Standalone)
 
-| Phone Input | Keyboard |
-| --- | --- |
-| Direction pad | Arrow keys or WASD |
-| Confirm | Enter or F |
-| Left soft key | Q |
-| Right soft key | E |
-| Numeric keypad | 0–9 |
-| Additional keys | N / M |
-| Exit | Escape |
+| Phone Input | Keyboard | Gamepad (RetroPad layout) |
+| --- | --- | --- |
+| Direction pad | Arrow keys or WASD | D-pad or left/right stick |
+| Confirm | Enter or F | A / B / Start |
+| Left soft key | Q | X or L1 |
+| Right soft key | E | Y or R1 |
+| Numeric keypad | 0–9 | — (keyboard only) |
+| Star (`*`) key | N | Select or L2 |
+| Hash (`#`) key | M | R2 |
+| Exit | Escape | — |
 
-Direction keys remain visible to the guest while physically held. Guest logic
-runs at the platform's 10 Hz screen-update rate, so continuous-motion games
-walk smoothly without flooding tile-based games with 30 updates per second.
+The libretro core uses the same RetroPad layout, so the same pad drives the
+same phone keys in both frontends. Direction keys remain visible to the guest
+while physically held. Guest logic runs at the platform's 10 Hz screen-update
+rate, so continuous-motion games walk smoothly without flooding tile-based
+games with 30 updates per second.
 
 ## Game Compatibility
 

@@ -14,13 +14,16 @@ const GUEST_RIGHT: u8 = 16;
 const GUEST_UP: u8 = 17;
 const GUEST_DOWN: u8 = 18;
 const GUEST_N: u8 = 19;
+const GUEST_M: u8 = 20;
 
 /// Polls the first connected physical gamepad and maps it onto phone keys.
 ///
-/// Face buttons follow the same RetroPad convention as the libretro core:
-/// South/East/Start confirm, North is the left soft key, West is the right
-/// soft key. Left/right sticks also act as a digital D-pad once past
-/// [`STICK_DEADZONE`]. Shoulder buttons duplicate the soft keys.
+/// The layout mirrors the libretro core's RetroPad mapping one-to-one:
+/// South/East/Start confirm, North/X plus the left shoulder are the left soft
+/// key, West/Y plus the right shoulder are the right soft key, Select plus the
+/// left trigger fire the star key (guest 19), and the right trigger fires the
+/// hash key (guest 20). Left/right sticks also act as a digital D-pad once
+/// past [`STICK_DEADZONE`].
 pub struct GamepadMapper {
     gilrs: Option<Gilrs>,
 }
@@ -120,22 +123,21 @@ fn map_guest_keys(is_pressed: impl Fn(Button) -> bool, axis: impl Fn(Axis) -> f3
     if is_pressed(Button::South) || is_pressed(Button::East) || is_pressed(Button::Start) {
         keys.push(GUEST_OK);
     }
-    // RetroPad X plus left shoulder duplicate the left soft key.
-    if is_pressed(Button::North)
-        || is_pressed(Button::LeftTrigger)
-        || is_pressed(Button::LeftTrigger2)
-    {
+    // RetroPad X plus the left shoulder (L1) duplicate the left soft key.
+    if is_pressed(Button::North) || is_pressed(Button::LeftTrigger) {
         keys.push(GUEST_Q);
     }
-    // RetroPad Y plus right shoulder duplicate the right soft key.
-    if is_pressed(Button::West)
-        || is_pressed(Button::RightTrigger)
-        || is_pressed(Button::RightTrigger2)
-    {
+    // RetroPad Y plus the right shoulder (R1) duplicate the right soft key.
+    if is_pressed(Button::West) || is_pressed(Button::RightTrigger) {
         keys.push(GUEST_E);
     }
-    if is_pressed(Button::Select) {
+    // Select plus the left trigger (L2) fire the star key (guest `*`).
+    if is_pressed(Button::Select) || is_pressed(Button::LeftTrigger2) {
         keys.push(GUEST_N);
+    }
+    // The right trigger (R2) fires the hash key (guest `#`).
+    if is_pressed(Button::RightTrigger2) {
+        keys.push(GUEST_M);
     }
 
     keys
@@ -208,9 +210,60 @@ mod tests {
     }
 
     #[test]
-    fn select_maps_to_extra_key() {
+    fn select_and_left_trigger_map_to_star_key() {
         let select = map_guest_keys(|b| b == Button::Select, zero_axis);
         assert_eq!(select, [GUEST_N]);
+
+        let left_trigger = map_guest_keys(|b| b == Button::LeftTrigger2, zero_axis);
+        assert_eq!(left_trigger, [GUEST_N]);
+    }
+
+    #[test]
+    fn right_trigger_maps_to_hash_key() {
+        let right_trigger = map_guest_keys(|b| b == Button::RightTrigger2, zero_axis);
+        assert_eq!(right_trigger, [GUEST_M]);
+    }
+
+    /// Every non-digit guest key must be reachable from the pad, keeping the
+    /// standalone mapper in lockstep with the libretro RetroPad layout.
+    #[test]
+    fn every_non_digit_guest_key_is_reachable() {
+        let buttons = [
+            Button::DPadUp,
+            Button::DPadDown,
+            Button::DPadLeft,
+            Button::DPadRight,
+            Button::South,
+            Button::East,
+            Button::North,
+            Button::West,
+            Button::Start,
+            Button::Select,
+            Button::LeftTrigger,
+            Button::RightTrigger,
+            Button::LeftTrigger2,
+            Button::RightTrigger2,
+        ];
+        let mut reached = std::collections::HashSet::new();
+        for button in buttons {
+            reached.extend(map_guest_keys(|b| b == button, zero_axis));
+        }
+        assert_eq!(
+            reached,
+            [
+                GUEST_Q,
+                GUEST_E,
+                GUEST_OK,
+                GUEST_LEFT,
+                GUEST_RIGHT,
+                GUEST_UP,
+                GUEST_DOWN,
+                GUEST_N,
+                GUEST_M
+            ]
+            .into_iter()
+            .collect()
+        );
     }
 
     #[test]
