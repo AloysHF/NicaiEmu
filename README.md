@@ -49,6 +49,11 @@ by supported games.
   (`--show-gamepad`)
 - **Fullscreen and volume** — borderless fullscreen and 0–100 playback volume
   (`--fullscreen`, `--volume`)
+- **Window backend selection** — on Linux/BSD the default prefers X11
+  (XWayland) so the desktop supplies standard window buttons such as maximize
+  and close; XWayland HiDPI sessions keep the window's on-screen size by
+  compensating for the denser X11 coordinate space; `--window-backend` forces
+  `x11` or `wayland`
 - **Headless mode** — run N frames without a window for testing and batch
   processing (`--headless --frames`)
 - **Screenshot capture** — automated PNG screenshot generation
@@ -149,7 +154,7 @@ crates/
 ├── nicaiemu/              # Standalone binary (→ nicaiemu)
 │   └── src/
 │       ├── main.rs           # Window loop, CLI, input, audio output
-│       └── standalone/       # Display scalers, gamepad overlay, key/gamepad mappers
+│       └── standalone/       # Display scalers, gamepad overlay, key/gamepad mappers, window backend
 ├── nicaiemu-tools/        # Archive analysis and headless diagnostics
 │   └── src/
 │       ├── bin/

@@ -20,3 +20,7 @@ env_logger.workspace = true
 image.workspace = true
 crc32fast.workspace = true
 rodio.workspace = true
+
+# X11/XWayland scale probe used by the Linux/BSD window backend only.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+x11-dl.workspace = true
