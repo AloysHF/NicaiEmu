@@ -12,7 +12,7 @@ pub mod audio_engine;
 pub mod cbe;
 pub mod image_decoder;
 pub mod machine;
-pub mod rotation_profile;
+pub mod orientation_profile;
 pub mod save_state;
 
 // Experimental scene-level HLE runtime. Kept crate-internal for now: it is
@@ -23,10 +23,12 @@ mod runtime;
 pub use audio_engine::{AudioDiagnostics, AudioEngine, AUDIO_SAMPLE_RATE};
 pub use cbe::{CbeArchive, ResourceEntry, ResourceType};
 pub use image_decoder::DecodedImage;
-pub use machine::{CbeExecutable, MachineState, NicaiMachine, Rotation, FRAME_HEIGHT, FRAME_WIDTH};
-pub use rotation_profile::{
-    load_rotation_overrides, parse_rotation_overrides, register_rotation_overrides,
-    rotation_for_archive,
+pub use machine::{
+    CbeExecutable, DisplayOrientation, MachineState, NicaiMachine, FRAME_HEIGHT, FRAME_WIDTH,
+};
+pub use orientation_profile::{
+    load_orientation_overrides, orientation_for_archive, parse_orientation_overrides,
+    register_orientation_overrides,
 };
 pub use save_state::{decode_machine, encode_machine, SERIALIZED_SIZE};
 

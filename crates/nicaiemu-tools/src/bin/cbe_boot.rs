@@ -2,24 +2,22 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use nicaiemu_core::{CbeArchive, NicaiMachine, Rotation, DEFAULT_INSTRUCTION_LIMIT};
+use nicaiemu_core::{CbeArchive, DisplayOrientation, NicaiMachine, DEFAULT_INSTRUCTION_LIMIT};
 
-/// Display rotation requested on the command line.
+/// Display orientation requested on the command line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-enum RotationArg {
+enum OrientationArg {
     Auto,
-    None,
-    Cw,
-    Ccw,
+    Portrait,
+    Landscape,
 }
 
-impl From<RotationArg> for Rotation {
-    fn from(value: RotationArg) -> Self {
+impl From<OrientationArg> for DisplayOrientation {
+    fn from(value: OrientationArg) -> Self {
         match value {
-            RotationArg::Auto => Rotation::Auto,
-            RotationArg::None => Rotation::None,
-            RotationArg::Cw => Rotation::Cw,
-            RotationArg::Ccw => Rotation::Ccw,
+            OrientationArg::Auto => DisplayOrientation::Auto,
+            OrientationArg::Portrait => DisplayOrientation::Portrait,
+            OrientationArg::Landscape => DisplayOrientation::Landscape,
         }
     }
 }
@@ -42,8 +40,8 @@ struct Cli {
     key_hold: Vec<(u32, u32, u8)>,
     #[arg(long, value_parser = parse_pointer_event)]
     pointer_event: Vec<(u32, i32, i32)>,
-    #[arg(long, value_enum, default_value_t = RotationArg::Auto)]
-    rotate: RotationArg,
+    #[arg(long, value_enum, default_value_t = OrientationArg::Auto)]
+    orientation: OrientationArg,
     #[arg(long)]
     screenshot: Option<PathBuf>,
 }
@@ -102,7 +100,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let archive = CbeArchive::load(&cli.file)?;
     let mut machine = NicaiMachine::new(&archive)?;
-    machine.set_rotation(cli.rotate.into());
+    machine.set_orientation(cli.orientation.into());
     let mut result = machine.boot(cli.instruction_limit);
     for frame in 0..cli.frames {
         if result.is_ok() {
@@ -157,9 +155,9 @@ fn main() -> Result<()> {
         machine.pending_screen()
     );
     eprintln!(
-        "rotation requested={:?} effective={:?}",
-        machine.rotation(),
-        machine.effective_rotation()
+        "orientation requested={:?} effective={:?}",
+        machine.orientation(),
+        machine.effective_orientation()
     );
     let audio = machine.audio_diagnostics();
     eprintln!(

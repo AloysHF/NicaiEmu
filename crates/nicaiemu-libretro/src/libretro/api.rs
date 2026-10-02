@@ -8,7 +8,7 @@ use super::constants::*;
 use super::options;
 use super::types::*;
 use nicaiemu_core::{
-    decode_machine, encode_machine, load_rotation_overrides, CbeArchive, NicaiMachine,
+    decode_machine, encode_machine, load_orientation_overrides, CbeArchive, NicaiMachine,
     AUDIO_SAMPLE_RATE, DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
 };
 use std::ffi::{c_char, c_void, CStr};
@@ -40,9 +40,9 @@ const PACING_FPS: u32 = 60;
 /// tick, so the constant flow averages to the same 44.1 kHz stream.
 const PACING_SAMPLES_PER_RUN: usize = (AUDIO_SAMPLE_RATE / PACING_FPS) as usize;
 const PERFORMANCE_LEVEL: u32 = 3;
-/// Optional user rotation overrides looked up in the frontend system
+/// Optional user orientation overrides looked up in the frontend system
 /// directory, loaded once per process before content loading.
-const ROTATION_PROFILE_FILE: &str = "nicaiemu_rotation.csv";
+const ORIENTATION_PROFILE_FILE: &str = "nicaiemu_orientation.csv";
 
 /// Converts frontend frames into guest screen ticks.
 ///
@@ -82,7 +82,7 @@ struct Emulator {
     touch_input: bool,
     content_crc32: u32,
     /// Display size last reported to the frontend, to detect geometry changes
-    /// from a live rotation override.
+    /// from a live orientation override.
     presented_size: (u32, u32),
     /// Guest tick credit accumulated from the frontend pacing rate.
     tick_pacer: GuestTickPacer,
@@ -94,7 +94,7 @@ static mut EMULATOR: Option<Emulator> = None;
 /// Presented display size of the loaded content.
 ///
 /// Portrait titles present the native 240x400 framebuffer; landscape titles
-/// resolved by the content-identity rotation profile present it rotated to
+/// resolved by the content-identity orientation profile present it rotated to
 /// 400x240. Falls back to the portrait display when no content is loaded.
 fn display_size() -> (u32, u32) {
     unsafe {
@@ -244,9 +244,9 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
             &PERFORMANCE_LEVEL as *const _ as *mut c_void,
         );
 
-        // User rotation entries must be registered before the machine is
+        // User orientation entries must be registered before the machine is
         // created, which is where the automatic profile is resolved.
-        load_user_rotation_profile();
+        load_user_orientation_profile();
 
         match load_machine(Path::new(path)) {
             Ok((archive, mut machine)) => {
@@ -311,7 +311,7 @@ pub extern "C" fn retro_run() {
             apply_core_options(emulator);
         }
 
-        // A live rotation override swaps the presented geometry; tell the
+        // A live orientation override swaps the presented geometry; tell the
         // frontend so it resizes instead of stretching the old viewport.
         let (display_width, display_height) = emulator.machine.display_size();
         if (display_width, display_height) != emulator.presented_size {
@@ -363,11 +363,11 @@ fn load_machine(path: &Path) -> anyhow::Result<(CbeArchive, NicaiMachine)> {
     Ok((archive, machine))
 }
 
-/// Load the optional user rotation profile once per process.
+/// Load the optional user orientation profile once per process.
 ///
-/// The file is `<system_dir>/nicaiemu_rotation.csv`; a missing or invalid
+/// The file is `<system_dir>/nicaiemu_orientation.csv`; a missing or invalid
 /// file is non-fatal because the built-in profile still applies.
-fn load_user_rotation_profile() {
+fn load_user_orientation_profile() {
     static LOADED: AtomicBool = AtomicBool::new(false);
     if LOADED.swap(true, Ordering::Relaxed) {
         return;
@@ -378,7 +378,7 @@ fn load_user_rotation_profile() {
         &mut system_dir as *mut _ as *mut c_void,
     );
     if !ok || system_dir.is_null() {
-        log::info!("No frontend system directory; user rotation profile not loaded");
+        log::info!("No frontend system directory; user orientation profile not loaded");
         return;
     }
     let Ok(dir) = unsafe { CStr::from_ptr(system_dir) }.to_str() else {
@@ -386,16 +386,16 @@ fn load_user_rotation_profile() {
         return;
     };
     if dir.is_empty() {
-        log::info!("Frontend system directory is empty; user rotation profile not loaded");
+        log::info!("Frontend system directory is empty; user orientation profile not loaded");
         return;
     }
-    let path = Path::new(dir).join(ROTATION_PROFILE_FILE);
-    match load_rotation_overrides(&path) {
+    let path = Path::new(dir).join(ORIENTATION_PROFILE_FILE);
+    match load_orientation_overrides(&path) {
         Ok(count) => log::info!(
-            "Loaded {count} user rotation entries from {}",
+            "Loaded {count} user orientation entries from {}",
             path.display()
         ),
-        Err(error) => log::info!("No user rotation profile applied: {error:#}"),
+        Err(error) => log::info!("No user orientation profile applied: {error:#}"),
     }
 }
 
@@ -538,21 +538,21 @@ fn apply_core_options(emulator: &mut Emulator) {
     emulator.machine.set_volume(options.volume);
     emulator.touch_input = options.touch_input;
     emulator.machine.set_auto_bgm(options.auto_bgm);
-    emulator.machine.set_rotation(options.rotation);
-    emulator.machine.resolve_auto_rotation(&emulator.archive);
+    emulator.machine.set_orientation(options.orientation);
+    emulator.machine.resolve_auto_orientation(&emulator.archive);
     super::logger::set_debug_logging(options.debug_logging);
     log::info!(
-        "Core options applied: volume={} touch_input={} auto_bgm={} debug_logging={} rotation={:?}",
+        "Core options applied: volume={} touch_input={} auto_bgm={} debug_logging={} orientation={:?}",
         options.volume,
         options.touch_input,
         options.auto_bgm,
         options.debug_logging,
-        options.rotation
+        options.orientation
     );
 }
 
-/// Report a changed presented geometry (from a live rotation override) so the
-/// frontend resizes instead of stretching the previous viewport.
+/// Report a changed presented geometry (from a live orientation override) so
+/// the frontend resizes instead of stretching the previous viewport.
 fn notify_display_geometry(width: u32, height: u32) {
     let geometry = retro_game_geometry {
         base_width: width,
@@ -703,7 +703,7 @@ pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
             Ok(machine) => {
                 emulator.machine = machine;
                 emulator.stopped = false;
-                // apply_core_options re-resolves the display rotation: it is
+                // apply_core_options re-resolves the display orientation: it is
                 // presentation state skipped by the save-state codec.
                 apply_core_options(emulator);
                 emulator.presented_size = emulator.machine.display_size();
@@ -1098,7 +1098,7 @@ mod tests {
             assert_eq!(bytes.len(), (240 * 400 * 4) as usize);
         }
 
-        // The rotation is presentation state skipped by the save-state codec;
+        // The orientation is presentation state skipped by the save-state codec;
         // restoring a save state must keep presenting rotated frames.
         let state_size = retro_serialize_size();
         assert_eq!(state_size, SERIALIZED_SIZE);

@@ -210,12 +210,12 @@ mod tests {
         );
     }
 
-    /// Regression for issue #40's standalone follow-up: the rotation is
+    /// Regression for issue #40's standalone follow-up: the orientation is
     /// presentation state skipped by the codec, so a restored machine loses
-    /// it and `resolve_auto_rotation` must recover it for landscape content.
+    /// it and `resolve_auto_orientation` must recover it for landscape content.
     #[test]
     #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
-    fn real_landscape_rotation_survives_save_load_after_resolve() {
+    fn real_landscape_orientation_survives_save_load_after_resolve() {
         let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
         let game_path = Path::new(&game_dir).join("三国群殴传.CBE");
         let archive = CbeArchive::load(&game_path).unwrap();
@@ -230,9 +230,9 @@ mod tests {
         let mut restored = decode_machine(&state, content_crc32).unwrap();
 
         // The codec skips presentation state: the restored machine presents
-        // unrotated until the frontend re-resolves the rotation.
+        // unrotated until the frontend re-resolves the orientation.
         assert_eq!(restored.display_size(), (240, 400));
-        restored.resolve_auto_rotation(&archive);
+        restored.resolve_auto_orientation(&archive);
         assert_eq!(restored.display_size(), (400, 240));
         assert_eq!(
             framebuffer_crc32(&mut restored),
@@ -241,8 +241,8 @@ mod tests {
 
         // An explicit override wins over the automatic profile.
         let mut overridden = decode_machine(&state, content_crc32).unwrap();
-        overridden.set_rotation(crate::Rotation::None);
-        overridden.resolve_auto_rotation(&archive);
+        overridden.set_orientation(crate::DisplayOrientation::Portrait);
+        overridden.resolve_auto_orientation(&archive);
         assert_eq!(overridden.display_size(), (240, 400));
     }
 }

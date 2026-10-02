@@ -3,7 +3,7 @@
 use super::callbacks;
 use super::constants::*;
 use super::types::retro_variable;
-use nicaiemu_core::Rotation;
+use nicaiemu_core::DisplayOrientation;
 use std::ffi::{c_void, CStr};
 use std::ptr;
 
@@ -12,7 +12,7 @@ pub const OPTION_VOLUME: &CStr = c"nicaiemu_volume";
 pub const OPTION_TOUCH_INPUT: &CStr = c"nicaiemu_touch_input";
 pub const OPTION_DEBUG_LOGGING: &CStr = c"nicaiemu_debug_logging";
 pub const OPTION_AUTO_BGM: &CStr = c"nicaiemu_auto_bgm";
-pub const OPTION_ROTATION: &CStr = c"nicaiemu_rotation";
+pub const OPTION_SCREEN_ORIENTATION: &CStr = c"nicaiemu_screen_orientation";
 
 /// Resolved core option values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,7 +21,7 @@ pub struct CoreOptions {
     pub touch_input: bool,
     pub debug_logging: bool,
     pub auto_bgm: bool,
-    pub rotation: Rotation,
+    pub orientation: DisplayOrientation,
 }
 
 impl Default for CoreOptions {
@@ -31,7 +31,7 @@ impl Default for CoreOptions {
             touch_input: true,
             debug_logging: false,
             auto_bgm: false,
-            rotation: Rotation::Auto,
+            orientation: DisplayOrientation::Auto,
         }
     }
 }
@@ -71,8 +71,8 @@ fn core_option_variables() -> [retro_variable; 6] {
             value: c"Auto BGM (packaged MIDI); disabled|enabled".as_ptr(),
         },
         retro_variable {
-            key: OPTION_ROTATION.as_ptr(),
-            value: c"Display Rotation; auto|none|cw|ccw".as_ptr(),
+            key: OPTION_SCREEN_ORIENTATION.as_ptr(),
+            value: c"Screen Orientation; auto|landscape|portrait".as_ptr(),
         },
         // Terminator.
         retro_variable {
@@ -145,19 +145,18 @@ pub fn read_core_options(mut get: impl FnMut(&CStr) -> Option<String>) -> CoreOp
             options.auto_bgm = false;
         }
     }
-    if let Some(rotation) = get(OPTION_ROTATION) {
-        options.rotation = parse_rotation(&rotation);
+    if let Some(orientation) = get(OPTION_SCREEN_ORIENTATION) {
+        options.orientation = parse_orientation(&orientation);
     }
     options
 }
 
-/// Parse a display rotation choice, falling back to Auto for unknown values.
-fn parse_rotation(value: &str) -> Rotation {
+/// Parse a screen orientation choice, falling back to Auto for unknown values.
+fn parse_orientation(value: &str) -> DisplayOrientation {
     match value {
-        "none" => Rotation::None,
-        "cw" => Rotation::Cw,
-        "ccw" => Rotation::Ccw,
-        _ => Rotation::Auto,
+        "landscape" => DisplayOrientation::Landscape,
+        "portrait" => DisplayOrientation::Portrait,
+        _ => DisplayOrientation::Auto,
     }
 }
 
@@ -203,7 +202,7 @@ mod tests {
             (OPTION_TOUCH_INPUT, "disabled"),
             (OPTION_DEBUG_LOGGING, "enabled"),
             (OPTION_AUTO_BGM, "enabled"),
-            (OPTION_ROTATION, "ccw"),
+            (OPTION_SCREEN_ORIENTATION, "landscape"),
         ]));
         assert_eq!(
             options,
@@ -212,7 +211,7 @@ mod tests {
                 touch_input: false,
                 debug_logging: true,
                 auto_bgm: true,
-                rotation: Rotation::Ccw,
+                orientation: DisplayOrientation::Landscape,
             }
         );
     }
@@ -230,19 +229,21 @@ mod tests {
             (OPTION_TOUCH_INPUT, "sometimes"),
             (OPTION_DEBUG_LOGGING, "verbose"),
             (OPTION_AUTO_BGM, "sometimes"),
-            (OPTION_ROTATION, "sideways"),
+            (OPTION_SCREEN_ORIENTATION, "sideways"),
         ]));
         assert_eq!(options, CoreOptions::default());
     }
 
     #[test]
-    fn rotation_choices_parse_to_all_modes() {
-        assert_eq!(parse_rotation("auto"), Rotation::Auto);
-        assert_eq!(parse_rotation("none"), Rotation::None);
-        assert_eq!(parse_rotation("cw"), Rotation::Cw);
-        assert_eq!(parse_rotation("ccw"), Rotation::Ccw);
-        assert_eq!(parse_rotation(""), Rotation::Auto);
-        assert_eq!(parse_rotation("90"), Rotation::Auto);
+    fn orientation_choices_parse_to_all_modes() {
+        assert_eq!(parse_orientation("auto"), DisplayOrientation::Auto);
+        assert_eq!(parse_orientation("portrait"), DisplayOrientation::Portrait);
+        assert_eq!(
+            parse_orientation("landscape"),
+            DisplayOrientation::Landscape
+        );
+        assert_eq!(parse_orientation(""), DisplayOrientation::Auto);
+        assert_eq!(parse_orientation("90"), DisplayOrientation::Auto);
     }
 
     #[test]
@@ -252,7 +253,7 @@ mod tests {
             (OPTION_TOUCH_INPUT, "enabled"),
             (OPTION_DEBUG_LOGGING, "disabled"),
             (OPTION_AUTO_BGM, "disabled"),
-            (OPTION_ROTATION, "auto"),
+            (OPTION_SCREEN_ORIENTATION, "auto"),
         ];
         for (key, expected_default) in cases {
             let variables = core_option_variables();

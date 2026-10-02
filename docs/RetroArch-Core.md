@@ -80,26 +80,26 @@ apply immediately while a game is running and survive resets.
 | Touch/Pointer Input | enabled, disabled | Whether mouse/touchscreen taps reach the guest |
 | CPU/HLE Debug Logging | disabled, enabled | Forward debug-level core logs to the frontend log |
 | Auto BGM (packaged MIDI) | disabled, enabled | Play the first packaged MIDI resource when the game never calls the audio manager |
-| Display Rotation | auto, none, cw, ccw | Override the automatic landscape rotation (see below) |
+| Screen Orientation | auto, landscape, portrait | Override the automatic landscape rotation (see below) |
 
-## Screen Rotation
+## Screen Orientation
 
 Games packaged for the original phone's rotated landscape LCD are presented
 at 400×240 automatically through a built-in content profile, matching the
 standalone frontend. For a landscape game outside the profile (sideways
-picture), set **Display Rotation** to `cw` or `ccw` in the core options.
+picture), set **Screen Orientation** to `landscape` in the core options.
 
 Prefer the core option over RetroArch's **Settings > Video > Rotation**
 override: the core rotates the pixels itself, so a frontend rotation stacks
 on top of it and turns profiled games sideways again. Pointer input is mapped
-back through the active rotation, so taps stay correct in every mode.
+back through the active orientation, so taps stay correct in every mode.
 
 Additional titles can be covered without a core update by placing a
-`nicaiemu_rotation.csv` file in RetroArch's **system directory** (Settings >
-Directory > System/BIOS). The format is one `crc32,length,rotation` entry per
-line (`crc32` hex, `length` decimal bytes, `rotation` one of `none`, `cw`,
-`ccw`), matching the standalone `--rotation-profile` file; user entries win
-over built-in ones and are loaded once per run.
+`nicaiemu_orientation.csv` file in RetroArch's **system directory** (Settings >
+Directory > System/BIOS). The format is one `crc32,length,orientation` entry
+per line (`crc32` hex, `length` decimal bytes, `orientation` one of
+`landscape`, `portrait`), matching the standalone `--orientation-profile`
+file; user entries win over built-in ones and are loaded once per run.
 
 ## RetroPad Button Mapping
 

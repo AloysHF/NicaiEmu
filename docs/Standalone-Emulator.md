@@ -39,8 +39,8 @@ nicaiemu [OPTIONS] <GAME_PATH>
 | `-l, --list` | flag | off | List packaged resources and exit. |
 | `--scale <SCALE>` | integer 1–8 | `1` | Integer window scale factor. Default 1 matches the guest display (240×400 portrait or 400×240 landscape). |
 | `--filter <FILTER>` | `nearest` \| `bilinear` \| `bicubic` \| `xbrz` | `nearest` | Pixel scaling filter for display output. |
-| `--rotate <ROTATION>` | `auto` \| `none` \| `cw` \| `ccw` | `auto` | Rotate the guest framebuffer before presentation. `auto` uses the built-in landscape-game profile; explicit values override it. |
-| `--rotation-profile <FILE>` | path | — | Load extra display-rotation entries from a CSV file before starting (see [Screen rotation](#screen-rotation)). |
+| `--orientation <ORIENTATION>` | `auto` \| `landscape` \| `portrait` | `auto` | Present the game in landscape or portrait. `auto` uses the built-in landscape-game profile; explicit values override it. |
+| `--orientation-profile <FILE>` | path | — | Load extra display-orientation entries from a CSV file before starting (see [Screen orientation](#screen-orientation)). |
 | `--remap <GUEST_KEY:KEY>` | `GUEST_KEY:KEY` | — | Remap a guest key to a host key. Repeatable. |
 | `--show-gamepad` | flag | off | Draw a virtual gamepad overlay over the game frame. |
 | `--no-gamepad` | flag | off | Disable physical gamepad input (keyboard remains available). |
@@ -165,30 +165,31 @@ is centered with black bars while preserving the aspect ratio, and the
 the currently held keys. The overlay is rendered at native resolution before
 scaling, so it stays crisp at any window size.
 
-## Screen Rotation
+## Screen Orientation
 
 Games packaged for the original phone's rotated landscape LCD are presented
 at 400×240 automatically through a built-in content profile keyed by archive
-CRC-32 and size. Use `--rotate none|cw|ccw` to override the detection for a
-single run. When the presentation swaps dimensions, the default desktop window
-is also landscape so the frame fills the window instead of sitting in a
-portrait shell with large black bars. Pass `--scale` to open a larger window.
+CRC-32 and size. Use `--orientation landscape|portrait` to override the
+detection for a single run. When the presentation swaps dimensions, the
+default desktop window is also landscape so the frame fills the window
+instead of sitting in a portrait shell with large black bars. Pass `--scale`
+to open a larger window.
 
 For a landscape game outside the built-in profile, supply extra entries with
-`--rotation-profile <FILE>` instead of waiting for a core update. The file is
-CSV text with one `crc32,length,rotation` entry per line (`crc32` in hex with
-an optional `0x` prefix, `length` in decimal bytes, `rotation` one of `none`,
-`cw`, `ccw`; blank lines and `#` comments are ignored). Compute the identity
-of a game file with any CRC-32 tool:
+`--orientation-profile <FILE>` instead of waiting for a core update. The file
+is CSV text with one `crc32,length,orientation` entry per line (`crc32` in
+hex with an optional `0x` prefix, `length` in decimal bytes, `orientation` one
+of `landscape`, `portrait`; blank lines and `#` comments are ignored). Compute
+the identity of a game file with any CRC-32 tool:
 
 ```text
-# crc32,length,rotation
-282fe73d,1143317,ccw
-0x9c5e0674,958874,ccw
+# crc32,length,orientation
+282fe73d,1143317,landscape
+0x9c5e0674,958874,landscape
 ```
 
 User entries win over built-in ones with the same identity, so they can also
-force `none` to un-rotate a misprofiled game.
+force `portrait` to un-rotate a misprofiled game.
 
 ## Window Backend
 

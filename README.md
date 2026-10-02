@@ -36,8 +36,8 @@ by supported games.
   1:1 by default and supports integer `--scale` (1–8)
 - **Automatic landscape rotation** — games packaged for the original phone's
   rotated landscape LCD are presented at 400×240 automatically, with a
-  landscape default window matching the frame, a `--rotate` override
-  for manual control, and a `--rotation-profile` file for titles outside the
+  landscape default window matching the frame, a `--orientation` override
+  for manual control, and a `--orientation-profile` file for titles outside the
   built-in profile
 - **Display scaling** — nearest, bilinear, bicubic, and xbrz filters with
   aspect-ratio-preserving centering (`--filter`)
@@ -74,7 +74,7 @@ by supported games.
   RetroArch
 - **Libretro integration** — playable libretro core with RGB888 video output,
   RetroPad input, content loading, save states, reset, and memory exposure
-  (core options cover volume, touch input, auto BGM, display rotation, and
+  (core options cover volume, touch input, auto BGM, screen orientation, and
   debug logging); landscape titles are presented rotated at 400×240, matching
   the standalone frontend
 

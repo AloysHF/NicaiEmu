@@ -701,9 +701,9 @@ impl NicaiMachine {
         // renders the glyphs itself, so a landscape-packaged game issues them
         // with 400x240 coordinates that have to be mapped back into the
         // 240x400 framebuffer pixel by pixel (identity for portrait games).
-        let swaps = self.effective_rotation.swaps_dimensions();
+        let swaps = self.effective_orientation.swaps_dimensions();
         let (display_width, display_height) = if swaps { (400, 240) } else { (240, 400) };
-        let rotation = self.effective_rotation;
+        let orientation = self.effective_orientation;
         let mut pen_x = x;
         for character in text.chars() {
             let Some(glyph) = unifont::get_glyph(character) else {
@@ -721,7 +721,7 @@ impl NicaiMachine {
                         && glyph.get_pixel(glyph_x as usize, glyph_y as usize)
                     {
                         let (screen_x, screen_y) = if swaps {
-                            rotation.unrotate(display_x, display_y)
+                            orientation.unrotate(display_x, display_y)
                         } else {
                             (display_x, display_y)
                         };
