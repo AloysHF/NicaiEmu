@@ -989,7 +989,6 @@ mod tests {
     /// soft keys 12/13, confirm 14, D-pad 15-18, and the star/hash keys 19/20.
     #[test]
     fn retro_pad_mapping_reaches_every_non_digit_guest_key() {
-        let none = |_id: u32| false;
         let zero = |_index: u32, _id: u32| 0;
         let mut reached = std::collections::HashSet::new();
         for button in [
