@@ -11,8 +11,8 @@ use clap::Parser;
 use log::{info, warn};
 use minifb::{Key, WindowOptions};
 use nicaiemu_core::{
-    decode_machine, encode_machine, load_rotation_overrides, CbeArchive, NicaiMachine, Rotation,
-    AUDIO_SAMPLE_RATE, DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
+    decode_machine, encode_machine, load_orientation_overrides, CbeArchive, DisplayOrientation,
+    NicaiMachine, AUDIO_SAMPLE_RATE, DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
 };
 use standalone::gamepad::GamepadMapper;
 use standalone::gamepad_overlay::GamepadOverlay;
@@ -56,22 +56,20 @@ fn window_point_to_display(
     (x, y)
 }
 
-/// Display rotation requested on the command line.
+/// Display orientation requested on the command line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-enum RotationArg {
+enum OrientationArg {
     Auto,
-    None,
-    Cw,
-    Ccw,
+    Portrait,
+    Landscape,
 }
 
-impl From<RotationArg> for Rotation {
-    fn from(value: RotationArg) -> Self {
+impl From<OrientationArg> for DisplayOrientation {
+    fn from(value: OrientationArg) -> Self {
         match value {
-            RotationArg::Auto => Rotation::Auto,
-            RotationArg::None => Rotation::None,
-            RotationArg::Cw => Rotation::Cw,
-            RotationArg::Ccw => Rotation::Ccw,
+            OrientationArg::Auto => DisplayOrientation::Auto,
+            OrientationArg::Portrait => DisplayOrientation::Portrait,
+            OrientationArg::Landscape => DisplayOrientation::Landscape,
         }
     }
 }
@@ -98,15 +96,15 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = ScaleFilter::Nearest)]
     filter: ScaleFilter,
 
-    /// Rotate the guest framebuffer before presentation (auto detects
-    /// landscape games; explicit values override detection).
-    #[arg(long, value_enum, default_value_t = RotationArg::Auto)]
-    rotate: RotationArg,
+    /// Present the game in landscape or portrait (auto detects landscape
+    /// games; explicit values override detection).
+    #[arg(long, value_enum, default_value_t = OrientationArg::Auto)]
+    orientation: OrientationArg,
 
-    /// Load extra display-rotation entries from a CSV file
-    /// (`crc32,length,rotation` per line) before starting.
+    /// Load extra display-orientation entries from a CSV file
+    /// (`crc32,length,orientation` per line) before starting.
     #[arg(long, value_name = "FILE")]
-    rotation_profile: Option<PathBuf>,
+    orientation_profile: Option<PathBuf>,
 
     /// Remap a guest key in GUEST_KEY:KEY format.
     #[arg(long = "remap", value_name = "GUEST_KEY:KEY")]
@@ -184,11 +182,11 @@ fn main() -> Result<()> {
     let archive = CbeArchive::load(&cli.file)
         .with_context(|| format!("failed to load CBE file: {}", cli.file.display()))?;
     info!("{}", archive.summary());
-    if let Some(path) = &cli.rotation_profile {
-        let count = load_rotation_overrides(path)
-            .with_context(|| format!("failed to load rotation profile: {}", path.display()))?;
+    if let Some(path) = &cli.orientation_profile {
+        let count = load_orientation_overrides(path)
+            .with_context(|| format!("failed to load orientation profile: {}", path.display()))?;
         info!(
-            "Loaded {count} display-rotation entries from {}",
+            "Loaded {count} display-orientation entries from {}",
             path.display()
         );
     }
@@ -215,11 +213,11 @@ fn main() -> Result<()> {
     }
     machine.set_volume(cli.volume);
     machine.set_auto_bgm(cli.auto_bgm);
-    machine.set_rotation(cli.rotate.into());
+    machine.set_orientation(cli.orientation.into());
     // Restored machines skip NicaiMachine::new, which is where the automatic
-    // rotation profile is normally resolved; re-resolve it so landscape games
-    // loaded from a save state stay rotated.
-    machine.resolve_auto_rotation(&archive);
+    // orientation profile is normally resolved; re-resolve it so landscape
+    // games loaded from a save state stay rotated.
+    machine.resolve_auto_orientation(&archive);
 
     if let Some(path) = &cli.screenshot {
         capture_screenshot(
@@ -308,7 +306,7 @@ fn main() -> Result<()> {
             machine
                 .reset(&archive, cli.instruction_limit)
                 .context("failed to reset CBE application")?;
-            machine.set_rotation(cli.rotate.into());
+            machine.set_orientation(cli.orientation.into());
             info!("Game reset");
         }
         machine
@@ -545,18 +543,21 @@ mod tests {
     }
 
     #[test]
-    fn rotation_profile_defaults_to_none_and_parses_a_path() {
+    fn orientation_profile_defaults_to_none_and_parses_a_path() {
         let default = Cli::try_parse_from(["nicaiemu", "game.CBE"]).unwrap();
-        assert_eq!(default.rotation_profile, None);
+        assert_eq!(default.orientation_profile, None);
 
         let cli = Cli::try_parse_from([
             "nicaiemu",
             "game.CBE",
-            "--rotation-profile",
-            "rotations.csv",
+            "--orientation-profile",
+            "orientations.csv",
         ])
         .unwrap();
-        assert_eq!(cli.rotation_profile, Some(PathBuf::from("rotations.csv")));
+        assert_eq!(
+            cli.orientation_profile,
+            Some(PathBuf::from("orientations.csv"))
+        );
     }
 
     #[test]

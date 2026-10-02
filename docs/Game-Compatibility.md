@@ -9,7 +9,7 @@ work even on original hardware.
 
 Games packaged for the original phone's rotated landscape display present the
 240×400 framebuffer rotated 90 degrees counterclockwise as 400×240. The
-rotation is resolved automatically from a content-identity profile keyed by
+orientation is resolved automatically from a content-identity profile keyed by
 archive CRC-32 and size (not by file name), so the screenshots below match how
 the titles appear on the original hardware.
 
