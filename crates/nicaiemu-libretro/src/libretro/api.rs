@@ -399,7 +399,7 @@ fn load_user_orientation_profile() {
     }
 }
 
-fn input_descriptors() -> [retro_input_descriptor; 10] {
+fn input_descriptors() -> [retro_input_descriptor; 15] {
     [
         retro_input_descriptor {
             port: 0,
@@ -463,6 +463,41 @@ fn input_descriptors() -> [retro_input_descriptor; 10] {
             index: 0,
             id: RETRO_DEVICE_ID_JOYPAD_START,
             description: c"Confirm".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_SELECT,
+            description: c"Star (*) Key".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_L,
+            description: c"Left Soft Key".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_R,
+            description: c"Right Soft Key".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_L2,
+            description: c"Star (*) Key".as_ptr(),
+        },
+        retro_input_descriptor {
+            port: 0,
+            device: RETRO_DEVICE_JOYPAD,
+            index: 0,
+            id: RETRO_DEVICE_ID_JOYPAD_R2,
+            description: c"Hash (#) Key".as_ptr(),
         },
         retro_input_descriptor {
             port: 0,
@@ -571,31 +606,68 @@ fn notify_display_geometry(width: u32, height: u32) {
     }
 }
 
+/// Analog stick deflection (of the 0x7fff full range) required before a
+/// direction counts, matching the standalone gamepad mapper's 0.5 deadzone.
+const ANALOG_DEADZONE: i16 = 0x4000;
+
+/// Map RetroPad buttons and analog sticks onto phone keypad ABI key states.
+///
+/// Returns one entry per guest key so every key is written each poll and
+/// releases propagate. Pure so the shared RetroPad layout can be unit-tested
+/// without a frontend; kept in lockstep with the standalone `GamepadMapper`.
+fn retro_pad_key_states(
+    is_pressed: impl Fn(u32) -> bool,
+    analog: impl Fn(u32, u32) -> i16,
+) -> [(u8, bool); 9] {
+    // libretro analog axes report +Y downwards; the guest D-pad does not.
+    let stick_up = analog(RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y)
+        < -ANALOG_DEADZONE
+        || analog(RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y) < -ANALOG_DEADZONE;
+    let stick_down = analog(RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y)
+        > ANALOG_DEADZONE
+        || analog(RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y) > ANALOG_DEADZONE;
+    let stick_left = analog(RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X)
+        < -ANALOG_DEADZONE
+        || analog(RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X) < -ANALOG_DEADZONE;
+    let stick_right = analog(RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X)
+        > ANALOG_DEADZONE
+        || analog(RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X) > ANALOG_DEADZONE;
+
+    let up = is_pressed(RETRO_DEVICE_ID_JOYPAD_UP) || stick_up;
+    let down = is_pressed(RETRO_DEVICE_ID_JOYPAD_DOWN) || stick_down;
+    let left = is_pressed(RETRO_DEVICE_ID_JOYPAD_LEFT) || stick_left;
+    let right = is_pressed(RETRO_DEVICE_ID_JOYPAD_RIGHT) || stick_right;
+    // Confirm on any of the three natural face/start buttons.
+    let confirm = is_pressed(RETRO_DEVICE_ID_JOYPAD_A)
+        || is_pressed(RETRO_DEVICE_ID_JOYPAD_B)
+        || is_pressed(RETRO_DEVICE_ID_JOYPAD_START);
+    // X plus L duplicate the left soft key; Y plus R duplicate the right.
+    let soft_left = is_pressed(RETRO_DEVICE_ID_JOYPAD_X) || is_pressed(RETRO_DEVICE_ID_JOYPAD_L);
+    let soft_right = is_pressed(RETRO_DEVICE_ID_JOYPAD_Y) || is_pressed(RETRO_DEVICE_ID_JOYPAD_R);
+    // Select plus L2 fire the `*` key (guest 19); R2 fires the `#` key (20).
+    let star = is_pressed(RETRO_DEVICE_ID_JOYPAD_SELECT) || is_pressed(RETRO_DEVICE_ID_JOYPAD_L2);
+    let hash = is_pressed(RETRO_DEVICE_ID_JOYPAD_R2);
+
+    [
+        (12, soft_left),
+        (13, soft_right),
+        (14, confirm),
+        (15, left),
+        (16, right),
+        (17, up),
+        (18, down),
+        (19, star),
+        (20, hash),
+    ]
+}
+
 /// Map RetroPad buttons to phone keypad ABI key codes.
 fn update_phone_keys(emulator: &mut Emulator) {
     let joypad = |id: u32| callbacks::input_state(0, RETRO_DEVICE_JOYPAD, 0, id) != 0;
-    emulator
-        .machine
-        .set_key(17, joypad(RETRO_DEVICE_ID_JOYPAD_UP));
-    emulator
-        .machine
-        .set_key(18, joypad(RETRO_DEVICE_ID_JOYPAD_DOWN));
-    emulator
-        .machine
-        .set_key(15, joypad(RETRO_DEVICE_ID_JOYPAD_LEFT));
-    emulator
-        .machine
-        .set_key(16, joypad(RETRO_DEVICE_ID_JOYPAD_RIGHT));
-    let confirm = joypad(RETRO_DEVICE_ID_JOYPAD_A)
-        || joypad(RETRO_DEVICE_ID_JOYPAD_B)
-        || joypad(RETRO_DEVICE_ID_JOYPAD_START);
-    emulator.machine.set_key(14, confirm);
-    emulator
-        .machine
-        .set_key(12, joypad(RETRO_DEVICE_ID_JOYPAD_X));
-    emulator
-        .machine
-        .set_key(13, joypad(RETRO_DEVICE_ID_JOYPAD_Y));
+    let analog = |index: u32, id: u32| callbacks::input_state(0, RETRO_DEVICE_ANALOG, index, id);
+    for (key, pressed) in retro_pad_key_states(joypad, analog) {
+        emulator.machine.set_key(key, pressed);
+    }
 }
 
 /// Map RetroArch pointer coordinates (-0x7fff..0x7fff) to the displayed screen.
@@ -886,7 +958,7 @@ mod tests {
     #[test]
     fn input_descriptors_cover_retropad_mapping() {
         let descriptors = input_descriptors();
-        let ids: Vec<u32> = descriptors[..9]
+        let ids: Vec<u32> = descriptors[..14]
             .iter()
             .map(|descriptor| descriptor.id)
             .collect();
@@ -902,10 +974,131 @@ mod tests {
                 RETRO_DEVICE_ID_JOYPAD_X,
                 RETRO_DEVICE_ID_JOYPAD_Y,
                 RETRO_DEVICE_ID_JOYPAD_START,
+                RETRO_DEVICE_ID_JOYPAD_SELECT,
+                RETRO_DEVICE_ID_JOYPAD_L,
+                RETRO_DEVICE_ID_JOYPAD_R,
+                RETRO_DEVICE_ID_JOYPAD_L2,
+                RETRO_DEVICE_ID_JOYPAD_R2,
             ]
         );
-        assert_eq!(descriptors[9].device, RETRO_DEVICE_NONE);
-        assert!(descriptors[9].description.is_null());
+        assert_eq!(descriptors[14].device, RETRO_DEVICE_NONE);
+        assert!(descriptors[14].description.is_null());
+    }
+
+    /// The shared RetroPad layout must expose every non-digit guest key:
+    /// soft keys 12/13, confirm 14, D-pad 15-18, and the star/hash keys 19/20.
+    #[test]
+    fn retro_pad_mapping_reaches_every_non_digit_guest_key() {
+        let none = |_id: u32| false;
+        let zero = |_index: u32, _id: u32| 0;
+        let mut reached = std::collections::HashSet::new();
+        for button in [
+            RETRO_DEVICE_ID_JOYPAD_UP,
+            RETRO_DEVICE_ID_JOYPAD_DOWN,
+            RETRO_DEVICE_ID_JOYPAD_LEFT,
+            RETRO_DEVICE_ID_JOYPAD_RIGHT,
+            RETRO_DEVICE_ID_JOYPAD_A,
+            RETRO_DEVICE_ID_JOYPAD_B,
+            RETRO_DEVICE_ID_JOYPAD_X,
+            RETRO_DEVICE_ID_JOYPAD_Y,
+            RETRO_DEVICE_ID_JOYPAD_START,
+            RETRO_DEVICE_ID_JOYPAD_SELECT,
+            RETRO_DEVICE_ID_JOYPAD_L,
+            RETRO_DEVICE_ID_JOYPAD_R,
+            RETRO_DEVICE_ID_JOYPAD_L2,
+            RETRO_DEVICE_ID_JOYPAD_R2,
+        ] {
+            let states = retro_pad_key_states(|id| id == button, zero);
+            for (key, pressed) in states {
+                if pressed {
+                    reached.insert(key);
+                }
+            }
+        }
+        assert_eq!(
+            reached,
+            [12u8, 13, 14, 15, 16, 17, 18, 19, 20].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn retro_pad_mapping_matches_the_shared_layout() {
+        let press = |id: u32| id == RETRO_DEVICE_ID_JOYPAD_SELECT;
+        let states = retro_pad_key_states(press, |_index, _id| 0);
+        // Select fires the star key (19) and nothing else.
+        assert_eq!(
+            states
+                .iter()
+                .copied()
+                .filter(|(_, pressed)| *pressed)
+                .collect::<Vec<_>>(),
+            [(19, true)]
+        );
+
+        let press = |id: u32| id == RETRO_DEVICE_ID_JOYPAD_R2;
+        let states = retro_pad_key_states(press, |_index, _id| 0);
+        assert_eq!(
+            states
+                .iter()
+                .copied()
+                .filter(|(_, pressed)| *pressed)
+                .collect::<Vec<_>>(),
+            [(20, true)]
+        );
+
+        // Shoulders duplicate the soft keys, matching the standalone mapper.
+        let press = |id: u32| id == RETRO_DEVICE_ID_JOYPAD_L;
+        let states = retro_pad_key_states(press, |_index, _id| 0);
+        assert_eq!(
+            states
+                .iter()
+                .copied()
+                .filter(|(_, pressed)| *pressed)
+                .collect::<Vec<_>>(),
+            [(12, true)]
+        );
+    }
+
+    #[test]
+    fn retro_pad_analog_sticks_drive_directions() {
+        let none = |_id: u32| false;
+        // libretro +Y is downwards: full up deflection reaches only guest 17.
+        let states = retro_pad_key_states(none, |index, id| {
+            if index == RETRO_DEVICE_INDEX_ANALOG_LEFT && id == RETRO_DEVICE_ID_ANALOG_Y {
+                -i16::MAX
+            } else {
+                0
+            }
+        });
+        assert_eq!(
+            states
+                .iter()
+                .copied()
+                .filter(|(_, pressed)| *pressed)
+                .collect::<Vec<_>>(),
+            [(17, true)]
+        );
+
+        // Full +X deflection reaches only guest 16 (right).
+        let states = retro_pad_key_states(none, |index, id| {
+            if index == RETRO_DEVICE_INDEX_ANALOG_RIGHT && id == RETRO_DEVICE_ID_ANALOG_X {
+                i16::MAX
+            } else {
+                0
+            }
+        });
+        assert_eq!(
+            states
+                .iter()
+                .copied()
+                .filter(|(_, pressed)| *pressed)
+                .collect::<Vec<_>>(),
+            [(16, true)]
+        );
+
+        // Values inside the deadzone report nothing.
+        let states = retro_pad_key_states(none, |_index, _id| ANALOG_DEADZONE - 1);
+        assert!(states.iter().all(|(_, pressed)| !pressed));
     }
 
     #[test]

@@ -103,18 +103,27 @@ file; user entries win over built-in ones and are loaded once per run.
 
 ## RetroPad Button Mapping
 
-| RetroPad Button | Action |
-|---|---|
-| D-Pad Up | Up |
-| D-Pad Down | Down |
-| D-Pad Left | Left |
-| D-Pad Right | Right |
-| A (SNES East) | Confirm |
-| B (SNES South) | Confirm |
-| Start | Confirm |
-| Select | — |
-| X (SNES North) | Left soft key |
-| Y (SNES West) | Right soft key |
+The layout matches the standalone physical gamepad mapping one-to-one. The
+guest keys are the phone keypad ABI: directions, OK (confirm), the two soft
+keys, and the star (`*`) / hash (`#`) keys.
+
+| RetroPad Button | Guest key | Action |
+|---|---|---|
+| D-Pad Up / Left / Right / Down | Up / Left / Right / Down | Direction pad |
+| Left or right stick | Up / Left / Right / Down | Same as the D-pad |
+| A (SNES East) | OK | Confirm |
+| B (SNES South) | OK | Confirm |
+| Start | OK | Confirm |
+| X (SNES North) | Q | Left soft key |
+| L (left shoulder) | Q | Left soft key |
+| Y (SNES West) | E | Right soft key |
+| R (right shoulder) | E | Right soft key |
+| Select | N | Star (`*`) key |
+| L2 (left trigger) | N | Star (`*`) key |
+| R2 (right trigger) | M | Hash (`#`) key |
+
+The numeric keypad (guest keys 0–9) is not mapped on RetroPad; those games
+are keyboard-oriented and are best played in the standalone frontend.
 
 ## Current Limitations
 
