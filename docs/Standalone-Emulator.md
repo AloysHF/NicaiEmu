@@ -165,9 +165,14 @@ is centered with black bars while preserving the aspect ratio, and the
 - `bicubic` applies separable Catmull-Rom interpolation;
 - `xbrz` smooths pixel-art diagonals while retaining sharp edges.
 
-`--show-gamepad` draws a virtual phone keypad over the game frame, highlighting
-the currently held keys. The overlay is rendered at native resolution before
-scaling, so it stays crisp at any window size.
+`--show-gamepad` draws a translucent control dock along the bottom edge of the
+frame in a standard gamepad layout: the top row is the numeric keypad (0–9);
+the bottom row has the large D-pad on the left, OK in the middle like a Start
+button, and Q/E/`*`/`#` as a face-button diamond on the right. Held keys fill
+with a per-group accent (cyan D-pad, green OK, orange face keys, yellow
+digits) while the game view above stays visible through the semi-transparent
+panel. The overlay is rendered at native resolution before scaling, so it
+stays crisp at any window size.
 
 ## Screen Orientation
 

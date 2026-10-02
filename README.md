@@ -45,7 +45,8 @@ by supported games.
 - **Physical gamepad input** — first connected pad drives guest keys via gilrs,
   RetroPad-compatible mapping, keyboard and pad combine as a logical OR
   (`--no-gamepad` disables the pad)
-- **Virtual gamepad overlay** — visual phone keypad over the game frame
+- **Virtual gamepad overlay** — translucent gamepad-layout dock (numeric row,
+  large D-pad, centered OK, face-key diamond) highlighting held keys
   (`--show-gamepad`)
 - **Fullscreen and volume** — borderless fullscreen and 0–100 playback volume
   (`--fullscreen`, `--volume`)
