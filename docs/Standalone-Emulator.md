@@ -1,8 +1,8 @@
 # Standalone Emulator
 
 This guide covers installing and running the standalone `nicaiemu` binary,
-loading games, keyboard and physical gamepad controls, headless mode, and all
-command-line options.
+loading games, keyboard/mouse and physical gamepad controls, the debug key
+overlay, headless mode, and all command-line options.
 
 ## Supported Platforms
 
@@ -42,7 +42,7 @@ nicaiemu [OPTIONS] <GAME_PATH>
 | `--orientation <ORIENTATION>` | `auto` \| `landscape` \| `portrait` | `auto` | Present the game in landscape or portrait. `auto` uses the built-in landscape-game profile; explicit values override it. |
 | `--orientation-profile <FILE>` | path | — | Load extra display-orientation entries from a CSV file before starting (see [Screen orientation](#screen-orientation)). |
 | `--remap <GUEST_KEY:KEY>` | `GUEST_KEY:KEY` | — | Remap a guest key to a host key. Repeatable. |
-| `--show-gamepad` | flag | off | Draw a virtual gamepad overlay over the game frame. |
+| `--show-gamepad` | flag | off | Draw the debug key-state overlay over the game frame (see [Virtual Gamepad Overlay](#virtual-gamepad-overlay)). |
 | `--no-gamepad` | flag | off | Disable physical gamepad input (keyboard remains available). |
 | `--fullscreen` | flag | off | Run in borderless fullscreen. |
 | `--window-backend <BACKEND>` | `auto` \| `x11` \| `wayland` | `auto` | Window backend on Linux/BSD (see [Window backend](#window-backend)). Ignored on Windows and macOS. |
@@ -76,6 +76,11 @@ nicaiemu path/to/game.CBE --list
 ```
 
 ## Default Key Mappings
+
+The keyboard and mouse are the primary PC input and work the same way as in
+the RetroArch core for touch: mouse clicks act as touch input. The keyboard
+covers the entire phone keypad, digits included — the only input path that
+can press the numeric digits on any frontend.
 
 | Phone Input | Keyboard |
 | --- | --- |
@@ -139,6 +144,21 @@ nicaiemu path/to/game.CBE --no-gamepad
 nicaiemu path/to/game.CBE --show-gamepad
 ```
 
+## Virtual Gamepad Overlay
+
+`--show-gamepad` draws a translucent control dock along the bottom edge of the
+frame in a standard gamepad layout: the top row is the numeric keypad (0–9);
+the bottom row has the large D-pad on the left, OK in the middle like a Start
+button, and Q/E/`*`/`#` as a face-button diamond on the right. Held keys fill
+with a per-group accent (cyan D-pad, green OK, orange face keys, yellow
+digits) while the game view above stays visible through the semi-transparent
+panel. The overlay is rendered at native resolution before scaling, so it
+stays crisp at any window size.
+
+The overlay is **read-only**: it visualizes the merged keyboard + gamepad
+key mask for debugging and does not accept clicks or touches. Use it to
+verify key mappings and to watch what the guest receives while playing.
+
 ## Headless Mode
 
 Run the emulator without a window — useful for automated testing and batch
@@ -164,15 +184,6 @@ is centered with black bars while preserving the aspect ratio, and the
 - `bilinear` smooths pixels with 2×2 interpolation;
 - `bicubic` applies separable Catmull-Rom interpolation;
 - `xbrz` smooths pixel-art diagonals while retaining sharp edges.
-
-`--show-gamepad` draws a translucent control dock along the bottom edge of the
-frame in a standard gamepad layout: the top row is the numeric keypad (0–9);
-the bottom row has the large D-pad on the left, OK in the middle like a Start
-button, and Q/E/`*`/`#` as a face-button diamond on the right. Held keys fill
-with a per-group accent (cyan D-pad, green OK, orange face keys, yellow
-digits) while the game view above stays visible through the semi-transparent
-panel. The overlay is rendered at native resolution before scaling, so it
-stays crisp at any window size.
 
 ## Screen Orientation
 

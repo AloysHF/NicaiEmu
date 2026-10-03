@@ -46,6 +46,8 @@ frontend can display the core metadata and supported features.
   viewport without large letterbox bars; pointer taps are mapped back to
   guest coordinates
 - RetroPad input handling
+- Keyboard input through `RETRO_DEVICE_KEYBOARD`: the full phone keypad
+  including digits (enable RetroArch's Game Focus so keys reach the core)
 - `.CBE` content loading
 - Reset support that rebuilds the emulator state
 - Input descriptors for frontend button labeling
@@ -101,6 +103,44 @@ per line (`crc32` hex, `length` decimal bytes, `orientation` one of
 `landscape`, `portrait`), matching the standalone `--orientation-profile`
 file; user entries win over built-in ones and are loaded once per run.
 
+## Touch Input
+
+These games were designed for touchscreens, so touch is the natural way to
+play them on phones and tablets. Taps and drags reach the guest as phone
+touch events through the RetroArch pointer device, covering both touchscreen
+and mouse input. Landscape titles stay correct automatically: pointer
+coordinates are mapped through the presented display back to guest
+coordinates. Use the **Touch/Pointer Input** core option to turn this off
+when the frontend overlay needs the pointer instead.
+
+Touch works the same way in the standalone frontend (mouse clicks act as
+touch input).
+
+## Keyboard Input
+
+The core polls `RETRO_DEVICE_KEYBOARD` directly, so the full phone keypad —
+digits included — is reachable from a keyboard with the same layout the
+standalone frontend uses:
+
+| Phone input | Keyboard |
+|---|---|
+| Numeric keypad | `0`–`9` |
+| Direction pad | Arrow keys or WASD |
+| Confirm | Enter or F |
+| Left soft key | Q |
+| Right soft key | E |
+| Star (`*`) key | N |
+| Hash (`#`) key | M |
+
+**Enable Game Focus first** (default: Scroll Lock). RetroArch binds the
+keyboard to its own hotkeys and RetroPad by default, which captures keys
+before the core sees them; Game Focus suspends those bindings so
+keystrokes reach the core. Alternatively, unbind the conflicting
+keyboard-to-RetroPad and hotkey bindings.
+
+Keyboard and RetroPad combine as a logical OR per key, so either device can
+hold a key at any time.
+
 ## RetroPad Button Mapping
 
 The layout matches the standalone physical gamepad mapping one-to-one. The
@@ -122,8 +162,9 @@ keys, and the star (`*`) / hash (`#`) keys.
 | L2 (left trigger) | N | Star (`*`) key |
 | R2 (right trigger) | M | Hash (`#`) key |
 
-The numeric keypad (guest keys 0–9) is not mapped on RetroPad; those games
-are keyboard-oriented and are best played in the standalone frontend.
+The numeric keypad (guest keys 0–9) is not mapped on RetroPad — gamepad
+players cannot press digit keys. Play digit-driven games from the keyboard
+instead (see [Keyboard Input](#keyboard-input)).
 
 ## Current Limitations
 

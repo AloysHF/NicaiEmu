@@ -1,4 +1,8 @@
 // libretro constants used by the NicaiEmu core.
+//
+// Keyboard keysym names mirror libretro.h (RETROK_a, RETROK_q, ...) so they
+// stay greppable against the C header, hence the module-level lint allow.
+#![allow(non_upper_case_globals)]
 
 /// libretro API version implemented by this core.
 pub const RETRO_API_VERSION: u32 = 1;
@@ -6,6 +10,7 @@ pub const RETRO_API_VERSION: u32 = 1;
 /// Device types.
 pub const RETRO_DEVICE_NONE: u32 = 0;
 pub const RETRO_DEVICE_JOYPAD: u32 = 1;
+pub const RETRO_DEVICE_KEYBOARD: u32 = 3;
 pub const RETRO_DEVICE_ANALOG: u32 = 5;
 pub const RETRO_DEVICE_POINTER: u32 = 6;
 
@@ -24,6 +29,24 @@ pub const RETRO_DEVICE_ID_JOYPAD_L: u32 = 10;
 pub const RETRO_DEVICE_ID_JOYPAD_R: u32 = 11;
 pub const RETRO_DEVICE_ID_JOYPAD_L2: u32 = 12;
 pub const RETRO_DEVICE_ID_JOYPAD_R2: u32 = 13;
+
+/// Keyboard keysyms used by RETRO_DEVICE_KEYBOARD (SDL 1.2-compatible).
+pub const RETROK_0: u32 = 48;
+pub const RETROK_9: u32 = 57;
+pub const RETROK_RETURN: u32 = 13;
+pub const RETROK_a: u32 = 97;
+pub const RETROK_d: u32 = 100;
+pub const RETROK_e: u32 = 101;
+pub const RETROK_f: u32 = 102;
+pub const RETROK_m: u32 = 109;
+pub const RETROK_n: u32 = 110;
+pub const RETROK_q: u32 = 113;
+pub const RETROK_s: u32 = 115;
+pub const RETROK_w: u32 = 119;
+pub const RETROK_UP: u32 = 273;
+pub const RETROK_DOWN: u32 = 275;
+pub const RETROK_LEFT: u32 = 276;
+pub const RETROK_RIGHT: u32 = 274;
 
 /// Analog stick identifiers (index selects the stick, id selects the axis).
 pub const RETRO_DEVICE_INDEX_ANALOG_LEFT: u32 = 0;
