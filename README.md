@@ -176,24 +176,49 @@ crates/
 
 See [Architecture](docs/architecture.md) for implementation details.
 
-## Key Mappings (Standalone)
+## Controls
 
-| Phone Input | Keyboard | Gamepad (RetroPad layout) |
+The games expect a phone keypad and a touchscreen. NicaiEmu offers three
+input modes, all supported by both the standalone app and the RetroArch
+core:
+
+| Input mode | Standalone | RetroArch core |
 | --- | --- | --- |
-| Direction pad | Arrow keys or WASD | D-pad or left/right stick |
-| Confirm | Enter or F | A / B / Start |
-| Left soft key | Q | X or L1 |
-| Right soft key | E | Y or R1 |
-| Numeric keypad | 0–9 | — (keyboard only) |
-| Star (`*`) key | N | Select or L2 |
-| Hash (`#`) key | M | R2 |
-| Exit | Escape | — |
+| Touch | ✅ mouse clicks act as touch (touchscreen taps arrive as clicks) | ✅ touchscreen and mouse via the pointer device |
+| Keyboard + mouse | ✅ full phone keypad including digits | ✅ full phone keypad including digits (enable Game Focus, Scroll Lock) |
+| Gamepad | ✅ | ✅ identical RetroPad mapping |
 
-The libretro core uses the same RetroPad layout, so the same pad drives the
-same phone keys in both frontends. Direction keys remain visible to the guest
-while physically held. Guest logic runs at the platform's 10 Hz screen-update
-rate, so continuous-motion games walk smoothly without flooding tile-based
-games with 30 updates per second.
+What playing feels like:
+
+- **Touch** — the natural fit: these titles are designed for touchscreens,
+  so menus and in-game controls just work wherever you tap.
+- **Keyboard + mouse** — mouse clicks are touch input on both frontends,
+  and the keyboard presses the full phone keypad in both. In RetroArch,
+  turn on **Game Focus** (Scroll Lock) first so keys reach the core instead
+  of RetroArch's hotkeys.
+- **Gamepad** — one RetroPad-compatible mapping shared by both frontends;
+  pads cannot press the numeric keypad.
+
+Notes and limits:
+
+- A few titles are not playable for unrelated reasons (for example the
+  network-dependent ones). See [Game Compatibility](docs/Game-Compatibility.md).
+- The standalone `--show-gamepad` overlay is a read-only debug view of the
+  merged key state, not a playable virtual keyboard.
+
+Detailed references by input mode:
+
+- **Touch** —
+  [Standalone: mouse as touch](docs/Standalone-Emulator.md#default-key-mappings) ·
+  [RetroArch: Touch Input](docs/RetroArch-Core.md#touch-input)
+- **Keyboard + mouse** —
+  [Standalone: Default Key Mappings](docs/Standalone-Emulator.md#default-key-mappings) ·
+  [RetroArch: Keyboard Input](docs/RetroArch-Core.md#keyboard-input)
+- **Gamepad** —
+  [Standalone: Physical Gamepads](docs/Standalone-Emulator.md#physical-gamepads) ·
+  [RetroArch: RetroPad Button Mapping](docs/RetroArch-Core.md#retropad-button-mapping)
+- **Debug overlay** —
+  [Standalone: Virtual Gamepad Overlay](docs/Standalone-Emulator.md#virtual-gamepad-overlay)
 
 ## Game Compatibility
 

@@ -661,12 +661,57 @@ fn retro_pad_key_states(
     ]
 }
 
-/// Map RetroPad buttons to phone keypad ABI key codes.
+/// Map polled keyboard keys onto phone keypad ABI key states.
+///
+/// The layout mirrors the standalone `DEFAULT_KEY_MAP` one-to-one so the
+/// same physical keys drive the same guest keys in both frontends. Every
+/// guest key is listed so releases propagate on each poll.
+fn keyboard_key_states(is_pressed: impl Fn(u32) -> bool) -> [(u8, bool); 21] {
+    let digit = |index: u32| is_pressed(RETROK_0 + index);
+    let up = is_pressed(RETROK_UP) || is_pressed(RETROK_w);
+    let down = is_pressed(RETROK_DOWN) || is_pressed(RETROK_s);
+    let left = is_pressed(RETROK_LEFT) || is_pressed(RETROK_a);
+    let right = is_pressed(RETROK_RIGHT) || is_pressed(RETROK_d);
+    let confirm = is_pressed(RETROK_RETURN) || is_pressed(RETROK_f);
+    [
+        (0, digit(0)),
+        (1, digit(1)),
+        (2, digit(2)),
+        (3, digit(3)),
+        (4, digit(4)),
+        (5, digit(5)),
+        (6, digit(6)),
+        (7, digit(7)),
+        (8, digit(8)),
+        (9, digit(9)),
+        (12, is_pressed(RETROK_q)),
+        (13, is_pressed(RETROK_e)),
+        (14, confirm),
+        (15, left),
+        (16, right),
+        (17, up),
+        (18, down),
+        (19, is_pressed(RETROK_n)),
+        (20, is_pressed(RETROK_m)),
+        // Unused guest codes 10/11 stay released so the mask is complete.
+        (10, false),
+        (11, false),
+    ]
+}
+
+/// Map RetroPad buttons and the keyboard to phone keypad ABI key codes.
+///
+/// Keyboard and pad combine as a logical OR per key, matching the standalone
+/// frontend's keyboard-plus-gamepad behavior. Digits 0-9 are keyboard-only.
 fn update_phone_keys(emulator: &mut Emulator) {
     let joypad = |id: u32| callbacks::input_state(0, RETRO_DEVICE_JOYPAD, 0, id) != 0;
     let analog = |index: u32, id: u32| callbacks::input_state(0, RETRO_DEVICE_ANALOG, index, id);
-    for (key, pressed) in retro_pad_key_states(joypad, analog) {
-        emulator.machine.set_key(key, pressed);
+    let pad = retro_pad_key_states(joypad, analog);
+    let keyboard =
+        keyboard_key_states(|key| callbacks::input_state(0, RETRO_DEVICE_KEYBOARD, 0, key) != 0);
+    for (key, pressed) in keyboard {
+        let key_held = pad.iter().any(|(code, down)| *code == key && *down);
+        emulator.machine.set_key(key, pressed || key_held);
     }
 }
 
@@ -1098,6 +1143,112 @@ mod tests {
         // Values inside the deadzone report nothing.
         let states = retro_pad_key_states(none, |_index, _id| ANALOG_DEADZONE - 1);
         assert!(states.iter().all(|(_, pressed)| !pressed));
+    }
+
+    /// The keyboard layout must mirror the standalone DEFAULT_KEY_MAP and
+    /// reach every guest key, digits included.
+    #[test]
+    fn keyboard_mapping_reaches_every_guest_key() {
+        let none = |_key: u32| false;
+        let idle = keyboard_key_states(none);
+        assert!(idle.iter().all(|(_, pressed)| !pressed));
+
+        let mut reached = std::collections::HashSet::new();
+        let digits = (RETROK_0..=RETROK_9).collect::<Vec<u32>>();
+        for keysym in digits.iter().copied().chain([
+            RETROK_q,
+            RETROK_e,
+            RETROK_RETURN,
+            RETROK_f,
+            RETROK_UP,
+            RETROK_w,
+            RETROK_DOWN,
+            RETROK_s,
+            RETROK_LEFT,
+            RETROK_a,
+            RETROK_RIGHT,
+            RETROK_d,
+            RETROK_n,
+            RETROK_m,
+        ]) {
+            for (key, pressed) in keyboard_key_states(|key| key == keysym) {
+                if pressed {
+                    reached.insert(key);
+                }
+            }
+        }
+        assert_eq!(
+            reached,
+            (0u8..=20).filter(|key| *key != 10 && *key != 11).collect()
+        );
+    }
+
+    #[test]
+    fn keyboard_mapping_matches_the_standalone_layout() {
+        let press = |key: u32| key == RETROK_0 + 5;
+        let states = keyboard_key_states(press);
+        assert_eq!(
+            states
+                .iter()
+                .copied()
+                .filter(|(_, pressed)| *pressed)
+                .collect::<Vec<_>>(),
+            [(5, true)]
+        );
+
+        // Enter and F both confirm; WASD duplicate the arrow keys.
+        for keysym in [RETROK_RETURN, RETROK_f] {
+            let states = keyboard_key_states(|key| key == keysym);
+            assert_eq!(
+                states
+                    .iter()
+                    .copied()
+                    .filter(|(_, pressed)| *pressed)
+                    .collect::<Vec<_>>(),
+                [(14, true)]
+            );
+        }
+        for (keysym, guest) in [
+            (RETROK_w, 17u8),
+            (RETROK_s, 18),
+            (RETROK_a, 15),
+            (RETROK_d, 16),
+        ] {
+            let states = keyboard_key_states(|key| key == keysym);
+            assert_eq!(
+                states
+                    .iter()
+                    .copied()
+                    .filter(|(_, pressed)| *pressed)
+                    .collect::<Vec<_>>(),
+                [(guest, true)]
+            );
+        }
+    }
+
+    /// Keyboard and pad must combine as a logical OR per guest key, the same
+    /// merge the standalone frontend applies.
+    #[test]
+    fn keyboard_and_pad_combine_per_key() {
+        // Digit 5 held on the keyboard while pad holds OK: both keys down.
+        let keyboard = keyboard_key_states(|key| key == RETROK_0 + 5);
+        let pad = retro_pad_key_states(|id| id == RETRO_DEVICE_ID_JOYPAD_A, |_, _| 0);
+        let mut merged = std::collections::HashMap::new();
+        for (key, pressed) in keyboard.into_iter().chain(pad) {
+            *merged.entry(key).or_insert(false) |= pressed;
+        }
+        assert!(merged[&5]);
+        assert!(merged[&14]);
+        assert!(!merged[&12]);
+
+        // The same guest key pressed on both devices stays a single press.
+        let keyboard = keyboard_key_states(|key| key == RETROK_q);
+        let pad = retro_pad_key_states(|id| id == RETRO_DEVICE_ID_JOYPAD_X, |_, _| 0);
+        let mut merged = std::collections::HashMap::new();
+        for (key, pressed) in keyboard.into_iter().chain(pad) {
+            *merged.entry(key).or_insert(false) |= pressed;
+        }
+        assert!(merged[&12]);
     }
 
     #[test]
