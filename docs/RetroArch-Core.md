@@ -47,7 +47,7 @@ frontend can display the core metadata and supported features.
   guest coordinates
 - RetroPad input handling
 - Keyboard input through `RETRO_DEVICE_KEYBOARD`: the full phone keypad
-  including digits (enable RetroArch's Game Focus so keys reach the core)
+  (enable RetroArch's Game Focus so keys reach the core)
 - `.CBE` content loading
 - Reset support that rebuilds the emulator state
 - Input descriptors for frontend button labeling
@@ -118,9 +118,9 @@ touch input).
 
 ## Keyboard Input
 
-The core polls `RETRO_DEVICE_KEYBOARD` directly, so the full phone keypad —
-digits included — is reachable from a keyboard with the same layout the
-standalone frontend uses:
+The core polls `RETRO_DEVICE_KEYBOARD` directly, so the full phone keypad
+is reachable from a keyboard with the same layout the standalone frontend
+uses:
 
 | Phone input | Keyboard |
 |---|---|
@@ -158,13 +158,18 @@ keys, and the star (`*`) / hash (`#`) keys.
 | L (left shoulder) | Q | Left soft key |
 | Y (SNES West) | E | Right soft key |
 | R (right shoulder) | E | Right soft key |
-| Select | N | Star (`*`) key |
 | L2 (left trigger) | N | Star (`*`) key |
 | R2 (right trigger) | M | Hash (`#`) key |
+| Select + D-Pad Up / Down / Left / Right | 1 / 2 / 3 / 4 | Number layer (Select held) |
+| Select + A / B / X / Y | 5 / 6 / 7 / 8 | Number layer (Select held) |
+| Select + Start | 9 | Number layer (Select held) |
+| Select + L or R | 0 | Number layer (Select held) |
 
-The numeric keypad (guest keys 0–9) is not mapped on RetroPad — gamepad
-players cannot press digit keys. Play digit-driven games from the keyboard
-instead (see [Keyboard Input](#keyboard-input)).
+The last four rows are the **number layer**: hold **Select** as a modifier
+and the chords above type the numeric keypad (guest keys 0–9). Directions
+accept the D-pad and the sticks alike. While Select is held the other pad
+keys are suppressed; release it to restore the normal mapping. Select
+itself sends nothing, so the star key is L2 alone.
 
 ## Current Limitations
 

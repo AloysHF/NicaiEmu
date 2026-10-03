@@ -185,7 +185,7 @@ core:
 | Input mode | Standalone | RetroArch core |
 | --- | --- | --- |
 | Touch | ✅ mouse clicks act as touch (touchscreen taps arrive as clicks) | ✅ touchscreen and mouse via the pointer device |
-| Keyboard + mouse | ✅ full phone keypad including digits | ✅ full phone keypad including digits (enable Game Focus, Scroll Lock) |
+| Keyboard + mouse | ✅ full phone keypad | ✅ full phone keypad (enable Game Focus, Scroll Lock) |
 | Gamepad | ✅ | ✅ identical RetroPad mapping |
 
 What playing feels like:
@@ -196,8 +196,9 @@ What playing feels like:
   and the keyboard presses the full phone keypad in both. In RetroArch,
   turn on **Game Focus** (Scroll Lock) first so keys reach the core instead
   of RetroArch's hotkeys.
-- **Gamepad** — one RetroPad-compatible mapping shared by both frontends;
-  pads cannot press the numeric keypad.
+- **Gamepad** — one RetroPad-compatible mapping shared by both frontends.
+  Hold **Select** for a number layer: directions 1–4, face buttons 5–8,
+  Start 9, shoulders 0.
 
 Notes and limits:
 

@@ -79,8 +79,7 @@ nicaiemu path/to/game.CBE --list
 
 The keyboard and mouse are the primary PC input and work the same way as in
 the RetroArch core for touch: mouse clicks act as touch input. The keyboard
-covers the entire phone keypad, digits included — the only input path that
-can press the numeric digits on any frontend.
+covers the entire phone keypad.
 
 | Phone Input | Keyboard |
 | --- | --- |
@@ -120,7 +119,7 @@ first connected pad is used; keyboard and gamepad inputs combine as a logical
 OR. Use `--no-gamepad` to force keyboard-only input.
 
 Default mapping (RetroPad-compatible, matching the libretro core one-to-one;
-every non-digit guest key is reachable):
+every guest key is reachable):
 
 | Control | Phone input |
 | --- | --- |
@@ -132,9 +131,19 @@ every non-digit guest key is reachable):
 | Left bumper (L1) | Left soft key (Q) |
 | West (Xbox X / PS Square) | Right soft key (E) |
 | Right bumper (R1) | Right soft key (E) |
-| Select / Back | Star key (N, `*`) |
 | Left trigger (L2) | Star key (N, `*`) |
 | Right trigger (R2) | Hash key (M, `#`) |
+| Select + D-pad ↑ / ↓ / ← / → | Number layer: 1 / 2 / 3 / 4 |
+| Select + A / B / X / Y | Number layer: 5 / 6 / 7 / 8 |
+| Select + Start | Number layer: 9 |
+| Select + L1 or R1 | Number layer: 0 |
+
+The last four rows are the **number layer**: hold **Select** as a modifier
+and the chords above type digits. Directions accept the D-pad and the
+sticks alike, and face-button letters follow the RetroPad convention used
+everywhere else in this table. While Select is held the pad's other keys
+are suppressed; release it to restore the normal mapping. Select itself
+sends nothing (the star key is L2 alone).
 
 ```bash
 # Keyboard only
