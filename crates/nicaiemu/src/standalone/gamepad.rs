@@ -23,7 +23,9 @@ const GUEST_M: u8 = 20;
 /// key, West/Y plus the right shoulder are the right soft key, Select plus the
 /// left trigger fire the star key (guest 19), and the right trigger fires the
 /// hash key (guest 20). Left/right sticks also act as a digital D-pad once
-/// past [`STICK_DEADZONE`].
+/// past [`STICK_DEADZONE`]. Holding Select engages the [`NUMBER_LAYER`],
+/// turning the pad into a numeric keypad so digit-driven games are playable
+/// from a pad (Select no longer fires the star key itself).
 pub struct GamepadMapper {
     gilrs: Option<Gilrs>,
 }
@@ -88,10 +90,61 @@ impl GamepadMapper {
     }
 }
 
+/// Number-layer chords: holding Select turns the pad into a numeric keypad.
+/// The layout is grouped for easy recall — directions are 1-4 (up, down, left,
+/// right), face buttons are 5-8 (A, B, X, Y), Start is 9, and either shoulder
+/// is 0. Directions accept the D-pad and the sticks alike. Select itself sends
+/// nothing while the layer is engaged, and the pad's normal keys are
+/// suppressed until it is released.
+const NUMBER_LAYER: [(Button, u8); 10] = [
+    (Button::DPadUp, 1),
+    (Button::DPadDown, 2),
+    (Button::DPadLeft, 3),
+    (Button::DPadRight, 4),
+    (Button::East, 5),
+    (Button::South, 6),
+    (Button::North, 7),
+    (Button::West, 8),
+    (Button::Start, 9),
+    (Button::LeftTrigger, 0),
+];
+
 /// Map pad buttons/axes onto guest keys.
 ///
 /// Accepts closures so the mapping can be unit-tested without a physical pad.
 fn map_guest_keys(is_pressed: impl Fn(Button) -> bool, axis: impl Fn(Axis) -> f32) -> Vec<u8> {
+    // Number layer (Select held): the pad sends digits only. Either shoulder
+    // works for 0, so a single chord entry is not enough.
+    if is_pressed(Button::Select) {
+        let stick_up =
+            axis(Axis::LeftStickY) > STICK_DEADZONE || axis(Axis::RightStickY) > STICK_DEADZONE;
+        let stick_down =
+            axis(Axis::LeftStickY) < -STICK_DEADZONE || axis(Axis::RightStickY) < -STICK_DEADZONE;
+        let stick_left =
+            axis(Axis::LeftStickX) < -STICK_DEADZONE || axis(Axis::RightStickX) < -STICK_DEADZONE;
+        let stick_right =
+            axis(Axis::LeftStickX) > STICK_DEADZONE || axis(Axis::RightStickX) > STICK_DEADZONE;
+        let held = |button: Button, stick: bool| is_pressed(button) || stick;
+        let mut digits: Vec<u8> = NUMBER_LAYER
+            .iter()
+            .copied()
+            .filter(|(button, _)| match button {
+                Button::DPadUp => held(*button, stick_up),
+                Button::DPadDown => held(*button, stick_down),
+                Button::DPadLeft => held(*button, stick_left),
+                Button::DPadRight => held(*button, stick_right),
+                other => is_pressed(*other),
+            })
+            .map(|(_, digit)| digit)
+            .collect();
+        if is_pressed(Button::RightTrigger) {
+            digits.push(0);
+        }
+        digits.sort_unstable();
+        digits.dedup();
+        return digits;
+    }
+
     let mut keys = Vec::new();
 
     if is_pressed(Button::DPadUp)
@@ -131,8 +184,9 @@ fn map_guest_keys(is_pressed: impl Fn(Button) -> bool, axis: impl Fn(Axis) -> f3
     if is_pressed(Button::West) || is_pressed(Button::RightTrigger) {
         keys.push(GUEST_E);
     }
-    // Select plus the left trigger (L2) fire the star key (guest `*`).
-    if is_pressed(Button::Select) || is_pressed(Button::LeftTrigger2) {
+    // The left trigger (L2) fires the star key (guest `*`); Select is the
+    // number-layer modifier instead.
+    if is_pressed(Button::LeftTrigger2) {
         keys.push(GUEST_N);
     }
     // The right trigger (R2) fires the hash key (guest `#`).
@@ -210,10 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn select_and_left_trigger_map_to_star_key() {
-        let select = map_guest_keys(|b| b == Button::Select, zero_axis);
-        assert_eq!(select, [GUEST_N]);
-
+    fn left_trigger_maps_to_star_key() {
         let left_trigger = map_guest_keys(|b| b == Button::LeftTrigger2, zero_axis);
         assert_eq!(left_trigger, [GUEST_N]);
     }
@@ -222,6 +273,41 @@ mod tests {
     fn right_trigger_maps_to_hash_key() {
         let right_trigger = map_guest_keys(|b| b == Button::RightTrigger2, zero_axis);
         assert_eq!(right_trigger, [GUEST_M]);
+    }
+
+    /// Holding Select turns the pad into a grouped digit layer:
+    /// directions 1-4, face buttons 5-8, Start 9, shoulders 0.
+    #[test]
+    fn number_layer_maps_digits_in_grouped_order() {
+        let layer = |b: Button| b == Button::Select;
+        for (button, digit) in NUMBER_LAYER {
+            let keys = map_guest_keys(|b| layer(b) || b == button, zero_axis);
+            assert_eq!(keys, [digit], "{button:?} should map to {digit}");
+        }
+        // Either shoulder reaches 0.
+        let keys = map_guest_keys(|b| layer(b) || b == Button::RightTrigger, zero_axis);
+        assert_eq!(keys, [0]);
+    }
+
+    #[test]
+    fn number_layer_suppresses_the_normal_pad_keys() {
+        // Select held while pressing a normal chord (X = left soft key) must
+        // not leak the soft key through — the layer is exclusive.
+        let keys = map_guest_keys(|b| b == Button::Select || b == Button::North, zero_axis);
+        assert_eq!(keys, [7]);
+
+        // Select alone sends nothing at all (it is a pure modifier).
+        assert!(map_guest_keys(|b| b == Button::Select, zero_axis).is_empty());
+    }
+
+    #[test]
+    fn number_layer_direction_chords_accept_the_sticks() {
+        // Stick up past the deadzone while Select is held produces digit 1.
+        let keys = map_guest_keys(
+            |b| b == Button::Select,
+            |axis| if axis == Axis::LeftStickY { 0.8 } else { 0.0 },
+        );
+        assert_eq!(keys, [1]);
     }
 
     /// Every non-digit guest key must be reachable from the pad, keeping the

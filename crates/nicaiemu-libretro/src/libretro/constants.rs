@@ -29,6 +29,7 @@ pub const RETRO_DEVICE_ID_JOYPAD_L: u32 = 10;
 pub const RETRO_DEVICE_ID_JOYPAD_R: u32 = 11;
 pub const RETRO_DEVICE_ID_JOYPAD_L2: u32 = 12;
 pub const RETRO_DEVICE_ID_JOYPAD_R2: u32 = 13;
+pub const RETRO_DEVICE_ID_JOYPAD_L3: u32 = 14;
 
 /// Keyboard keysyms used by RETRO_DEVICE_KEYBOARD (SDL 1.2-compatible).
 pub const RETROK_0: u32 = 48;

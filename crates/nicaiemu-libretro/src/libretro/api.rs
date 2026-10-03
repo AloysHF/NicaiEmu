@@ -618,7 +618,7 @@ const ANALOG_DEADZONE: i16 = 0x4000;
 fn retro_pad_key_states(
     is_pressed: impl Fn(u32) -> bool,
     analog: impl Fn(u32, u32) -> i16,
-) -> [(u8, bool); 9] {
+) -> [(u8, bool); 19] {
     // libretro analog axes report +Y downwards; the guest D-pad does not.
     let stick_up = analog(RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y)
         < -ANALOG_DEADZONE
@@ -637,6 +637,40 @@ fn retro_pad_key_states(
     let down = is_pressed(RETRO_DEVICE_ID_JOYPAD_DOWN) || stick_down;
     let left = is_pressed(RETRO_DEVICE_ID_JOYPAD_LEFT) || stick_left;
     let right = is_pressed(RETRO_DEVICE_ID_JOYPAD_RIGHT) || stick_right;
+
+    // Number layer: holding Select turns the pad into a numeric keypad. The
+    // layout is grouped for easy recall — directions are 1-4 (up, down, left,
+    // right), face buttons are 5-8 (A, B, X, Y), Start is 9, and either
+    // shoulder is 0. Directions accept the D-pad and the sticks alike. Select
+    // itself sends nothing while the layer is engaged, and the pad's normal
+    // keys are suppressed until it is released.
+    if is_pressed(RETRO_DEVICE_ID_JOYPAD_SELECT) {
+        let shoulder_zero =
+            is_pressed(RETRO_DEVICE_ID_JOYPAD_L) || is_pressed(RETRO_DEVICE_ID_JOYPAD_R);
+        return [
+            (0, shoulder_zero),
+            (1, up),
+            (2, down),
+            (3, left),
+            (4, right),
+            (5, is_pressed(RETRO_DEVICE_ID_JOYPAD_A)),
+            (6, is_pressed(RETRO_DEVICE_ID_JOYPAD_B)),
+            (7, is_pressed(RETRO_DEVICE_ID_JOYPAD_X)),
+            (8, is_pressed(RETRO_DEVICE_ID_JOYPAD_Y)),
+            (9, is_pressed(RETRO_DEVICE_ID_JOYPAD_START)),
+            // The pad's non-digit keys stay released while the layer is on.
+            (12, false),
+            (13, false),
+            (14, false),
+            (15, false),
+            (16, false),
+            (17, false),
+            (18, false),
+            (19, false),
+            (20, false),
+        ];
+    }
+
     // Confirm on any of the three natural face/start buttons.
     let confirm = is_pressed(RETRO_DEVICE_ID_JOYPAD_A)
         || is_pressed(RETRO_DEVICE_ID_JOYPAD_B)
@@ -644,11 +678,22 @@ fn retro_pad_key_states(
     // X plus L duplicate the left soft key; Y plus R duplicate the right.
     let soft_left = is_pressed(RETRO_DEVICE_ID_JOYPAD_X) || is_pressed(RETRO_DEVICE_ID_JOYPAD_L);
     let soft_right = is_pressed(RETRO_DEVICE_ID_JOYPAD_Y) || is_pressed(RETRO_DEVICE_ID_JOYPAD_R);
-    // Select plus L2 fire the `*` key (guest 19); R2 fires the `#` key (20).
-    let star = is_pressed(RETRO_DEVICE_ID_JOYPAD_SELECT) || is_pressed(RETRO_DEVICE_ID_JOYPAD_L2);
+    // L2 fires the `*` key (guest 19) and R2 the `#` key (20); Select is the
+    // number-layer modifier instead of a star-key chord.
+    let star = is_pressed(RETRO_DEVICE_ID_JOYPAD_L2);
     let hash = is_pressed(RETRO_DEVICE_ID_JOYPAD_R2);
 
     [
+        (0, false),
+        (1, false),
+        (2, false),
+        (3, false),
+        (4, false),
+        (5, false),
+        (6, false),
+        (7, false),
+        (8, false),
+        (9, false),
         (12, soft_left),
         (13, soft_right),
         (14, confirm),
@@ -1067,9 +1112,10 @@ mod tests {
 
     #[test]
     fn retro_pad_mapping_matches_the_shared_layout() {
-        let press = |id: u32| id == RETRO_DEVICE_ID_JOYPAD_SELECT;
+        let press = |id: u32| id == RETRO_DEVICE_ID_JOYPAD_L2;
         let states = retro_pad_key_states(press, |_index, _id| 0);
-        // Select fires the star key (19) and nothing else.
+        // L2 fires the star key (19) and nothing else; Select is the
+        // number-layer modifier, not a star chord.
         assert_eq!(
             states
                 .iter()
@@ -1249,6 +1295,65 @@ mod tests {
             *merged.entry(key).or_insert(false) |= pressed;
         }
         assert!(merged[&12]);
+    }
+
+    /// Holding Select turns the pad into a grouped digit layer — directions
+    /// 1-4, face buttons 5-8, Start 9, shoulders 0 — so digits are reachable
+    /// from a pad in both frontends.
+    #[test]
+    fn number_layer_maps_digits_in_grouped_order() {
+        let layer = |id: u32| id == RETRO_DEVICE_ID_JOYPAD_SELECT;
+        let chords = [
+            (RETRO_DEVICE_ID_JOYPAD_UP, 1u8),
+            (RETRO_DEVICE_ID_JOYPAD_DOWN, 2),
+            (RETRO_DEVICE_ID_JOYPAD_LEFT, 3),
+            (RETRO_DEVICE_ID_JOYPAD_RIGHT, 4),
+            (RETRO_DEVICE_ID_JOYPAD_A, 5),
+            (RETRO_DEVICE_ID_JOYPAD_B, 6),
+            (RETRO_DEVICE_ID_JOYPAD_X, 7),
+            (RETRO_DEVICE_ID_JOYPAD_Y, 8),
+            (RETRO_DEVICE_ID_JOYPAD_START, 9),
+            (RETRO_DEVICE_ID_JOYPAD_L, 0),
+            (RETRO_DEVICE_ID_JOYPAD_R, 0),
+        ];
+        for (button, digit) in chords {
+            let states = retro_pad_key_states(|id| layer(id) || id == button, |_, _| 0);
+            let pressed: Vec<(u8, bool)> =
+                states.iter().copied().filter(|(_, down)| *down).collect();
+            assert_eq!(pressed, [(digit, true)], "button {button} -> digit {digit}");
+        }
+    }
+
+    #[test]
+    fn number_layer_suppresses_the_normal_pad_keys() {
+        // Select + X (the soft-key chord) must emit digit 7 only, never Q.
+        let states = retro_pad_key_states(
+            |id| id == RETRO_DEVICE_ID_JOYPAD_SELECT || id == RETRO_DEVICE_ID_JOYPAD_X,
+            |_, _| 0,
+        );
+        let pressed: Vec<(u8, bool)> = states.iter().copied().filter(|(_, down)| *down).collect();
+        assert_eq!(pressed, [(7, true)]);
+
+        // Select alone sends nothing (it is a pure modifier).
+        let states = retro_pad_key_states(|id| id == RETRO_DEVICE_ID_JOYPAD_SELECT, |_, _| 0);
+        assert!(states.iter().all(|(_, down)| !down));
+    }
+
+    #[test]
+    fn number_layer_direction_chords_accept_the_sticks() {
+        // Stick up past the deadzone while Select is held produces digit 1.
+        let states = retro_pad_key_states(
+            |id| id == RETRO_DEVICE_ID_JOYPAD_SELECT,
+            |index, id| {
+                if index == RETRO_DEVICE_INDEX_ANALOG_LEFT && id == RETRO_DEVICE_ID_ANALOG_Y {
+                    -i16::MAX
+                } else {
+                    0
+                }
+            },
+        );
+        let pressed: Vec<(u8, bool)> = states.iter().copied().filter(|(_, down)| *down).collect();
+        assert_eq!(pressed, [(1, true)]);
     }
 
     #[test]
