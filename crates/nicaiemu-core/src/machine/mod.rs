@@ -630,6 +630,15 @@ pub struct NicaiMachine {
     frame_count: u64,
     last_pc: u32,
     recent_pcs: VecDeque<u32>,
+    /// Recent non-fallthrough control transfers (from, to), newest last.
+    /// Diagnostic-only: excluded from save states, capped in run_until_return.
+    #[serde(skip, default)]
+    recent_branches: VecDeque<(u32, u32)>,
+    /// Full register file captured at the most recent branch, so a fault that
+    /// executes junk between the branch and the crash still reports the state
+    /// at dispatch time. Diagnostic-only, not serialized.
+    #[serde(skip, default)]
+    branch_regs: Option<[u32; 16]>,
     pending_screen: u32,
     active_screen: u32,
     screen_stack: Vec<u32>,
@@ -767,6 +776,8 @@ impl NicaiMachine {
             frame_count: 0,
             last_pc: 0,
             recent_pcs: VecDeque::with_capacity(32),
+            recent_branches: VecDeque::with_capacity(16),
+            branch_regs: None,
             pending_screen: 0,
             active_screen: 0,
             screen_stack: Vec::new(),
@@ -1562,6 +1573,8 @@ impl NicaiMachine {
             frame_count: 0,
             last_pc: 0,
             recent_pcs: VecDeque::new(),
+            recent_branches: VecDeque::new(),
+            branch_regs: None,
             pending_screen: 0,
             active_screen: 0,
             screen_stack: Vec::new(),
@@ -2857,6 +2870,46 @@ mod tests {
 
         machine.run_until_return(1_000).unwrap();
         assert_eq!(machine.state(), MachineState::Halted);
+    }
+
+    /// An unmapped fetch must carry enough context to root-cause the jump:
+    /// recent PCs, the branch that led there, and register state at branch
+    /// time (fault-time registers may already be clobbered by junk code).
+    #[test]
+    fn unmapped_fetch_error_carries_branch_diagnostics() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4700); // Thumb bx r0
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 0, 0xDEAD_0000); // unmapped target
+
+        let error = machine.run_until_return(1_000).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("instruction fetch from unmapped address 0xDEAD0000"),
+            "missing fault address in: {message}"
+        );
+        assert!(
+            message.contains("recent pcs:"),
+            "missing pc history in: {message}"
+        );
+        assert!(
+            message.contains(&format!(
+                "recent branches: [0x{:08X}->0xDEAD0000]",
+                machine.executable.code_address()
+            )),
+            "missing branch record in: {message}"
+        );
+        assert!(
+            message.contains(&format!("r0={:08X}", 0xDEAD_0000u32)),
+            "missing branch-time registers in: {message}"
+        );
+        assert!(
+            message.contains("unmapped data accesses:"),
+            "missing unmapped access list in: {message}"
+        );
     }
 
     #[test]

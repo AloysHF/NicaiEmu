@@ -24,6 +24,24 @@ impl NicaiMachine {
                 pc = aligned_pc;
                 self.cpu.reg_set(Mode::User, reg::PC, pc);
             }
+            // Record non-fallthrough transfers (2/4-byte adjacency assumed to
+            // be sequential execution) so fault diagnostics can show where a
+            // bad jump came from.
+            if self.instruction_count > 0
+                && pc != self.last_pc.wrapping_add(2)
+                && pc != self.last_pc.wrapping_add(4)
+            {
+                if self.recent_branches.len() == 16 {
+                    self.recent_branches.pop_front();
+                }
+                self.recent_branches.push_back((self.last_pc, pc));
+                // Snapshot registers at transfer time: a bad jump into a
+                // zero-filled region executes junk before faulting, which
+                // would otherwise clobber the dispatch-time state.
+                self.branch_regs = Some(std::array::from_fn(|index| {
+                    self.cpu.reg_get(Mode::User, index as u8)
+                }));
+            }
             self.last_pc = pc;
             if self.recent_pcs.len() == 32 {
                 self.recent_pcs.pop_front();
@@ -54,7 +72,10 @@ impl NicaiMachine {
                 .is_none()
             {
                 self.state = super::MachineState::Faulted;
-                bail!("instruction fetch from unmapped address 0x{pc:08X}");
+                bail!(
+                    "instruction fetch from unmapped address 0x{pc:08X}{}",
+                    self.unmapped_fetch_context()
+                );
             } else if !self.cpu.step(&mut self.memory) {
                 self.state = super::MachineState::Faulted;
                 bail!("unsupported ARM instruction at 0x{pc:08X}");
@@ -65,6 +86,52 @@ impl NicaiMachine {
         bail!(
             "CBE execution exceeded {instruction_limit} instructions at 0x{:08X}",
             self.last_pc
+        )
+    }
+
+    /// Diagnostic context appended to unmapped-fetch faults: the recent PC
+    /// history and the last service calls, so a fault can be traced back to
+    /// the guest code path that computed the bad address.
+    fn unmapped_fetch_context(&self) -> String {
+        let pcs: Vec<String> = self
+            .recent_pcs
+            .iter()
+            .map(|pc| format!("0x{pc:08X}"))
+            .collect();
+        let services: Vec<String> = self
+            .recent_services
+            .iter()
+            .map(|(group, index, lr, r0)| format!("{group}:{index}(lr=0x{lr:08X},r0=0x{r0:08X})"))
+            .collect();
+        let bad: Vec<String> = self
+            .memory
+            .unmapped_accesses()
+            .iter()
+            .take(8)
+            .map(|address| format!("0x{address:08X}"))
+            .collect();
+        let regs: Vec<String> = (0..16)
+            .map(|index| format!("r{index}={:08X}", self.register(index)))
+            .collect();
+        let branches: Vec<String> = self
+            .recent_branches
+            .iter()
+            .map(|(from, to)| format!("0x{from:08X}->0x{to:08X}"))
+            .collect();
+        let branch_regs = self.branch_regs.map(|regs| {
+            let parts: Vec<String> = (0..16)
+                .map(|index| format!("r{index}={:08X}", regs[index]))
+                .collect();
+            format!("\n  registers at last branch: [{}]", parts.join(", "))
+        });
+        format!(
+            "\n  recent pcs: [{}]\n  recent branches: [{}]\n  recent services: [{}]\n  unmapped data accesses: [{}]\n  registers: [{}]{}",
+            pcs.join(", "),
+            branches.join(", "),
+            services.join(", "),
+            bad.join(", "),
+            regs.join(", "),
+            branch_regs.unwrap_or_default()
         )
     }
 
