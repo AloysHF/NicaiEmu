@@ -591,16 +591,20 @@ impl NicaiMachine {
                     );
                 }
                 // The shared template calls a method slot that the firmware
-                // leaves sparse. When invoked as a method (r1 = 1), allocate
-                // a block and hand the pointer back through the caller's
-                // result slot so the next indirect call has a non-null target.
+                // leaves sparse. When invoked as a method (r1 = 1), hand back
+                // a callable stub address so the caller's `ptr - 52` arithmetic
+                // still lands on executable code instead of zero-filled heap.
                 if self.register(1) == 1 {
-                    let block = self.allocate(0x54);
                     let sp = self.register(reg::SP);
-                    if block != 0 && sp != 0 {
-                        self.memory.w32(sp + 68, block);
+                    // The caller subtracts 52 from the +68 slot to recover a
+                    // method pointer, so seed it 52 bytes past the stub.  The
+                    // +36 slot is used directly as a callable target.
+                    let stub = NATIVE_DISPATCH_SERVICE | 1;
+                    if sp != 0 {
+                        self.memory.w32(sp + 68, stub.wrapping_add(52));
+                        self.memory.w32(sp + 36, stub);
                     }
-                    self.set_result(block);
+                    self.set_result(stub);
                 } else {
                     self.set_result(id)
                 }
@@ -661,6 +665,20 @@ impl NicaiMachine {
                     // template's object dispatcher. The reference layout
                     // leaves it sparse, but the guest calls it directly.
                     self.memory.w32(info + 0xC0, NATIVE_DISPATCH_SERVICE | 1);
+                    // The shared template indexes a BSS pointer at 0x043F98DC
+                    // as a base for method-table lookups. Seed it with the
+                    // system-info block so those lookups land on real stubs.
+                    // The shared template indexes a BSS method table through
+                    // a pointer at 0x043F98DC.  Fill any still-null slots with
+                    // a callable stub so indirect calls don't jump to zero.
+                    let table = self.memory.r32(0x043F98DC);
+                    if table != 0 {
+                        for offset in (0..0x400u32).step_by(4) {
+                            if self.memory.r32(table + offset) == 0 {
+                                self.memory.w32(table + offset, NATIVE_DISPATCH_SERVICE | 1);
+                            }
+                        }
+                    }
                 }
                 self.memory.w32(output, self.native_system_info);
             }
