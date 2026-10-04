@@ -708,6 +708,14 @@ pub struct NicaiMachine {
     pub(crate) net_last_uplink: Vec<u8>,
     #[serde(skip, default)]
     pub(crate) net_last_http_url: String,
+    /// Deterministic LCG state for the guest `rand` service. Skipped in
+    /// save-states so the codec layout stays stable.
+    #[serde(skip, default = "default_rand_state")]
+    pub(crate) rand_state: u32,
+}
+
+fn default_rand_state() -> u32 {
+    0x1234_5678
 }
 
 impl std::fmt::Debug for NicaiMachine {
@@ -871,6 +879,7 @@ impl NicaiMachine {
             net_downlink_bytes: 0,
             net_last_uplink: Vec::new(),
             net_last_http_url: String::new(),
+            rand_state: default_rand_state(),
         };
         machine.initialize_tables();
         machine.initialize_screen();
@@ -1650,6 +1659,7 @@ impl NicaiMachine {
             net_downlink_bytes: 0,
             net_last_uplink: Vec::new(),
             net_last_http_url: String::new(),
+            rand_state: default_rand_state(),
         }
     }
 
@@ -3018,6 +3028,61 @@ mod tests {
                 "getter {index} returned the wrong table"
             );
         }
+    }
+
+    /// gameold C-library services: games build structure fields with these
+    /// and then call through the result, so a stub that returns null or
+    /// does nothing derails the next indirect call.
+    #[test]
+    fn gameold_c_library_services_copy_and_measure_memory() {
+        let mut machine = machine_from_minimal_archive();
+        let dst = machine.allocate(32);
+        let src = machine.allocate(32);
+
+        // memset(dst, 0xAB, 8)
+        machine.memory.write_bytes(src, b"hello\0xx");
+        machine.cpu.reg_set(Mode::User, 0, dst);
+        machine.cpu.reg_set(Mode::User, 1, 0xAB);
+        machine.cpu.reg_set(Mode::User, 2, 8);
+        machine.handle_game_service(135);
+        assert_eq!(machine.register(0), dst);
+        assert_eq!(machine.memory.r8(dst), 0xAB);
+        assert_eq!(machine.memory.r8(dst + 7), 0xAB);
+
+        // memcpy(dst, src, 8)
+        machine.cpu.reg_set(Mode::User, 0, dst);
+        machine.cpu.reg_set(Mode::User, 1, src);
+        machine.cpu.reg_set(Mode::User, 2, 8);
+        machine.handle_game_service(133);
+        assert_eq!(machine.register(0), dst);
+        assert_eq!(machine.memory.r8(dst), b'h');
+
+        // strlen(src)
+        machine.cpu.reg_set(Mode::User, 0, src);
+        machine.handle_game_service(134);
+        assert_eq!(machine.register(0), 5);
+
+        // strcpy(dst, src) writes the terminator
+        machine.cpu.reg_set(Mode::User, 0, dst);
+        machine.cpu.reg_set(Mode::User, 1, src);
+        machine.handle_game_service(141);
+        assert_eq!(machine.memory.r8(dst + 5), 0);
+    }
+
+    #[test]
+    fn gameold_sprintf_writes_destination_buffer() {
+        let mut machine = machine_from_minimal_archive();
+        let dst = machine.allocate(32);
+        let format = machine.allocate(16);
+        machine.memory.write_bytes(format, b"%d\n\0");
+        machine.cpu.reg_set(Mode::User, 0, dst);
+        machine.cpu.reg_set(Mode::User, 1, format);
+        machine.cpu.reg_set(Mode::User, 2, 42);
+        machine.handle_game_service(136);
+        assert_eq!(machine.memory.r8(dst), b'4');
+        assert_eq!(machine.memory.r8(dst + 1), b'2');
+        assert_eq!(machine.memory.r8(dst + 2), b'\n');
+        assert_eq!(machine.memory.r8(dst + 3), 0);
     }
 
     /// Drive LCD service `index` with r0-r3 and a scratch stack holding

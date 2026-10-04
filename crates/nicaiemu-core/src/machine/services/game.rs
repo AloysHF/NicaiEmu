@@ -311,6 +311,101 @@ impl NicaiMachine {
                 let capacity = self.register(1);
                 self.initialize_data_package(package, capacity);
             }
+            136 => {
+                // sprintf(dst, fmt, ...)
+                let destination = self.register(0);
+                let format = self.read_c_bytes(self.register(1), 4096);
+                let output = self.format_c_string_from(&format, 2);
+                if destination != 0 {
+                    self.memory.write_bytes(destination, &output);
+                    self.memory.w8(destination + output.len() as u32, 0);
+                }
+                self.set_result(output.len() as u32);
+            }
+            // Firmware C-library routines exposed through the gameold
+            // manager. Games call these via directory thunks; returning a
+            // null or doing nothing leaves structure fields unfilled and the
+            // next indirect call jumps to zero.
+            133 => {
+                // memcpy(dst, src, n)
+                let dst = self.register(0);
+                let src = self.register(1);
+                let count = self.register(2) as usize;
+                if dst != 0 && src != 0 && count != 0 {
+                    let mut buffer = vec![0u8; count];
+                    for (offset, byte) in buffer.iter_mut().enumerate() {
+                        *byte = self.memory.r8(src + offset as u32);
+                    }
+                    self.memory.write_bytes(dst, &buffer);
+                }
+                self.set_result(dst);
+            }
+            134 => {
+                // strlen(s)
+                let pointer = self.register(0);
+                let mut length = 0u32;
+                while length < 0x1_0000 && self.memory.r8(pointer + length) != 0 {
+                    length += 1;
+                }
+                self.set_result(length);
+            }
+            135 => {
+                // memset(dst, value, n)
+                let dst = self.register(0);
+                let value = self.register(1) as u8;
+                let count = self.register(2) as usize;
+                if dst != 0 && count != 0 {
+                    let bytes = vec![value; count];
+                    self.memory.write_bytes(dst, &bytes);
+                }
+                self.set_result(dst);
+            }
+            140 => {
+                // strncpy(dst, src, n) — copy up to n bytes, zero-pad the rest
+                let dst = self.register(0);
+                let src = self.register(1);
+                let count = self.register(2) as usize;
+                if dst != 0 && count != 0 {
+                    let mut bytes = vec![0u8; count];
+                    if src != 0 {
+                        for (offset, byte) in bytes.iter_mut().enumerate() {
+                            let ch = self.memory.r8(src + offset as u32);
+                            *byte = ch;
+                            if ch == 0 {
+                                break;
+                            }
+                        }
+                    }
+                    self.memory.write_bytes(dst, &bytes);
+                }
+                self.set_result(dst);
+            }
+            141 => {
+                // strcpy(dst, src)
+                let dst = self.register(0);
+                let src = self.register(1);
+                if dst != 0 && src != 0 {
+                    let mut bytes = Vec::new();
+                    loop {
+                        let ch = self.memory.r8(src + bytes.len() as u32);
+                        bytes.push(ch);
+                        if ch == 0 || bytes.len() >= 0x1_0000 {
+                            break;
+                        }
+                    }
+                    self.memory.write_bytes(dst, &bytes);
+                }
+                self.set_result(dst);
+            }
+            138 => {
+                // rand() — deterministic LCG so guest code that seeds and
+                // samples the generator gets a stable stream.
+                self.rand_state = self
+                    .rand_state
+                    .wrapping_mul(1_103_515_245)
+                    .wrapping_add(12_345);
+                self.set_result((self.rand_state >> 16) & 0x7fff);
+            }
             _ => self.set_result(0),
         }
     }
