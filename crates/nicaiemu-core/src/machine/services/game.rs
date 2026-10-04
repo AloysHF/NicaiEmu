@@ -511,6 +511,13 @@ impl NicaiMachine {
         }
         match id {
             0x79e => {
+                if std::env::var_os("CBE_TRACE").is_some() {
+                    eprintln!(
+                        "[dispatch] id=0x79e arg=0x{argument:08X} r0=0x{:08X} lr=0x{:08X}",
+                        self.register(0),
+                        self.register(reg::LR)
+                    );
+                }
                 if argument != 0 {
                     self.native_app_parser = self.memory.r32(argument);
                     self.native_app_init = self.memory.r32(argument + 4);
@@ -525,7 +532,16 @@ impl NicaiMachine {
                 }
                 self.set_result(0);
             }
-            0x8e | 0x8f | 0x97 | 0xac | 0x421 | 0x41a => self.set_result(id),
+            0x8e | 0x8f | 0x97 | 0xac | 0x421 | 0x41a => {
+                if std::env::var_os("CBE_TRACE").is_some() {
+                    eprintln!(
+                        "[dispatch] id=0x{id:x} r1=0x{:08X} lr=0x{:08X}",
+                        self.register(1),
+                        self.register(reg::LR)
+                    );
+                }
+                self.set_result(id)
+            }
             0x3ed => {
                 if argument != 0 {
                     self.memory.w8(argument, 0);
@@ -541,10 +557,30 @@ impl NicaiMachine {
                 self.set_result(0);
             }
             0x7d1 => {
+                if std::env::var_os("CBE_TRACE").is_some() {
+                    eprintln!(
+                        "[dispatch] id=0x7d1 arg=0x{argument:08X} lr=0x{:08X}",
+                        self.register(reg::LR)
+                    );
+                }
                 self.handle_native_interface_request(argument);
                 self.set_result(0);
             }
-            _ => self.set_result(0),
+            0xb7 | 0xb8 | 0x67 | 0x6b | 0x6e => self.set_result(0),
+            _ => {
+                // Unrecognised dispatch ids echo back as their own result,
+                // matching the firmware's default path which leaves r0
+                // unchanged instead of forcing it to zero.
+                if std::env::var_os("CBE_TRACE").is_some() {
+                    eprintln!(
+                        "[dispatch] id=0x{id:x} r1=0x{:08X} r2=0x{:08X} lr=0x{:08X}",
+                        self.register(1),
+                        self.register(2),
+                        self.register(reg::LR)
+                    );
+                }
+                self.set_result(id)
+            }
         }
     }
 
@@ -564,6 +600,12 @@ impl NicaiMachine {
                 if self.native_system_info == 0 {
                     self.native_system_info = self.allocate(0x400);
                     let info = self.native_system_info;
+                    // Fill every slot with a callable dispatch stub so guest
+                    // code that indexes unlisted offsets still gets a valid
+                    // function pointer instead of a null call.
+                    for offset in (0..0x400u32).step_by(4) {
+                        self.memory.w32(info + offset, NATIVE_DISPATCH_SERVICE | 1);
+                    }
                     self.memory
                         .w32(info + 0x9c, SERVICE_BASE + TABLE_STRIDE * 2 + 13 * 4);
                     self.memory
@@ -591,6 +633,10 @@ impl NicaiMachine {
                             .w32(info + offset, NATIVE_SYSTEM_TIME_SERVICE + index * 4);
                     }
                     self.memory.w32(info + 0xf0, NATIVE_DISPATCH_SERVICE | 1);
+                    // Method slot 0xC0 is read by the shared big-endian
+                    // template's object dispatcher. The reference layout
+                    // leaves it sparse, but the guest calls it directly.
+                    self.memory.w32(info + 0xC0, NATIVE_DISPATCH_SERVICE | 1);
                 }
                 self.memory.w32(output, self.native_system_info);
             }

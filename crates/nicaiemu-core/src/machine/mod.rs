@@ -976,6 +976,19 @@ impl NicaiMachine {
             );
         }
         self.run_until_return(instruction_limit)?;
+        if std::env::var_os("CBE_TRACE").is_some() {
+            // Dump BSS globals the shared template uses for dispatch stubs.
+            for addr in [
+                0x043FE558u32,
+                0x043FE55C,
+                0x043FE560,
+                0x043FE564,
+                0x043FE568,
+                0x043F9E44,
+            ] {
+                eprintln!("[boot] [0x{addr:08X}]=0x{:08X}", self.memory.r32(addr));
+            }
+        }
         if self.state == MachineState::Halted {
             return Ok(());
         }
