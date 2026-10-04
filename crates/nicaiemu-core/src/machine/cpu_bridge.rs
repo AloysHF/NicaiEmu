@@ -7,8 +7,9 @@ use log::info;
 use super::{
     arm_blx_immediate_target, fixed_manager_specs, service_trace_enabled, thumb_add_pc_target,
     NicaiMachine, APP_STORE_MANAGER, EXIT_ADDRESS, FIXED_GAMEOLD_OBJECT_SERVICE,
-    FIXED_GAMEOLD_REGION_SERVICE, FIXED_MANAGER_INIT, LOG_NOOP_SERVICE, MEMORY_BLOCK_SERVICE,
-    NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
+    FIXED_GAMEOLD_REGION_SERVICE, FIXED_MANAGER_INIT, LOG_NOOP_SERVICE, MANAGER_BASE, MANAGER_SIZE,
+    MEMORY_BLOCK_SERVICE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SERVICE_BASE,
+    SERVICE_SIZE, TABLE_STRIDE,
 };
 
 impl NicaiMachine {
@@ -61,6 +62,16 @@ impl NicaiMachine {
             }
             if (SERVICE_BASE..SERVICE_BASE + SERVICE_SIZE).contains(&pc) {
                 self.handle_service(pc)?;
+            } else if (MANAGER_BASE..MANAGER_BASE + MANAGER_SIZE as u32).contains(&pc) {
+                // The manager region holds only data (tables and slots), so a
+                // fetch here means the game is calling the application
+                // interface as code — the native-dispatch convention: the id
+                // travels in r0 and the argument in r1, and the call returns
+                // through LR. Intercepting the fetch keeps the region usable
+                // as both a writable structure (entry-point registration) and
+                // a callable stub, whichever protocol the game follows.
+                self.handle_native_dispatch_service();
+                self.return_from_service();
             } else if self.is_semihosting_call(pc) {
                 if self.handle_semihosting(pc)? {
                     return Ok(());

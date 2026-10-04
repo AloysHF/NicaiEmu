@@ -950,7 +950,12 @@ impl NicaiMachine {
         if self.state == MachineState::Halted {
             return Ok(());
         }
-        if self.uses_native_dispatch_abi() {
+        // Registration is content-driven: the initializer either registered
+        // its entry through the native-dispatch call (id 0x79E) or wrote the
+        // entry into the manager structure at [MANAGER_BASE]. Follow whichever
+        // actually happened rather than the static ABI classification, so
+        // games that mix the two conventions still boot.
+        if self.uses_native_dispatch_abi() || self.native_app_parser != 0 {
             if self.native_app_parser == 0 {
                 self.state = MachineState::Faulted;
                 bail!("CBE initializer returned without registering a native application entry");
@@ -1140,7 +1145,7 @@ impl NicaiMachine {
         if had_screen_before_timers && self.finish_screen_callback_frame() {
             return Ok(());
         }
-        if self.uses_native_dispatch_abi() {
+        if self.uses_native_dispatch_abi() || self.native_app_parser != 0 {
             self.key_down = 0;
             if let Some(event) = self.pending_key_events.pop_front() {
                 update_key_bits(
@@ -2925,6 +2930,28 @@ mod tests {
 
         machine.run_until_return(1_000).unwrap();
         assert_eq!(machine.state(), MachineState::Halted);
+    }
+
+    /// Executing inside the manager region means the game calls the
+    /// application interface as code (native-dispatch convention: id in r0,
+    /// argument in r1). The fetch must be dispatched, not decoded as data —
+    /// otherwise zero-filled table space is "executed" until it walks off the
+    /// mapped region end.
+    #[test]
+    fn manager_region_fetch_dispatches_interface_call() {
+        let mut machine = machine_from_minimal_archive();
+        let argument = machine.allocate(16);
+        let parser = machine.executable.code_address() | 1;
+        machine.memory.w32(argument, parser);
+        machine.memory.w32(argument + 4, parser);
+        machine.cpu.reg_set(Mode::User, 0, 0x79E); // native app registration id
+        machine.cpu.reg_set(Mode::User, 1, argument);
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        machine.cpu.reg_set(Mode::User, reg::PC, MANAGER_BASE);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10); // ARM state
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(machine.native_app_parser, parser);
     }
 
     /// Drive LCD service `index` with r0-r3 and a scratch stack holding
