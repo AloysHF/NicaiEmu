@@ -27,7 +27,7 @@ impl NicaiMachine {
         match index {
             0 => {
                 let path = self.read_file_path(self.register(1));
-                let mode = self.read_c_string(self.register(2), 16);
+                let mode = self.resolve_open_mode();
                 let result = self.virtual_fs.open(&path, &mode, self.register(0));
                 self.set_result(result as u32);
             }
@@ -111,6 +111,43 @@ impl NicaiMachine {
             17 => self.set_result(1),
             _ => self.set_result(0),
         }
+    }
+
+    /// Resolve the fopen-style mode for `vM_file_open`.  The firmware ABI
+    /// carries an open-mode *enum* in r0 and an optional mode *string* in r2
+    /// (`vm_file_select_mode`).  The string wins when it names r/w/a; a stale
+    /// r2 that points at code or garbage falls back to the r0 enum.
+    pub(crate) fn resolve_open_mode(&mut self) -> String {
+        let hint = self.read_c_string(self.register(2), 8);
+        let first = hint.chars().find(|c| matches!(c, 'r' | 'w' | 'a'));
+        if let Some(kind) = first {
+            let mut mode = String::new();
+            mode.push(kind);
+            for c in hint.chars() {
+                if (c == 'b' || c == '+') && !mode.contains(c) {
+                    mode.push(c);
+                }
+            }
+            if !mode.contains('b') {
+                mode.push('b');
+            }
+            return mode;
+        }
+        let open_mode = self.register(0);
+        let mode = if open_mode & 0x10 != 0 {
+            "ab+"
+        } else if open_mode & 0x08 != 0 {
+            "wb+"
+        } else if open_mode & 0x04 != 0 {
+            "rb+"
+        } else if open_mode == 1 {
+            "wb+"
+        } else if open_mode == 3 {
+            "rb+"
+        } else {
+            "rb"
+        };
+        mode.to_string()
     }
 
     pub(crate) fn read_file_path(&mut self, address: u32) -> String {

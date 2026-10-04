@@ -3071,10 +3071,6 @@ mod tests {
         }
     }
 
-    /// gameold C-library services: games build structure fields with these
-    /// and then call through the result, so a stub that returns null or
-    /// does nothing derails the next indirect call.
-    #[test]
     /// Unrecognised gameold ids act as object constructors: the guest reads
     /// method pointers out of the struct it passes in r0.  Null slots must
     /// come back as callable stubs or the next indirect call jumps to zero.
@@ -3098,6 +3094,29 @@ mod tests {
         );
     }
 
+    /// The firmware open ABI carries an open-mode enum in r0 and an optional
+    /// mode string in r2.  A stale r2 pointing at code must fall back to the
+    /// enum instead of being read as an fopen string.
+    #[test]
+    fn file_open_mode_falls_back_to_enum_when_hint_is_garbage() {
+        let mut machine = machine_from_minimal_archive();
+        let junk = machine.executable.code_address(); // code bytes, not "rwa"
+        machine.cpu.reg_set(Mode::User, 0, 2); // openMode 2 == "rb"
+        machine.cpu.reg_set(Mode::User, 2, junk);
+        assert_eq!(machine.resolve_open_mode(), "rb");
+
+        // A real hint string wins over the enum.
+        let hint = machine.allocate(4);
+        machine.memory.write_bytes(hint, b"wb+\0");
+        machine.cpu.reg_set(Mode::User, 0, 0);
+        machine.cpu.reg_set(Mode::User, 2, hint);
+        assert_eq!(machine.resolve_open_mode(), "wb+");
+    }
+
+    /// gameold C-library services: games build structure fields with these
+    /// and then call through the result, so a stub that returns null or
+    /// does nothing derails the next indirect call.
+    #[test]
     fn gameold_c_library_services_copy_and_measure_memory() {
         let mut machine = machine_from_minimal_archive();
         let dst = machine.allocate(32);
