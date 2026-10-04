@@ -55,6 +55,11 @@ impl MachineMemory {
         &self.bad_accesses
     }
 
+    /// Whether guest multi-byte values are stored big-endian.
+    pub(crate) fn is_big_endian(&self) -> bool {
+        self.big_endian
+    }
+
     pub(crate) fn load(&mut self, address: u32, data: &[u8]) -> Result<()> {
         let region = self
             .region_mut(address, data.len())

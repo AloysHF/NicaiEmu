@@ -154,7 +154,11 @@ impl NicaiMachine {
         if address == 0 {
             return String::new();
         }
-        if self.memory.r8(address + 1) != 0 {
+        // Big-endian images store guest strings as UCS2-BE (`00 XX` per
+        // ASCII char); little-endian images store them as single-byte GBK.
+        // Keying on byte[1] alone misreads every UCS2-BE path as ASCII and
+        // yields an empty string, so the machine endianness decides.
+        if !self.memory.is_big_endian() {
             return self.read_gbk_string(address, 512);
         }
         let mut units = Vec::new();

@@ -3094,6 +3094,20 @@ mod tests {
         );
     }
 
+    /// Guest string encoding follows machine endianness: big-endian images
+    /// use UCS2-BE (`00 XX` per ASCII char), little-endian images use plain
+    /// single-byte strings.  The old heuristic keyed on `byte[1] != 0` and
+    /// misread every UCS2-BE path as ASCII, yielding an empty string and a
+    /// failed open.
+    #[test]
+    fn file_path_follows_machine_endianness() {
+        let mut machine = machine_from_minimal_archive();
+        let addr = machine.allocate(32);
+        // The fixture is little-endian, so paths are single-byte.
+        machine.memory.write_bytes(addr, b"./x.dat\0");
+        assert_eq!(machine.read_file_path(addr), "./x.dat");
+    }
+
     /// The firmware open ABI carries an open-mode enum in r0 and an optional
     /// mode string in r2.  A stale r2 pointing at code must fall back to the
     /// enum instead of being read as an fopen string.
