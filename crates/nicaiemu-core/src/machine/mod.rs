@@ -110,6 +110,11 @@ const SERVICE_SIZE: u32 = 0x10_0000;
 const LOG_NOOP_SERVICE: u32 = SERVICE_BASE + SERVICE_SIZE - 4;
 const EXIT_ADDRESS: u32 = 0x0f00_0000;
 const FIXED_MANAGER_INIT: u32 = SERVICE_BASE + 0xe000;
+/// Per-manager "get table" stubs that return the canonical dense function
+/// table for the caller's group. Fixed-ABI directory entries place the init
+/// stub at +0 and this getter at +4 so bootstrap code can either install a
+/// private table or fetch the shared one.
+const FIXED_MANAGER_GET: u32 = FIXED_MANAGER_INIT + 18 * 4;
 const FIXED_MANAGER_DIRECTORY: u32 = MANAGER_BASE + 0xa000;
 const FIXED_GAMEOLD_OBJECT_SERVICE: u32 = SERVICE_BASE + 0xd000;
 const FIXED_GAMEOLD_REGION_SERVICE: u32 = SERVICE_BASE + 0xd100;
@@ -890,6 +895,13 @@ impl NicaiMachine {
                     FIXED_MANAGER_DIRECTORY + offset,
                     FIXED_MANAGER_INIT + index as u32 * 4,
                 );
+                // Adjacent word is a "get table" stub so bootstrap code that
+                // indexes the directory as a dense pointer array (entry+4)
+                // receives the shared manager function table instead of null.
+                self.memory.w32(
+                    FIXED_MANAGER_DIRECTORY + offset + 4,
+                    FIXED_MANAGER_GET + index as u32 * 4,
+                );
             }
             self.memory.w32(MANAGER_BASE + 8, FIXED_MANAGER_DIRECTORY);
         }
@@ -946,6 +958,14 @@ impl NicaiMachine {
         self.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
         self.cpu.reg_set(Mode::User, reg::PC, code_address);
         self.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
+        if std::env::var_os("CBE_TRACE").is_some() {
+            eprintln!(
+                "[boot] fixed={} native={} interface=0x{application_interface:08X} code=0x{code_address:08X} [iface+8]=0x{:08X}",
+                self.uses_fixed_manager_abi(),
+                self.uses_native_dispatch_abi(),
+                self.memory.r32((application_interface & !1) + 8)
+            );
+        }
         self.run_until_return(instruction_limit)?;
         if self.state == MachineState::Halted {
             return Ok(());
@@ -2952,6 +2972,52 @@ mod tests {
 
         machine.run_until_return(1_000).unwrap();
         assert_eq!(machine.native_app_parser, parser);
+    }
+
+    /// Fixed-ABI directory entries must expose both an init stub (+0) and a
+    /// get-table stub (+4). Bootstrap code that indexes the directory as a
+    /// dense pointer array reads the +4 word; leaving it null makes the guest
+    /// branch to 0x00000000.
+    #[test]
+    fn fixed_manager_directory_exposes_get_table_stubs() {
+        let mut machine = machine_from_minimal_archive();
+        // Promote the minimal archive to the fixed-ABI shape: big-endian
+        // image with a preferred code address and a code image larger than
+        // the raw code segment.
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0010_0000;
+        machine.executable.code_image_size = 0x2000;
+        machine.executable.code_size = 4;
+        machine.memory = {
+            let mut memory = MachineMemory::new(true);
+            memory.map(MANAGER_BASE, MANAGER_SIZE, false);
+            memory.map(SERVICE_BASE, SERVICE_SIZE as usize, false);
+            memory
+        };
+        machine.initialize_tables();
+        assert!(machine.uses_fixed_manager_abi());
+
+        for (index, &(offset, group, _)) in fixed_manager_specs().iter().enumerate() {
+            let init = machine.memory.r32(FIXED_MANAGER_DIRECTORY + offset);
+            assert_eq!(init, FIXED_MANAGER_INIT + index as u32 * 4);
+            let getter = machine.memory.r32(FIXED_MANAGER_DIRECTORY + offset + 4);
+            assert_eq!(
+                getter,
+                FIXED_MANAGER_GET + index as u32 * 4,
+                "entry {index}"
+            );
+
+            // Calling the getter returns the shared dense function table.
+            machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+            machine.cpu.reg_set(Mode::User, reg::PC, getter);
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10); // ARM state
+            machine.run_until_return(100).unwrap();
+            assert_eq!(
+                machine.register(0),
+                MANAGER_BASE + TABLE_STRIDE * (group + 1),
+                "getter {index} returned the wrong table"
+            );
+        }
     }
 
     /// Drive LCD service `index` with r0-r3 and a scratch stack holding
