@@ -406,7 +406,17 @@ impl NicaiMachine {
                     .wrapping_add(12_345);
                 self.set_result((self.rand_state >> 16) & 0x7fff);
             }
-            _ => self.set_result(0),
+            _ => {
+                // Unrecognised gameold ids act as object constructors: the
+                // guest passes a struct in r0 and later reads method pointers
+                // out of it.  The firmware fills every slot with a callable
+                // stub; leaving them null makes the next indirect call jump
+                // to zero.  Only zero slots are touched, so scalar-returning
+                // services and already-initialised objects are unaffected.
+                let obj = self.register(0);
+                self.fill_zero_method_slots(obj, 0x100);
+                self.set_result(obj);
+            }
         }
     }
 
@@ -608,6 +618,20 @@ impl NicaiMachine {
                 } else {
                     self.set_result(id)
                 }
+            }
+        }
+    }
+
+    /// Fill the null word-slots of a guest object with a callable dispatch
+    /// stub so later indirect calls through it land on executable code
+    /// instead of zero.  Already-populated slots are left alone.
+    fn fill_zero_method_slots(&mut self, obj: u32, size: u32) {
+        if obj == 0 {
+            return;
+        }
+        for offset in (0..size).step_by(4) {
+            if self.memory.r32(obj + offset) == 0 {
+                self.memory.w32(obj + offset, NATIVE_DISPATCH_SERVICE | 1);
             }
         }
     }

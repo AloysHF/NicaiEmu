@@ -3075,6 +3075,29 @@ mod tests {
     /// and then call through the result, so a stub that returns null or
     /// does nothing derails the next indirect call.
     #[test]
+    /// Unrecognised gameold ids act as object constructors: the guest reads
+    /// method pointers out of the struct it passes in r0.  Null slots must
+    /// come back as callable stubs or the next indirect call jumps to zero.
+    #[test]
+    fn gameold_unknown_id_fills_null_object_slots() {
+        let mut machine = machine_from_minimal_archive();
+        let obj = machine.allocate(0x40);
+        machine.memory.w32(obj + 16, 0xDEAD_BEEF); // pre-existing slot survives
+        machine.cpu.reg_set(Mode::User, 0, obj);
+        machine.handle_game_service(109);
+        assert_eq!(machine.register(0), obj, "constructor echoes the object");
+        assert_eq!(
+            machine.memory.r32(obj + 16),
+            0xDEAD_BEEF,
+            "populated slot is preserved"
+        );
+        assert_ne!(
+            machine.memory.r32(obj + 8),
+            0,
+            "null slot becomes a callable stub"
+        );
+    }
+
     fn gameold_c_library_services_copy_and_measure_memory() {
         let mut machine = machine_from_minimal_archive();
         let dst = machine.allocate(32);
