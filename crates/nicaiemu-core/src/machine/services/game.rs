@@ -506,7 +506,21 @@ impl NicaiMachine {
             || (data_start..data_end).contains(&id)
             || (HEAP_BASE..HEAP_BASE + HEAP_SIZE as u32).contains(&id)
         {
-            self.set_result(0);
+            // When called as an object constructor (r1 = block size), allocate
+            // the block and hand the pointer back through the caller's stack
+            // slot the shared template uses for the result. Other calls with
+            // a pointer id simply echo zero.
+            let size = self.register(1);
+            if (16..=0x1000).contains(&size) {
+                let block = self.allocate(size);
+                let sp = self.register(reg::SP);
+                if block != 0 && sp != 0 {
+                    self.memory.w32(sp + 68, block);
+                }
+                self.set_result(block);
+            } else {
+                self.set_result(0);
+            }
             return;
         }
         match id {
@@ -568,9 +582,6 @@ impl NicaiMachine {
             }
             0xb7 | 0xb8 | 0x67 | 0x6b | 0x6e => self.set_result(0),
             _ => {
-                // Unrecognised dispatch ids echo back as their own result,
-                // matching the firmware's default path which leaves r0
-                // unchanged instead of forcing it to zero.
                 if std::env::var_os("CBE_TRACE").is_some() {
                     eprintln!(
                         "[dispatch] id=0x{id:x} r1=0x{:08X} r2=0x{:08X} lr=0x{:08X}",
@@ -579,7 +590,20 @@ impl NicaiMachine {
                         self.register(reg::LR)
                     );
                 }
-                self.set_result(id)
+                // The shared template calls a method slot that the firmware
+                // leaves sparse. When invoked as a method (r1 = 1), allocate
+                // a block and hand the pointer back through the caller's
+                // result slot so the next indirect call has a non-null target.
+                if self.register(1) == 1 {
+                    let block = self.allocate(0x54);
+                    let sp = self.register(reg::SP);
+                    if block != 0 && sp != 0 {
+                        self.memory.w32(sp + 68, block);
+                    }
+                    self.set_result(block);
+                } else {
+                    self.set_result(id)
+                }
             }
         }
     }
