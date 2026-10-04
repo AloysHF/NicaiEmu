@@ -135,14 +135,13 @@ impl CbeArchive {
                 return false;
             }
             let name = &buf[pos + 1..pos + 1 + len];
-            // Check if name looks like ASCII resource name
+            // Check if name looks like ASCII resource name. Spaces and
+            // common punctuation appear in real titles (e.g. "Select icon.gif").
             let valid = name.iter().all(|&c| {
                 (0x30..=0x39).contains(&c)
                     || (0x41..=0x5a).contains(&c)
                     || (0x61..=0x7a).contains(&c)
-                    || c == 0x2e
-                    || c == 0x5f
-                    || c == 0x2d
+                    || matches!(c, 0x20 | 0x2e | 0x5f | 0x2d | 0x28 | 0x29 | 0x23 | 0x2b)
                     || c >= 0x80 // Allow Chinese/other extended chars
             });
             if !valid {
@@ -196,6 +195,112 @@ impl CbeArchive {
         true
     }
 
+    /// Compact resource section: `fe*8` + header fields, then
+    /// `[name_len][name][data_offset: LE u32]` entries. Two layouts exist:
+    /// count at +12 with names at +16, or count at +16 with names at +20.
+    fn looks_like_compact_resource_section(buf: &[u8], off: usize) -> bool {
+        if off + 16 > buf.len() || buf[off..off + 8] != CBE_SECTION_SIGNATURE {
+            return false;
+        }
+        Self::compact_name_table_at(buf, off, 12, 16)
+            .or_else(|| Self::compact_name_table_at(buf, off, 16, 20))
+            .is_some()
+    }
+
+    /// Try to read a compact name table where `count` sits at `count_pos`
+    /// and the first entry starts at `names_start`. Returns the parameters
+    /// when the first few entries look like length-prefixed names.
+    fn compact_name_table_at(
+        buf: &[u8],
+        off: usize,
+        count_pos: usize,
+        names_start: usize,
+    ) -> Option<(usize, usize)> {
+        let read = |offset: usize| u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap());
+        if off + count_pos + 4 > buf.len() {
+            return None;
+        }
+        let count = read(off + count_pos) as usize;
+        if !(2..=2000).contains(&count) {
+            return None;
+        }
+        let mut pos = off + names_start;
+        let mut checked = 0;
+        for _ in 0..count.min(16) {
+            let Some(&len) = buf.get(pos) else {
+                break;
+            };
+            let len = len as usize;
+            if !(2..=96).contains(&len) || pos + 1 + len + 4 > buf.len() {
+                break;
+            }
+            let name = &buf[pos + 1..pos + 1 + len];
+            let valid = name.iter().all(|&c| {
+                (0x30..=0x39).contains(&c)
+                    || (0x41..=0x5a).contains(&c)
+                    || (0x61..=0x7a).contains(&c)
+                    || matches!(c, 0x20 | 0x2e | 0x5f | 0x2d | 0x28 | 0x29 | 0x23 | 0x2b)
+                    || c >= 0x80
+            });
+            if !valid {
+                break;
+            }
+            pos += 1 + len + 4;
+            checked += 1;
+        }
+        // Require at least two consecutive valid names before accepting the
+        // section — the trailing entries may run into the data area.
+        if checked < 2 {
+            return None;
+        }
+        Some((count, off + names_start))
+    }
+
+    fn parse_compact_section(data: &[u8], start: usize, index: usize) -> Option<CbeSection> {
+        let (count, names_start) = Self::compact_name_table_at(data, start, 12, 16)
+            .or_else(|| Self::compact_name_table_at(data, start, 16, 20))?;
+        let read = |offset: usize| u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+        let mut pos = names_start;
+        let mut resources = Vec::with_capacity(count);
+        for _ in 0..count {
+            let &len = data.get(pos)?;
+            let len = len as usize;
+            if len == 0 || pos + 1 + len + 4 > data.len() {
+                break;
+            }
+            let name = String::from_utf8_lossy(&data[pos + 1..pos + 1 + len]).into_owned();
+            let data_offset = read(pos + 1 + len) as u64;
+            resources.push(ResourceEntry::new(name, index, data_offset, 0));
+            pos += 1 + len + 4;
+        }
+        if resources.is_empty() {
+            return None;
+        }
+        // Derive sizes from consecutive offsets; the last resource extends
+        // to the end of the file.
+        for i in 0..resources.len() {
+            let offset = resources[i].offset;
+            let end = resources
+                .get(i + 1)
+                .map(|r| r.offset)
+                .unwrap_or(data.len() as u64);
+            resources[i].size = end.saturating_sub(offset);
+        }
+        Some(CbeSection {
+            header: SectionHeader {
+                index,
+                file_offset: start as u64,
+                marker: 0,
+                resource_count: resources.len() as u32,
+                one: 0,
+                data_rel: 0,
+                data_len: data.len().saturating_sub(start) as u32,
+                data_start: start as u64,
+            },
+            resources,
+        })
+    }
+
     /// Scan the file for CBE sections
     fn scan_sections(data: &[u8]) -> Result<Vec<CbeSection>> {
         let mut sections = Vec::new();
@@ -213,6 +318,12 @@ impl CbeArchive {
             } else if Self::looks_like_native_resource_section(data, off) {
                 debug!("Found native section signature at offset 0x{:X}", off);
                 if let Some(section) = Self::parse_native_section(data, off, section_index) {
+                    sections.push(section);
+                    section_index += 1;
+                }
+            } else if Self::looks_like_compact_resource_section(data, off) {
+                debug!("Found compact section signature at offset 0x{:X}", off);
+                if let Some(section) = Self::parse_compact_section(data, off, section_index) {
                     sections.push(section);
                     section_index += 1;
                 }
