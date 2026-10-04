@@ -77,6 +77,14 @@ impl NicaiMachine {
                     return Ok(());
                 }
             } else if self.handle_thumb_add_pc(pc) || self.handle_interworking_branch(pc) {
+            } else if self.pc_in_unloaded_rom(pc) {
+                // The guest branched into the zero-filled BSS/data tail of
+                // the ROM mapping — a bad function pointer, not real code.
+                self.state = super::MachineState::Faulted;
+                bail!(
+                    "instruction fetch from unloaded ROM address 0x{pc:08X}{}",
+                    self.unmapped_fetch_context()
+                );
             } else if self
                 .memory
                 .region(pc, if self.cpu.thumb_mode() { 2 } else { 4 })
@@ -103,6 +111,23 @@ impl NicaiMachine {
     /// Diagnostic context appended to unmapped-fetch faults: the recent PC
     /// history and the last service calls, so a fault can be traced back to
     /// the guest code path that computed the bad address.
+    /// True when `pc` falls inside the mapped ROM region but past the end of
+    /// the loaded code image — the zero-filled BSS/data tail where a guest
+    /// should never fetch instructions.
+    fn pc_in_unloaded_rom(&self, pc: u32) -> bool {
+        let code_start = self.executable.code_address();
+        let code_end = code_start + self.executable.code_size as u32;
+        if (code_start..code_end).contains(&pc) {
+            return false;
+        }
+        // Only flag addresses that share the ROM mapping — other regions
+        // (manager, service, heap) are legitimate.
+        self.memory.region(pc, 2).is_some() && self.memory.region(code_start, 1).is_some() && {
+            let rom = self.memory.region(code_start, 1).unwrap();
+            (rom.base..rom.base + rom.data.len() as u32).contains(&pc)
+        }
+    }
+
     fn unmapped_fetch_context(&self) -> String {
         let pcs: Vec<String> = self
             .recent_pcs
