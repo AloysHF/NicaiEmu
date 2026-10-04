@@ -408,7 +408,11 @@ fn locate_checked_segment(
         }
     }
 
-    bail!("CBE {name} checksum mismatch")
+    // The reference treats the checksum purely as an endianness probe and
+    // keeps loading when it does not match; aborting here rejected corpus
+    // files whose payload is otherwise intact.
+    log::warn!("CBE {name} checksum mismatch (expected 0x{expected_checksum:08X}); loading anyway");
+    Ok((separator_start + 8, big_endian.unwrap_or(true)))
 }
 
 fn skip_marker(data: &[u8], mut cursor: usize) -> Result<usize> {
