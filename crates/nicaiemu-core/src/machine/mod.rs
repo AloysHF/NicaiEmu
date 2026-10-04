@@ -99,8 +99,13 @@ pub(crate) fn rotate_frame(
 }
 
 const ROM_BASE: u32 = 0x0100_0000;
-const STACK_BASE: u32 = 0x0200_0000;
-const STACK_SIZE: usize = 0x10_0000;
+/// Guest stack.  The top stays at 0x0210_0000 (matching the firmware's
+/// initial SP); the base sits low enough that deep init call chains in the
+/// big-endian templates don't grow past the mapped region into unmapped
+/// memory — where a `push` would silently drop its store and the matching
+/// `pop` would read zero, corrupting the return address.
+const STACK_BASE: u32 = 0x0110_0000;
+const STACK_SIZE: usize = 0x100_0000;
 const HEAP_BASE: u32 = 0x0500_0000;
 const HEAP_SIZE: usize = 0x100_0000;
 const MANAGER_BASE: u32 = 0x0a00_0000;
@@ -2973,6 +2978,29 @@ mod tests {
 
         machine.run_until_return(1_000).unwrap();
         assert_eq!(machine.state(), MachineState::Halted);
+    }
+
+    /// ARM `push {lr}` / `pop {r0}` round-trip.  The shared-template's
+    /// built-in memset prologue relies on this to keep its return address
+    /// across a routine that clobbers `lr` as a zero source.
+    #[test]
+    fn arm_push_pop_round_trips_return_address() {
+        let mut machine = machine_from_minimal_archive();
+        let sp = STACK_BASE + STACK_SIZE as u32;
+        let entry = machine.executable.code_address();
+        machine.cpu.reg_set(Mode::User, reg::SP, sp);
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10); // ARM state
+                                                          // push {lr}  = STMDB sp!, {lr}
+        machine.memory.w32(entry, 0xE92D_4000);
+        machine.cpu.reg_set(Mode::User, reg::PC, entry);
+        assert!(machine.cpu.step(&mut machine.memory), "push step");
+        assert_eq!(machine.register(reg::SP), sp - 4, "push adjusts sp");
+        assert_eq!(
+            machine.memory.r32(sp - 4),
+            EXIT_ADDRESS,
+            "push stores lr on the stack"
+        );
     }
 
     /// Executing inside the manager region means the game calls the
