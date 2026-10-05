@@ -780,9 +780,14 @@ impl NicaiMachine {
         let data_address = executable.data_address();
         let resource_package_offset = executable.resource_package_offset;
         let resource_package_size = executable.resource_package_size;
+        // The firmware keeps a guard page run past the end of the data
+        // image; guests routinely read a little past the BSS tail while
+        // walking object graphs, and without the guard those accesses
+        // become unmapped faults.
         let rom_size = executable
             .code_image_size
             .saturating_add(executable.data_image_size)
+            .saturating_add(0x1_0000)
             .max(executable.code_size as u32)
             .next_multiple_of(0x1000) as usize;
         let mut memory = MachineMemory::new(executable.big_endian);
