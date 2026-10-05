@@ -30,12 +30,22 @@ fn main() -> Result<()> {
         bail!("disassembly range is outside the CBE code image");
     }
     let options = Options::default();
+    // Thumb halfwords are stored in the executable's own endianness; a
+    // big-endian image would otherwise decode as garbage.
+    let read_half = |offset: usize| -> Result<u16> {
+        let bytes: [u8; 2] = archive.bytes()[offset..offset + 2].try_into()?;
+        Ok(if executable.big_endian {
+            u16::from_be_bytes(bytes)
+        } else {
+            u16::from_le_bytes(bytes)
+        })
+    };
     let mut offset = start;
     let mut address = cli.address & !1;
     while offset + 2 <= end {
-        let first = u16::from_le_bytes(archive.bytes()[offset..offset + 2].try_into()?);
+        let first = read_half(offset)?;
         let second = if offset + 4 <= end {
-            u16::from_le_bytes(archive.bytes()[offset + 2..offset + 4].try_into()?)
+            read_half(offset + 2)?
         } else {
             0
         };
