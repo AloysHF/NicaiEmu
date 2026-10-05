@@ -664,6 +664,9 @@ impl NicaiMachine {
         let r0 = self.register(0);
         let r1 = self.register(1);
         let r2 = self.register(2);
+        let r3 = self.register(3);
+        let r4 = self.register(4);
+        let r5 = self.register(5);
         if std::env::var_os("CBE_TRACE").is_some() {
             eprintln!(
                 "[mstub] kind={kind} off=0x{offset:X} r0=0x{r0:08X} r1=0x{r1:08X} r2=0x{r2:08X}"
@@ -745,7 +748,79 @@ impl NicaiMachine {
             // object: an id array, an image-pointer array, and the method
             // table at 0x18..0x50 the guest calls through.  Mirrors the
             // reference's init_picture_library.
-            (METHOD_KIND_GAMEOLD, 0x12c) => {
+            // --- math (vmspec F_0) ---
+            (METHOD_KIND_GAMEOLD, 0x00d4) => self.set_result((r0 as i32).unsigned_abs()),
+            (METHOD_KIND_GAMEOLD, 0x00d8) => self.set_result(r0.max(r1)),
+            (METHOD_KIND_GAMEOLD, 0x00dc) => self.set_result(r0.min(r1)),
+            (METHOD_KIND_GAMEOLD, 0x00e0) => {
+                self.rand_state = self
+                    .rand_state
+                    .wrapping_mul(1_103_515_245)
+                    .wrapping_add(12_345);
+                self.set_result((self.rand_state >> 16) & 0x7fff);
+            }
+            (METHOD_KIND_GAMEOLD, 0x00e4) => self.set_result((r0 as f64).sqrt() as u32),
+            (METHOD_KIND_GAMEOLD, 0x019c) => self.set_result(df_sin(r0) as u32),
+            (METHOD_KIND_GAMEOLD, 0x01a0) => self.set_result(df_sin(r0.wrapping_add(90)) as u32),
+            (METHOD_KIND_GAMEOLD, 0x01a4) => self.set_result(df_degree(r0, r1)),
+            (METHOD_KIND_GAMEOLD, 0x01a8) => {
+                self.set_result(u32::from(packed_rectangles_overlap(r0, r1, r2, r3)))
+            }
+            // --- input ---
+            (METHOD_KIND_GAMEOLD, 0x002c) | (METHOD_KIND_GAMEOLD, 0x0110) => {
+                self.set_result(self.key_down)
+            }
+            (METHOD_KIND_GAMEOLD, 0x0030) => self.set_result(u32::from(self.key_held & 1 != 0)),
+            (METHOD_KIND_GAMEOLD, 0x00f8) => self.set_result(u32::from(self.pointer.held)),
+            (METHOD_KIND_GAMEOLD, 0x00fc) => self.set_result(u32::from(self.pointer.down)),
+            (METHOD_KIND_GAMEOLD, 0x0100) => self.set_result(u32::from(self.pointer.up)),
+            (METHOD_KIND_GAMEOLD, 0x0104) => self.set_result(u32::from(self.pointer.dragging())),
+            (METHOD_KIND_GAMEOLD, 0x0108) => self.set_result(self.pointer.x as u32),
+            (METHOD_KIND_GAMEOLD, 0x010c) => self.set_result(self.pointer.y as u32),
+            // --- drawing (vmspec F_0) ---
+            // FillRect(x, y, w, h, color) — args in r1..r5.
+            (METHOD_KIND_GAMEOLD, 0x0058) => {
+                let x = r1 as i16 as i32;
+                let y = r2 as i16 as i32;
+                let w = r3 as i16 as i32;
+                let h = r4 as i16 as i32;
+                self.fill_screen_rect(x, y, w, h, r5 as u16);
+                self.set_result(0);
+            }
+            // DrawRect(x, y, w, h, color) — outline only.
+            (METHOD_KIND_GAMEOLD, 0x0054) => {
+                let x = r1 as i16 as i32;
+                let y = r2 as i16 as i32;
+                let w = r3 as i16 as i32;
+                let h = r4 as i16 as i32;
+                let c = r5 as u16;
+                if w > 0 && h > 0 {
+                    self.fill_screen_rect(x, y, w, 1, c);
+                    self.fill_screen_rect(x, y + h - 1, w, 1, c);
+                    self.fill_screen_rect(x, y, 1, h, c);
+                    self.fill_screen_rect(x + w - 1, y, 1, h, c);
+                }
+                self.set_result(0);
+            }
+            // --- DF resource accessors ---
+            (METHOD_KIND_GAMEOLD, 0x014c) => {
+                let v = self.resource_by_id(r0);
+                self.set_result(v);
+            }
+            (METHOD_KIND_GAMEOLD, 0x0150) | (METHOD_KIND_GAMEOLD, 0x015c) => {
+                let v = self.resource_by_name(r0);
+                self.set_result(v);
+            }
+            (METHOD_KIND_GAMEOLD, 0x0154) => {
+                let v = self.resource_name_by_id(r0);
+                self.set_result(v);
+            }
+            (METHOD_KIND_GAMEOLD, 0x0158) => {
+                let v = self.resource_id_by_name(r0).unwrap_or(u32::MAX);
+                self.set_result(v);
+            }
+            (METHOD_KIND_GAMEOLD, 0x0198) => self.set_result(MEMORY_BLOCK_PTR),
+            (METHOD_KIND_GAMEOLD, 0x012c) => {
                 let lib = r0;
                 let n = r1 & 0xffff;
                 if lib != 0 {
