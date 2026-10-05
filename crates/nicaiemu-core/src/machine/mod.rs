@@ -104,8 +104,8 @@ const ROM_BASE: u32 = 0x0100_0000;
 /// big-endian templates don't grow past the mapped region into unmapped
 /// memory — where a `push` would silently drop its store and the matching
 /// `pop` would read zero, corrupting the return address.
-const STACK_BASE: u32 = 0x0110_0000;
-const STACK_SIZE: usize = 0x100_0000;
+const STACK_BASE: u32 = 0x0106_0000;
+const STACK_SIZE: usize = 0x10A_0000;
 const HEAP_BASE: u32 = 0x0500_0000;
 const HEAP_SIZE: usize = 0x100_0000;
 const MANAGER_BASE: u32 = 0x0a00_0000;

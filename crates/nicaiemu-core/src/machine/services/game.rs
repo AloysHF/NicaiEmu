@@ -664,6 +664,11 @@ impl NicaiMachine {
         let r0 = self.register(0);
         let r1 = self.register(1);
         let r2 = self.register(2);
+        if std::env::var_os("CBE_TRACE").is_some() {
+            eprintln!(
+                "[mstub] kind={kind} off=0x{offset:X} r0=0x{r0:08X} r1=0x{r1:08X} r2=0x{r2:08X}"
+            );
+        }
         match (kind, offset) {
             // memset(ptr, val, len) — mirrors h_old_memset, including its
             // 4 MiB length clamp.  Only the memory-manager table owns this
@@ -716,6 +721,19 @@ impl NicaiMachine {
                     self.memory.write_bytes(r0, &bytes);
                 }
                 self.set_result(r0);
+            }
+            // XS_GetParamAsString — XSE script-VM parameter getter.  The
+            // firmware exposes no standalone implementation, but the guest
+            // passes an output buffer in r0 with a capacity in r2; writing an
+            // empty string there and returning the buffer keeps the caller
+            // from treating a null as a string pointer.
+            (METHOD_KIND_GAMEOLD, 0x210) => {
+                if r0 != 0 {
+                    self.memory.w8(r0, 0);
+                    self.set_result(r0);
+                } else {
+                    self.set_result(0);
+                }
             }
             (METHOD_KIND_GAMEOLD, 0x228) => {
                 // VmGetRand()
