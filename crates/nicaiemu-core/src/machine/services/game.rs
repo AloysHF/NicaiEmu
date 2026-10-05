@@ -7,10 +7,10 @@ use super::super::{
     game_service_string_uses_wide_length, signed_coord, NicaiMachine, DREAM_FACTORY_FORMAT_BUFFER,
     DREAM_FACTORY_FORMAT_BUFFER_SIZE, DREAM_FACTORY_MEMORY_BLOCK_SLOT, DREAM_FACTORY_PACKAGE_SLOT,
     FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, METHOD_KIND_ACTOR,
-    METHOD_KIND_GAMEOLD, METHOD_KIND_MEMORY, METHOD_KIND_PANEL, METHOD_KIND_PICTURE,
-    METHOD_KIND_TEXTBOX, METHOD_STUB_BASE, METHOD_STUB_KINDS, METHOD_STUB_STRIDE,
-    NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE,
-    TABLE_STRIDE,
+    METHOD_KIND_GAMEOLD, METHOD_KIND_MEMBLOCK, METHOD_KIND_MEMORY, METHOD_KIND_PANEL,
+    METHOD_KIND_PICTURE, METHOD_KIND_TEXTBOX, METHOD_STUB_BASE, METHOD_STUB_KINDS,
+    METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT,
+    SERVICE_BASE, TABLE_STRIDE,
 };
 
 fn rect_contains_point(left: i32, top: i32, right: i32, bottom: i32, x: i32, y: i32) -> bool {
@@ -693,6 +693,42 @@ impl NicaiMachine {
             (METHOD_KIND_MEMORY, 0xa0) => {
                 self.set_result(0);
             }
+            // MEMORY_BLOCK bump allocator installed by initMemoryBlock.
+            // MB_Malloc(blk, n): 4-byte-aligned carve-out from the backing
+            // store, zero-filled like the firmware.
+            (METHOD_KIND_MEMBLOCK, 0x0c) => {
+                let blk = r0;
+                if blk == 0 {
+                    self.set_result(0);
+                    return;
+                }
+                let base = self.memory.r32(blk);
+                let cursor = self.memory.r32(blk + 4);
+                let total = self.memory.r32(blk + 8);
+                let size = r1.wrapping_add(3) & !3;
+                if cursor.saturating_add(size) > total {
+                    self.set_result(0);
+                    return;
+                }
+                self.memory.w32(blk + 4, cursor.saturating_add(size));
+                let start = base.saturating_add(cursor);
+                if size != 0 {
+                    let zeros = vec![0u8; size as usize];
+                    self.memory.write_bytes(start, &zeros);
+                }
+                self.set_result(start);
+            }
+            // MB_Reset(blk): rewind the bump cursor.
+            (METHOD_KIND_MEMBLOCK, 0x10) => {
+                if r0 != 0 {
+                    self.memory.w32(r0 + 4, 0);
+                }
+                self.set_result(0);
+            }
+            // MB_Release(blk): the firmware keeps the backing store; no-op.
+            (METHOD_KIND_MEMBLOCK, 0x14) => {
+                self.set_result(0);
+            }
             // GameManagerOld C-library slots (vmspec F_0).  These mirror the
             // gameold func-list implementations so the table and the dispatch
             // path agree.
@@ -868,7 +904,11 @@ impl NicaiMachine {
                 }
                 self.set_result(0);
             }
-            // initMemoryBlock(blk, size) — 0x18-byte block descriptor.
+            // initMemoryBlock(blk, size) — firmware MEMORY_BLOCK descriptor:
+            //   +0x00 base, +0x04 cursor, +0x08 total, +0x0c MB_Malloc,
+            //   +0x10 MB_Reset, +0x14 MB_Release.  The three trailing slots
+            //   must be callable stubs; the guest invokes them directly and
+            //   a zero there becomes a jump to NULL.
             (METHOD_KIND_GAMEOLD, 0x00e8) => {
                 let mut blk = r0;
                 if blk == 0 {
@@ -879,8 +919,25 @@ impl NicaiMachine {
                     }
                 }
                 let base = if r1 != 0 { self.allocate(r1) } else { 0 };
+                if base != 0 {
+                    let zeros = vec![0u8; r1 as usize];
+                    self.memory.write_bytes(base, &zeros);
+                }
                 self.memory.w32(blk, base);
-                self.memory.w32(blk + 4, r1);
+                self.memory.w32(blk + 4, 0);
+                self.memory.w32(blk + 8, r1);
+                self.memory.w32(
+                    blk + 0x0c,
+                    Self::method_stub_address(METHOD_KIND_MEMBLOCK, 0x0c),
+                );
+                self.memory.w32(
+                    blk + 0x10,
+                    Self::method_stub_address(METHOD_KIND_MEMBLOCK, 0x10),
+                );
+                self.memory.w32(
+                    blk + 0x14,
+                    Self::method_stub_address(METHOD_KIND_MEMBLOCK, 0x14),
+                );
                 self.set_result(blk);
             }
             // InitTextBox(tb, ...) — text box with method table at 0x1c..0x34.

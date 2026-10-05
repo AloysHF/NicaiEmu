@@ -140,6 +140,7 @@ const METHOD_KIND_PICTURE: u32 = 3;
 const METHOD_KIND_ACTOR: u32 = 4;
 const METHOD_KIND_PANEL: u32 = 5;
 const METHOD_KIND_TEXTBOX: u32 = 6;
+const METHOD_KIND_MEMBLOCK: u32 = 7;
 
 const TABLE_STRIDE: u32 = 0x400;
 const MAX_TIMERS: usize = 20;
