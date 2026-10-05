@@ -410,6 +410,7 @@ impl NicaiMachine {
             13 => self.handle_ucs2_service(index),
             14 => self.handle_screen_service(index),
             16 => self.handle_game_lcd_service(index),
+            17 => self.handle_manager_service(index),
             18 => self.handle_audio_service(index),
             20 => {
                 if index == 6 {
