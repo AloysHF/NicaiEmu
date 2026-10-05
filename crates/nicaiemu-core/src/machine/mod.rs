@@ -136,6 +136,7 @@ const METHOD_STUB_KINDS: u32 = 4;
 /// Table kinds — mirrors the reference's `api::lookup(tag, name)` split.
 const METHOD_KIND_MEMORY: u32 = 1;
 const METHOD_KIND_GAMEOLD: u32 = 2;
+const METHOD_KIND_PICTURE: u32 = 3;
 
 const TABLE_STRIDE: u32 = 0x400;
 const MAX_TIMERS: usize = 20;

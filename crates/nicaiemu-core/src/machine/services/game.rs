@@ -7,9 +7,9 @@ use super::super::{
     game_service_string_uses_wide_length, signed_coord, NicaiMachine, DREAM_FACTORY_FORMAT_BUFFER,
     DREAM_FACTORY_FORMAT_BUFFER_SIZE, DREAM_FACTORY_MEMORY_BLOCK_SLOT, DREAM_FACTORY_PACKAGE_SLOT,
     FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, METHOD_KIND_GAMEOLD,
-    METHOD_KIND_MEMORY, METHOD_STUB_BASE, METHOD_STUB_KINDS, METHOD_STUB_STRIDE,
-    NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE,
-    TABLE_STRIDE,
+    METHOD_KIND_MEMORY, METHOD_KIND_PICTURE, METHOD_STUB_BASE, METHOD_STUB_KINDS,
+    METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT,
+    SERVICE_BASE, TABLE_STRIDE,
 };
 
 fn rect_contains_point(left: i32, top: i32, right: i32, bottom: i32, x: i32, y: i32) -> bool {
@@ -706,13 +706,27 @@ impl NicaiMachine {
                 }
                 self.set_result(dst);
             }
+            // The shared template calls slot 0x218 as
+            // `fn(dst, src, n)` — a bounded string copy, matching the
+            // reference's strncpy(d, s, n) rather than the vmspec name.
             (METHOD_KIND_GAMEOLD, 0x218) => {
-                // strlen(s)
-                let mut len = 0u32;
-                while len < 0x1_0000 && self.memory.r8(r0.wrapping_add(len)) != 0 {
-                    len += 1;
+                let dst = r0;
+                let src = r1;
+                let n = r2 as usize;
+                if dst != 0 && n != 0 {
+                    let mut bytes = vec![0u8; n.min(0x1000)];
+                    if src != 0 {
+                        for (i, b) in bytes.iter_mut().enumerate() {
+                            let ch = self.memory.r8(src + i as u32);
+                            *b = ch;
+                            if ch == 0 {
+                                break;
+                            }
+                        }
+                    }
+                    self.memory.write_bytes(dst, &bytes);
                 }
-                self.set_result(len);
+                self.set_result(dst);
             }
             (METHOD_KIND_GAMEOLD, 0x21c) => {
                 // memset(dst, val, n)
@@ -727,6 +741,31 @@ impl NicaiMachine {
             // passes an output buffer in r0 with a capacity in r2; writing an
             // empty string there and returning the buffer keeps the caller
             // from treating a null as a string pointer.
+            // initDFPictureLibrary(lib, n) — builds the DF_PictureLibrary
+            // object: an id array, an image-pointer array, and the method
+            // table at 0x18..0x50 the guest calls through.  Mirrors the
+            // reference's init_picture_library.
+            (METHOD_KIND_GAMEOLD, 0x12c) => {
+                let lib = r0;
+                let n = r1 & 0xffff;
+                if lib != 0 {
+                    let ids = self.allocate((2 * n).max(2));
+                    self.memory.w32(lib + 12, ids);
+                    let imgs = self.allocate((4 * n).max(4));
+                    self.memory.w32(lib + 16, imgs);
+                    self.memory.w16(lib + 20, 0);
+                    self.memory.w16(lib + 8, n as u16);
+                    for method in (0x18..=0x50u32).step_by(4) {
+                        self.memory.w32(
+                            lib + method,
+                            Self::method_stub_address(METHOD_KIND_PICTURE, method),
+                        );
+                    }
+                    let line = self.allocate(480);
+                    self.memory.w32(lib + 0x54, line);
+                }
+                self.set_result(lib);
+            }
             (METHOD_KIND_GAMEOLD, 0x210) => {
                 if r0 != 0 {
                     self.memory.w8(r0, 0);
