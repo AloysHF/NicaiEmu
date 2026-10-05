@@ -134,6 +134,9 @@ const METHOD_STUB_BASE: u32 = SERVICE_BASE + 0x9000;
 const METHOD_STUB_STRIDE: u32 = 0x800;
 const METHOD_STUB_KINDS: u32 = 8;
 /// Table kinds — mirrors the reference's `api::lookup(tag, name)` split.
+/// Kind 0 is reserved for the slots of auto-created result objects: their
+/// stubs always return zero rather than spawning another result object.
+const METHOD_KIND_AUTO: u32 = 0;
 const METHOD_KIND_MEMORY: u32 = 1;
 const METHOD_KIND_GAMEOLD: u32 = 2;
 const METHOD_KIND_PICTURE: u32 = 3;
@@ -650,6 +653,10 @@ pub struct NicaiMachine {
     latched_text_origin: (i32, i32),
     #[serde(skip, default)]
     heap_allocations: BTreeMap<u32, u32>,
+    /// Cache of the firmware-style auto result objects handed back by
+    /// unimplemented manager methods, keyed by (table kind, slot offset).
+    #[serde(skip, default)]
+    auto_objects: BTreeMap<(u32, u32), u32>,
     #[serde(skip, default)]
     free_heap_blocks: Vec<(u32, u32)>,
     app_main: u32,
@@ -805,6 +812,7 @@ impl NicaiMachine {
             heap_cursor: HEAP_BASE,
             latched_text_origin: (0, 0),
             heap_allocations: BTreeMap::new(),
+            auto_objects: BTreeMap::new(),
             free_heap_blocks: Vec::new(),
             app_main: 0,
             app_exit: 0,
@@ -1636,6 +1644,7 @@ impl NicaiMachine {
             heap_cursor: HEAP_BASE,
             latched_text_origin: (0, 0),
             heap_allocations: BTreeMap::new(),
+            auto_objects: BTreeMap::new(),
             free_heap_blocks: Vec::new(),
             app_main: 0,
             app_exit: 0,

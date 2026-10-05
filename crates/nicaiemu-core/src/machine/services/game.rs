@@ -7,10 +7,10 @@ use super::super::{
     game_service_string_uses_wide_length, signed_coord, NicaiMachine, DREAM_FACTORY_FORMAT_BUFFER,
     DREAM_FACTORY_FORMAT_BUFFER_SIZE, DREAM_FACTORY_MEMORY_BLOCK_SLOT, DREAM_FACTORY_PACKAGE_SLOT,
     FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, METHOD_KIND_ACTOR,
-    METHOD_KIND_GAMEOLD, METHOD_KIND_MEMBLOCK, METHOD_KIND_MEMORY, METHOD_KIND_PANEL,
-    METHOD_KIND_PICTURE, METHOD_KIND_TEXTBOX, METHOD_STUB_BASE, METHOD_STUB_KINDS,
-    METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT,
-    SERVICE_BASE, TABLE_STRIDE,
+    METHOD_KIND_AUTO, METHOD_KIND_GAMEOLD, METHOD_KIND_MEMBLOCK, METHOD_KIND_MEMORY,
+    METHOD_KIND_PANEL, METHOD_KIND_PICTURE, METHOD_KIND_TEXTBOX, METHOD_STUB_BASE,
+    METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE,
+    SCREEN_IS_IN_QUIT, SERVICE_BASE, TABLE_STRIDE,
 };
 
 fn rect_contains_point(left: i32, top: i32, right: i32, bottom: i32, x: i32, y: i32) -> bool {
@@ -635,6 +635,31 @@ impl NicaiMachine {
             | 1
     }
 
+    /// Firmware-style auto result object for an unimplemented manager
+    /// method: a fresh block whose every slot is a callable stub that
+    /// returns zero.  The guest chains calls through the result, so a bare
+    /// zero return would turn the next indirect call into a jump to NULL.
+    /// One object is cached per (kind, offset) so repeated calls keep the
+    /// same identity, matching the firmware's `auto_result` cache.
+    fn auto_result_object(&mut self, kind: u32, offset: u32) -> u32 {
+        if let Some(&obj) = self.auto_objects.get(&(kind, offset)) {
+            return obj;
+        }
+        const AUTO_SLOTS: u32 = 24;
+        let obj = self.allocate(AUTO_SLOTS * 4);
+        if obj == 0 {
+            return 0;
+        }
+        for slot in (0..AUTO_SLOTS * 4).step_by(4) {
+            self.memory.w32(
+                obj + slot,
+                Self::method_stub_address(METHOD_KIND_AUTO, slot),
+            );
+        }
+        self.auto_objects.insert((kind, offset), obj);
+        obj
+    }
+
     /// Fill the null word-slots of a guest object with callable per-slot
     /// method stubs so later indirect calls through it land on executable
     /// code with known semantics instead of zero.  Already-populated slots
@@ -999,6 +1024,12 @@ impl NicaiMachine {
                     .wrapping_add(12_345);
                 self.set_result((self.rand_state >> 16) & 0x7fff);
             }
+            // Slots of an auto-created result object always return zero:
+            // the point of the object is that the call lands on a stub
+            // instead of NULL, not that it invents another object.
+            (METHOD_KIND_AUTO, _) => {
+                self.set_result(0);
+            }
             _ => {
                 // Unlisted slots keep the calling convention the shared stub
                 // used to infer: a pointer-shaped first argument is an object
@@ -1021,7 +1052,13 @@ impl NicaiMachine {
                     }
                     self.set_result(block);
                 } else if pointer_shaped {
-                    self.set_result(0);
+                    // An unimplemented object method still has to hand back
+                    // something the guest can chain through: a fresh block of
+                    // callable zero-returning stubs.  A bare zero would turn
+                    // the next `ldr r1, [obj, #off]; bx r1` into a jump to
+                    // NULL.  This mirrors the firmware's `auto_result`.
+                    let obj = self.auto_result_object(kind, offset);
+                    self.set_result(obj);
                 } else if r1 == 1 {
                     // Constructor-shaped call through an id: hand back a
                     // callable stub via the caller's `ptr - 52` slot.
