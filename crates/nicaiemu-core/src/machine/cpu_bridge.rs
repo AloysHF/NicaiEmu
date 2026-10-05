@@ -8,9 +8,10 @@ use super::{
     arm_blx_immediate_target, fixed_manager_specs, service_trace_enabled, thumb_add_pc_target,
     NicaiMachine, APP_STORE_MANAGER, DATA_PACKAGE_FULL_PATH_SERVICE, EXIT_ADDRESS,
     FIXED_GAMEOLD_OBJECT_SERVICE, FIXED_GAMEOLD_REGION_SERVICE, FIXED_MANAGER_GET,
-    FIXED_MANAGER_INIT, LOG_NOOP_SERVICE, MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE,
-    METHOD_STUB_BASE, METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE,
-    NATIVE_SYSTEM_TIME_SERVICE, SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
+    FIXED_MANAGER_INIT, IO_METHOD_BASE, IO_METHOD_STRIDE, IO_NV_READ_OFFSET, IO_NV_WRITE_OFFSET,
+    LOG_NOOP_SERVICE, MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE, METHOD_STUB_BASE,
+    METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE,
+    SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
 };
 
 impl NicaiMachine {
@@ -309,6 +310,18 @@ impl NicaiMachine {
             .contains(&address)
         {
             self.handle_method_stub(address);
+            self.return_from_service();
+            return Ok(());
+        }
+        if (IO_METHOD_BASE..IO_METHOD_BASE + 0x2000).contains(&address) {
+            let rel = address - IO_METHOD_BASE;
+            if rel == IO_NV_READ_OFFSET {
+                self.handle_nv_read();
+            } else if rel == IO_NV_WRITE_OFFSET {
+                self.handle_nv_write();
+            } else {
+                self.handle_file_service(rel / IO_METHOD_STRIDE);
+            }
             self.return_from_service();
             return Ok(());
         }

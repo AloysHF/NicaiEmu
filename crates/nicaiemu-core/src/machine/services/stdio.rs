@@ -3,7 +3,9 @@
 use armv4t_emu::Memory;
 use encoding_rs::GBK;
 
-use super::super::{variadic_argument_location, NicaiMachine, VariadicArgument};
+use super::super::{
+    variadic_argument_location, NicaiMachine, VariadicArgument, NV_BLOCK_PATH, NV_BLOCK_SIZE,
+};
 
 impl NicaiMachine {
     pub(crate) fn handle_file_service(&mut self, index: u32) {
@@ -398,5 +400,62 @@ impl NicaiMachine {
             bytes.push(byte);
         }
         bytes
+    }
+
+    /// `nv_read(off, buf, n, okp)` — copy `n` bytes out of the guest NV
+    /// block at `off`.  The block is a flat 0x100-byte record store that the
+    /// firmware keeps across runs; the virtual filesystem hosts it so
+    /// save data survives a reset within a session.
+    pub(crate) fn handle_nv_read(&mut self) {
+        let offset = self.register(0);
+        let destination = self.register(1);
+        let size = self.register(2);
+        let okp = self.register(3);
+        let mut ok = 0u8;
+        let blob = self.nv_blob();
+        if destination != 0 && size != 0 && offset.saturating_add(size) <= NV_BLOCK_SIZE {
+            self.memory.write_bytes(
+                destination,
+                &blob[offset as usize..(offset + size) as usize],
+            );
+            ok = 1;
+        }
+        if okp != 0 {
+            self.memory.w8(okp, ok);
+        }
+        self.set_result(ok as u32);
+    }
+
+    /// `nv_write(off, buf, n, okp)` — commit `n` bytes into the NV block.
+    pub(crate) fn handle_nv_write(&mut self) {
+        let offset = self.register(0);
+        let source = self.register(1);
+        let size = self.register(2);
+        let okp = self.register(3);
+        let mut ok = 0u8;
+        if source != 0 && size != 0 && offset.saturating_add(size) <= NV_BLOCK_SIZE {
+            let mut blob = self.nv_blob();
+            for index in 0..size {
+                let byte = self.memory.r8(source + index);
+                blob[(offset + index) as usize] = byte;
+            }
+            self.virtual_fs.write_file(NV_BLOCK_PATH, blob.clone());
+            ok = 1;
+        }
+        if okp != 0 {
+            self.memory.w8(okp, ok);
+        }
+        self.set_result(ok as u32);
+    }
+
+    /// Current NV block contents, materialised from the virtual filesystem
+    /// on first use and zero-filled to the firmware's block size.
+    fn nv_blob(&mut self) -> Vec<u8> {
+        let mut blob = self
+            .virtual_fs
+            .read_file(NV_BLOCK_PATH)
+            .unwrap_or_else(|| vec![0u8; NV_BLOCK_SIZE as usize]);
+        blob.resize(NV_BLOCK_SIZE as usize, 0);
+        blob
     }
 }

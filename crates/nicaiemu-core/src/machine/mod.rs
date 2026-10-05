@@ -131,6 +131,21 @@ const NATIVE_SYSTEM_TIME_SERVICE: u32 = SERVICE_BASE + 0xf100;
 /// manager, picture ops for the picture library, …) instead of one shared
 /// stub that has to guess from the calling convention.
 const METHOD_STUB_BASE: u32 = SERVICE_BASE + 0x9000;
+/// Io manager method stubs live in their own region, one every 0x100 bytes.
+/// The boot loader's `nvReadWriteInit` identifies the NV block size from
+/// `obj[1] - obj[0]` and only installs the NV read/write methods for a size
+/// it recognises (0x100 / 0xDE / 0xF8); consecutive service-table words are
+/// only 4 apart, so that probe always failed and the methods stayed null.
+const IO_METHOD_BASE: u32 = SERVICE_BASE + 0x7800;
+const IO_METHOD_STRIDE: u32 = 0x100;
+/// nvReadWriteInit derives the NV method addresses from the word at
+/// `obj + 0x44`.  For the 0x100 block size it calls `slot + 0x1A` as the NV
+/// reader and `slot + 0x1A4` as the NV writer; slot +0x44 is method 17.
+const IO_NV_READ_OFFSET: u32 = 17 * IO_METHOD_STRIDE + 0x1a;
+const IO_NV_WRITE_OFFSET: u32 = 17 * IO_METHOD_STRIDE + 0x1a4;
+/// Size of the guest NV block for the 0x100 variant.
+const NV_BLOCK_SIZE: u32 = 0x100;
+const NV_BLOCK_PATH: &str = "nvram.bin";
 const METHOD_STUB_STRIDE: u32 = 0x800;
 const METHOD_STUB_KINDS: u32 = 8;
 /// Table kinds — mirrors the reference's `api::lookup(tag, name)` split.
@@ -953,6 +968,14 @@ impl NicaiMachine {
             let table = MANAGER_BASE + TABLE_STRIDE * (table_index + 1);
             let service = SERVICE_BASE + TABLE_STRIDE * table_index;
             self.populate_table(table, service, TABLE_STRIDE / 4);
+            // The Io manager's words are spaced 0x100 apart so the guest's
+            // NV-size probe (`obj[1] - obj[0]`) sees a block size it knows.
+            if table_index == 5 {
+                for index in 0..(TABLE_STRIDE / 4) {
+                    self.memory
+                        .w32(table + index * 4, IO_METHOD_BASE + index * IO_METHOD_STRIDE);
+                }
+            }
         }
         self.memory
             .w32(MANAGER_BASE + 8, MANAGER_BASE + TABLE_STRIDE);
