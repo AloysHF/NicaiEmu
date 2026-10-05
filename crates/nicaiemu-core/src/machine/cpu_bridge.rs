@@ -6,11 +6,11 @@ use log::info;
 
 use super::{
     arm_blx_immediate_target, fixed_manager_specs, service_trace_enabled, thumb_add_pc_target,
-    NicaiMachine, APP_STORE_MANAGER, EXIT_ADDRESS, FIXED_GAMEOLD_OBJECT_SERVICE,
-    FIXED_GAMEOLD_REGION_SERVICE, FIXED_MANAGER_GET, FIXED_MANAGER_INIT, LOG_NOOP_SERVICE,
-    MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE, METHOD_STUB_BASE, METHOD_STUB_KINDS,
-    METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SERVICE_BASE,
-    SERVICE_SIZE, TABLE_STRIDE,
+    NicaiMachine, APP_STORE_MANAGER, DATA_PACKAGE_FULL_PATH_SERVICE, EXIT_ADDRESS,
+    FIXED_GAMEOLD_OBJECT_SERVICE, FIXED_GAMEOLD_REGION_SERVICE, FIXED_MANAGER_GET,
+    FIXED_MANAGER_INIT, LOG_NOOP_SERVICE, MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE,
+    METHOD_STUB_BASE, METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE,
+    NATIVE_SYSTEM_TIME_SERVICE, SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
 };
 
 impl NicaiMachine {
@@ -425,6 +425,14 @@ impl NicaiMachine {
                         );
                     }
                     self.set_result(APP_STORE_MANAGER);
+                } else if address == DATA_PACKAGE_FULL_PATH_SERVICE {
+                    // DF_DataPackage_GetFullPaths, reached by the boot
+                    // loader's `ptr - 52` arithmetic on the data package's
+                    // DP_GetFileID slot.  Must hand back a buffer that
+                    // starts with the UCS2 path of the container the loader
+                    // reopens; returning zero left it opening a NULL name.
+                    let buf = self.data_package_full_path();
+                    self.set_result(buf);
                 } else {
                     self.set_result(0);
                 }

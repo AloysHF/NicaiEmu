@@ -5,8 +5,8 @@ use encoding_rs::GBK;
 use log::{debug, warn};
 
 use super::super::{
-    packages::HostResource, NicaiMachine, DATA_PACKAGE_SIZE, DREAM_FACTORY_PACKAGE_SLOT,
-    SERVICE_BASE, TABLE_STRIDE,
+    packages::HostResource, NicaiMachine, DATA_PACKAGE_CBE_PATH, DATA_PACKAGE_SIZE,
+    DREAM_FACTORY_PACKAGE_SLOT, SERVICE_BASE, TABLE_STRIDE,
 };
 
 impl NicaiMachine {
@@ -52,6 +52,14 @@ impl NicaiMachine {
                 self.set_result(result.unwrap_or(u32::MAX));
             }
             10 => self.set_result(0),
+            12 => {
+                // DF_DataPackage_GetFullPaths — reached through the package's
+                // `ptr - 52` slot.  Returns a buffer that starts with the
+                // UCS2 file path the boot loader opens, with room for the
+                // trailing fields the caller reads at +0x200.
+                let buf = self.data_package_full_path();
+                self.set_result(buf);
+            }
             _ => self.set_result(0),
         }
     }
@@ -74,6 +82,29 @@ impl NicaiMachine {
         self.memory
             .w32(package + 80, SERVICE_BASE + TABLE_STRIDE * 21 + 11 * 4);
         self.set_result(SERVICE_BASE + TABLE_STRIDE * 21 + 10 * 4);
+    }
+
+    /// Buffer handed back by `DF_DataPackage_GetFullPaths`: a UCS2 path at
+    /// offset 0 and the trailing fields the boot loader reads at +0x200.
+    /// Allocated once and reused so repeated calls see the same pointer.
+    pub(crate) fn data_package_full_path(&mut self) -> u32 {
+        if self.data_package_path_buffer != 0 {
+            return self.data_package_path_buffer;
+        }
+        const CAP: u32 = 0x220;
+        let buf = self.allocate(CAP);
+        if buf == 0 {
+            return 0;
+        }
+        self.memory.write_bytes(buf, &vec![0u8; CAP as usize]);
+        // The boot loader reopens the application's own CBE to walk its
+        // container footer; the virtual filesystem serves the loaded bytes
+        // at this path.
+        for (i, ch) in DATA_PACKAGE_CBE_PATH.encode_utf16().enumerate() {
+            self.memory.w16(buf + i as u32 * 2, ch);
+        }
+        self.data_package_path_buffer = buf;
+        buf
     }
 
     pub(crate) fn load_main_resource_package(&mut self, package: u32) {

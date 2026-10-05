@@ -2,6 +2,20 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+/// CoolBar system files the firmware treats as always-present: opening one
+/// for read materialises an empty file instead of failing, so boot code that
+/// expects to find (or create) its record store keeps going.
+const GLUE_FILE_PREFIXES: &[&str] = &[
+    "dfwsms",
+    "dfwmix",
+    "wpay",
+    "cdlist",
+    "cwstorecfg",
+    "wstore_host",
+    "coolbar_list",
+    "downinfo3",
+];
+
 #[derive(Clone, Debug)]
 struct VirtualFileHandle {
     path: String,
@@ -49,7 +63,11 @@ impl VirtualFileSystem {
         let readable = mode.starts_with('r') || mode.contains('+');
         let writable = mode.starts_with('w') || mode.starts_with('a') || mode.contains('+');
         if mode.starts_with('r') && !self.files.contains_key(&path) {
-            return -1;
+            if !is_glue_file(&path) {
+                return -1;
+            }
+            // Auto-materialise CoolBar glue files on first read-open.
+            self.files.insert(path.clone(), Vec::new());
         }
         if mode.starts_with('w') {
             self.files.insert(path.clone(), Vec::new());
@@ -149,7 +167,6 @@ impl VirtualFileSystem {
         self.files.get(&path).cloned()
     }
 
-    #[cfg(test)]
     pub(crate) fn write_file(&mut self, path: &str, data: Vec<u8>) -> bool {
         let Some(path) = normalize_path(path) else {
             return false;
@@ -225,6 +242,20 @@ impl VirtualFileSystem {
         paths.sort_unstable_by_key(|(path, _)| *path);
         paths
     }
+}
+
+fn is_glue_file(path: &str) -> bool {
+    let base = path
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .rsplit('\\')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    GLUE_FILE_PREFIXES
+        .iter()
+        .any(|prefix| base.starts_with(prefix))
 }
 
 fn normalize_path(path: &str) -> Option<String> {

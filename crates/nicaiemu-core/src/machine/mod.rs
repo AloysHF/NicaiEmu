@@ -152,6 +152,18 @@ const TIMER_FRAME_MS: u32 = 100;
 const MEMORY_BLOCK_POOL: u32 = HEAP_BASE + 0x40_0000;
 const MEMORY_BLOCK_PTR: u32 = HEAP_BASE + 0x80_0000;
 const MEMORY_BLOCK_SERVICE: u32 = SERVICE_BASE + 0x6c48;
+/// Callable target of the data package's `ptr - 52` slot: the guest stores
+/// `DF_DataPackage_GetFullPaths + 52` in the package's DP_GetFileID slot and
+/// recovers the real function by subtracting 52 before calling it.
+/// Callable target of the data package's `ptr - 52` slot: the boot loader
+/// reads the package's DP_GetFileID word at +0x44, subtracts 52, and calls
+/// the result as `DF_DataPackage_GetFullPaths`.  With the package's method
+/// slots laid out as service-table words that subtraction lands exactly
+/// here (group 20 index 252), so this is the slot that must answer.
+const DATA_PACKAGE_FULL_PATH_SERVICE: u32 = SERVICE_BASE + TABLE_STRIDE * 20 + 252 * 4;
+/// Virtual path at which the loaded CBE is served to the guest; returned by
+/// `DF_DataPackage_GetFullPaths` so the boot loader can reopen the container.
+const DATA_PACKAGE_CBE_PATH: &str = "app.cbe";
 const DREAM_FACTORY_PACKAGE_SLOT: u32 = MANAGER_BASE + 0x7ff0;
 const DREAM_FACTORY_MEMORY_BLOCK_SLOT: u32 = MANAGER_BASE + 0x7ff4;
 const DREAM_FACTORY_FORMAT_BUFFER: u32 = MANAGER_BASE + 0x7f80;
@@ -657,6 +669,9 @@ pub struct NicaiMachine {
     /// unimplemented manager methods, keyed by (table kind, slot offset).
     #[serde(skip, default)]
     auto_objects: BTreeMap<(u32, u32), u32>,
+    /// Cached buffer returned by DF_DataPackage_GetFullPaths.
+    #[serde(skip, default)]
+    data_package_path_buffer: u32,
     #[serde(skip, default)]
     free_heap_blocks: Vec<(u32, u32)>,
     app_main: u32,
@@ -818,6 +833,7 @@ impl NicaiMachine {
             latched_text_origin: (0, 0),
             heap_allocations: BTreeMap::new(),
             auto_objects: BTreeMap::new(),
+            data_package_path_buffer: 0,
             free_heap_blocks: Vec::new(),
             app_main: 0,
             app_exit: 0,
@@ -921,6 +937,12 @@ impl NicaiMachine {
         };
         machine.initialize_tables();
         machine.initialize_screen();
+        // The boot loader re-opens the application's own CBE to walk its
+        // container footer ("CoolBars" trailer).  Serve the loaded bytes
+        // under the path DF_DataPackage_GetFullPaths hands back.
+        machine
+            .virtual_fs
+            .write_file(DATA_PACKAGE_CBE_PATH, archive.bytes().to_vec());
         // Resolve the default Auto orientation from the content-identity profile.
         machine.effective_orientation = orientation_for_archive(archive.bytes());
         Ok(machine)
@@ -1650,6 +1672,7 @@ impl NicaiMachine {
             latched_text_origin: (0, 0),
             heap_allocations: BTreeMap::new(),
             auto_objects: BTreeMap::new(),
+            data_package_path_buffer: 0,
             free_heap_blocks: Vec::new(),
             app_main: 0,
             app_exit: 0,
