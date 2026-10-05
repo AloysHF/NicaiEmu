@@ -6,7 +6,7 @@ use armv4t_emu::{reg, Memory};
 use super::super::{
     game_service_string_uses_wide_length, signed_coord, NicaiMachine, DREAM_FACTORY_FORMAT_BUFFER,
     DREAM_FACTORY_FORMAT_BUFFER_SIZE, DREAM_FACTORY_MEMORY_BLOCK_SLOT, DREAM_FACTORY_PACKAGE_SLOT,
-    FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, METHOD_KIND_GENERIC,
+    FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, METHOD_KIND_GAMEOLD,
     METHOD_KIND_MEMORY, METHOD_STUB_BASE, METHOD_STUB_KINDS, METHOD_STUB_STRIDE,
     NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE,
     TABLE_STRIDE,
@@ -646,7 +646,7 @@ impl NicaiMachine {
             if self.memory.r32(obj + offset) == 0 {
                 self.memory.w32(
                     obj + offset,
-                    Self::method_stub_address(METHOD_KIND_GENERIC, offset),
+                    Self::method_stub_address(METHOD_KIND_GAMEOLD, offset),
                 );
             }
         }
@@ -683,6 +683,47 @@ impl NicaiMachine {
             // free(ptr)
             (METHOD_KIND_MEMORY, 0xa0) => {
                 self.set_result(0);
+            }
+            // GameManagerOld C-library slots (vmspec F_0).  These mirror the
+            // gameold func-list implementations so the table and the dispatch
+            // path agree.
+            (METHOD_KIND_GAMEOLD, 0x214) => {
+                // memcpy(dst, src, n)
+                let dst = r0;
+                let src = r1;
+                let count = r2 as usize;
+                if dst != 0 && src != 0 && count != 0 {
+                    let mut buf = vec![0u8; count];
+                    for (i, b) in buf.iter_mut().enumerate() {
+                        *b = self.memory.r8(src + i as u32);
+                    }
+                    self.memory.write_bytes(dst, &buf);
+                }
+                self.set_result(dst);
+            }
+            (METHOD_KIND_GAMEOLD, 0x218) => {
+                // strlen(s)
+                let mut len = 0u32;
+                while len < 0x1_0000 && self.memory.r8(r0.wrapping_add(len)) != 0 {
+                    len += 1;
+                }
+                self.set_result(len);
+            }
+            (METHOD_KIND_GAMEOLD, 0x21c) => {
+                // memset(dst, val, n)
+                if r0 != 0 && (1..=0x40_0000).contains(&r2) {
+                    let bytes = vec![r1 as u8; r2 as usize];
+                    self.memory.write_bytes(r0, &bytes);
+                }
+                self.set_result(r0);
+            }
+            (METHOD_KIND_GAMEOLD, 0x228) => {
+                // VmGetRand()
+                self.rand_state = self
+                    .rand_state
+                    .wrapping_mul(1_103_515_245)
+                    .wrapping_add(12_345);
+                self.set_result((self.rand_state >> 16) & 0x7fff);
             }
             _ => {
                 // Unlisted slots keep the calling convention the shared stub

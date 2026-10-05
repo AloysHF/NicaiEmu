@@ -134,8 +134,8 @@ const METHOD_STUB_BASE: u32 = SERVICE_BASE + 0x9000;
 const METHOD_STUB_STRIDE: u32 = 0x800;
 const METHOD_STUB_KINDS: u32 = 4;
 /// Table kinds — mirrors the reference's `api::lookup(tag, name)` split.
-const METHOD_KIND_GENERIC: u32 = 0;
 const METHOD_KIND_MEMORY: u32 = 1;
+const METHOD_KIND_GAMEOLD: u32 = 2;
 
 const TABLE_STRIDE: u32 = 0x400;
 const MAX_TIMERS: usize = 20;
@@ -3116,7 +3116,7 @@ mod tests {
         let mut machine = machine_from_minimal_archive();
         // Distinct addresses per slot and per table kind.
         assert_ne!(
-            NicaiMachine::method_stub_address(METHOD_KIND_GENERIC, 0x214),
+            NicaiMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0x214),
             NicaiMachine::method_stub_address(METHOD_KIND_MEMORY, 0x214),
             "same offset in different tables must not collide"
         );
@@ -3135,17 +3135,20 @@ mod tests {
             .handle_method_stub(NicaiMachine::method_stub_address(METHOD_KIND_MEMORY, 0x214) & !1);
         assert_eq!(machine.register(0), buf, "memset returns the pointer");
         assert_eq!(machine.memory.r8(buf), 0xAB, "memset fills the buffer");
-        // A generic slot with the same offset must not touch memory.
-        machine.memory.w32(buf, 0xFFFF_FFFF);
+        // The same offset in the gameold table is memcpy, not memset: it
+        // must copy from r1 rather than fill with r1's byte value.
+        let src = machine.allocate(16);
+        machine.memory.write_bytes(src, b"ABCDEFGH");
+        machine.memory.w32(buf, 0);
         machine.cpu.reg_set(Mode::User, 0, buf);
-        machine.cpu.reg_set(Mode::User, 1, 0xAB);
+        machine.cpu.reg_set(Mode::User, 1, src);
         machine.cpu.reg_set(Mode::User, 2, 8);
         machine
-            .handle_method_stub(NicaiMachine::method_stub_address(METHOD_KIND_GENERIC, 0x214) & !1);
+            .handle_method_stub(NicaiMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0x214) & !1);
         assert_eq!(
             machine.memory.r32(buf),
-            0xFFFF_FFFF,
-            "generic slots must not perform memset"
+            u32::from_le_bytes(*b"ABCD"),
+            "gameold 0x214 copies from r1, not fills with r1"
         );
     }
 
