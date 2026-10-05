@@ -132,11 +132,14 @@ const NATIVE_SYSTEM_TIME_SERVICE: u32 = SERVICE_BASE + 0xf100;
 /// stub that has to guess from the calling convention.
 const METHOD_STUB_BASE: u32 = SERVICE_BASE + 0x9000;
 const METHOD_STUB_STRIDE: u32 = 0x800;
-const METHOD_STUB_KINDS: u32 = 4;
+const METHOD_STUB_KINDS: u32 = 8;
 /// Table kinds — mirrors the reference's `api::lookup(tag, name)` split.
 const METHOD_KIND_MEMORY: u32 = 1;
 const METHOD_KIND_GAMEOLD: u32 = 2;
 const METHOD_KIND_PICTURE: u32 = 3;
+const METHOD_KIND_ACTOR: u32 = 4;
+const METHOD_KIND_PANEL: u32 = 5;
+const METHOD_KIND_TEXTBOX: u32 = 6;
 
 const TABLE_STRIDE: u32 = 0x400;
 const MAX_TIMERS: usize = 20;

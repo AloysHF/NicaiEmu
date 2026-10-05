@@ -6,10 +6,11 @@ use armv4t_emu::{reg, Memory};
 use super::super::{
     game_service_string_uses_wide_length, signed_coord, NicaiMachine, DREAM_FACTORY_FORMAT_BUFFER,
     DREAM_FACTORY_FORMAT_BUFFER_SIZE, DREAM_FACTORY_MEMORY_BLOCK_SLOT, DREAM_FACTORY_PACKAGE_SLOT,
-    FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, METHOD_KIND_GAMEOLD,
-    METHOD_KIND_MEMORY, METHOD_KIND_PICTURE, METHOD_STUB_BASE, METHOD_STUB_KINDS,
-    METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT,
-    SERVICE_BASE, TABLE_STRIDE,
+    FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, METHOD_KIND_ACTOR,
+    METHOD_KIND_GAMEOLD, METHOD_KIND_MEMORY, METHOD_KIND_PANEL, METHOD_KIND_PICTURE,
+    METHOD_KIND_TEXTBOX, METHOD_STUB_BASE, METHOD_STUB_KINDS, METHOD_STUB_STRIDE,
+    NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE,
+    TABLE_STRIDE,
 };
 
 fn rect_contains_point(left: i32, top: i32, right: i32, bottom: i32, x: i32, y: i32) -> bool {
@@ -820,6 +821,90 @@ impl NicaiMachine {
                 self.set_result(v);
             }
             (METHOD_KIND_GAMEOLD, 0x0198) => self.set_result(MEMORY_BLOCK_PTR),
+            // --- DreamFactory object-graph initialisers ---
+            // initDFActor(a, x, y) — actor object with method table at
+            // 0x10..0x28 and per-slot state.
+            (METHOD_KIND_GAMEOLD, 0x01b4) => {
+                let a = r0;
+                if a != 0 {
+                    self.memory.w16(a, r1 as u16);
+                    self.memory.w16(a + 2, r2 as u16);
+                    for off in (0x10u32..=0x28).step_by(4) {
+                        self.memory
+                            .w32(a + off, Self::method_stub_address(METHOD_KIND_ACTOR, off));
+                    }
+                    for off in [4u32, 6, 8, 10] {
+                        self.memory.w32(a + off, 0);
+                    }
+                }
+                self.set_result(a);
+            }
+            // initDFWindows (init_repaint_panel) — panel with dirty-rect
+            // table and method table at 0x28..0x44.
+            (METHOD_KIND_GAMEOLD, 0x013c) => {
+                let p = r0;
+                let n = r5;
+                if p != 0 {
+                    let table = if n != 0 { self.allocate(4 * n) } else { 0 };
+                    self.memory.w32(p + 12, table);
+                    if table != 0 {
+                        for i in 0..n {
+                            let e = self.allocate(8);
+                            self.memory.w32(table + 4 * i, e);
+                        }
+                    }
+                    self.memory.w32(p + 4, 0);
+                    self.memory.w32(p + 8, n);
+                    self.memory.w32(p + 24, r1);
+                    self.memory.w32(p + 28, r2);
+                    self.memory.w32(p + 16, r3);
+                    self.memory.w32(p + 20, r4);
+                    for off in (0x28u32..=0x44).step_by(4) {
+                        self.memory
+                            .w32(p + off, Self::method_stub_address(METHOD_KIND_PANEL, off));
+                    }
+                    self.memory.w32(p + 32, 0);
+                    self.memory.w32(p + 36, 0);
+                }
+                self.set_result(0);
+            }
+            // initMemoryBlock(blk, size) — 0x18-byte block descriptor.
+            (METHOD_KIND_GAMEOLD, 0x00e8) => {
+                let mut blk = r0;
+                if blk == 0 {
+                    blk = self.allocate(0x18);
+                    if blk == 0 {
+                        self.set_result(0);
+                        return;
+                    }
+                }
+                let base = if r1 != 0 { self.allocate(r1) } else { 0 };
+                self.memory.w32(blk, base);
+                self.memory.w32(blk + 4, r1);
+                self.set_result(blk);
+            }
+            // InitTextBox(tb, ...) — text box with method table at 0x1c..0x34.
+            (METHOD_KIND_GAMEOLD, 0x011c) => {
+                let tb = r0;
+                if tb != 0 {
+                    for (i, off) in [20u32, 22, 24, 26].into_iter().enumerate() {
+                        let v = self.register(2 + i as u8) as u16;
+                        self.memory.w16(tb + off, v);
+                    }
+                    self.memory.w32(tb, 0);
+                    for off in (0x1cu32..=0x34).step_by(4) {
+                        self.memory.w32(
+                            tb + off,
+                            Self::method_stub_address(METHOD_KIND_TEXTBOX, off),
+                        );
+                    }
+                    self.memory.w16(tb + 4, 0);
+                    self.memory.w16(tb + 6, 14);
+                    self.memory.w32(tb + 8, 0);
+                    self.memory.w32(tb + 12, 0);
+                }
+                self.set_result(14);
+            }
             (METHOD_KIND_GAMEOLD, 0x012c) => {
                 let lib = r0;
                 let n = r1 & 0xffff;
