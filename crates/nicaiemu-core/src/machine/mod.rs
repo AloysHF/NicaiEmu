@@ -125,6 +125,17 @@ const FIXED_GAMEOLD_OBJECT_SERVICE: u32 = SERVICE_BASE + 0xd000;
 const FIXED_GAMEOLD_REGION_SERVICE: u32 = SERVICE_BASE + 0xd100;
 const NATIVE_DISPATCH_SERVICE: u32 = SERVICE_BASE + 0xf000;
 const NATIVE_SYSTEM_TIME_SERVICE: u32 = SERVICE_BASE + 0xf100;
+/// Per-slot method stubs for guest object/method tables.  The address
+/// encodes both the *table kind* and the *byte offset* of the slot so the
+/// dispatcher can bind real semantics (memset/alloc/free for the memory
+/// manager, picture ops for the picture library, …) instead of one shared
+/// stub that has to guess from the calling convention.
+const METHOD_STUB_BASE: u32 = SERVICE_BASE + 0x9000;
+const METHOD_STUB_STRIDE: u32 = 0x800;
+const METHOD_STUB_KINDS: u32 = 4;
+/// Table kinds — mirrors the reference's `api::lookup(tag, name)` split.
+const METHOD_KIND_GENERIC: u32 = 0;
+const METHOD_KIND_MEMORY: u32 = 1;
 
 const TABLE_STRIDE: u32 = 0x400;
 const MAX_TIMERS: usize = 20;
@@ -3095,6 +3106,46 @@ mod tests {
             machine.memory.r32(obj + 8),
             0,
             "null slot becomes a callable stub"
+        );
+    }
+
+    /// Per-slot method stubs must be distinguishable by address, and the
+    /// memory-manager table's memset slot must actually clear memory.
+    #[test]
+    fn method_stubs_bind_semantics_by_table_and_offset() {
+        let mut machine = machine_from_minimal_archive();
+        // Distinct addresses per slot and per table kind.
+        assert_ne!(
+            NicaiMachine::method_stub_address(METHOD_KIND_GENERIC, 0x214),
+            NicaiMachine::method_stub_address(METHOD_KIND_MEMORY, 0x214),
+            "same offset in different tables must not collide"
+        );
+        assert_ne!(
+            NicaiMachine::method_stub_address(METHOD_KIND_MEMORY, 0x9c),
+            NicaiMachine::method_stub_address(METHOD_KIND_MEMORY, 0xa0),
+            "different offsets must not collide"
+        );
+        // memset(ptr, val, len) through the memory table.
+        let buf = machine.allocate(16);
+        machine.memory.w32(buf, 0xFFFF_FFFF);
+        machine.cpu.reg_set(Mode::User, 0, buf);
+        machine.cpu.reg_set(Mode::User, 1, 0xAB);
+        machine.cpu.reg_set(Mode::User, 2, 8);
+        machine
+            .handle_method_stub(NicaiMachine::method_stub_address(METHOD_KIND_MEMORY, 0x214) & !1);
+        assert_eq!(machine.register(0), buf, "memset returns the pointer");
+        assert_eq!(machine.memory.r8(buf), 0xAB, "memset fills the buffer");
+        // A generic slot with the same offset must not touch memory.
+        machine.memory.w32(buf, 0xFFFF_FFFF);
+        machine.cpu.reg_set(Mode::User, 0, buf);
+        machine.cpu.reg_set(Mode::User, 1, 0xAB);
+        machine.cpu.reg_set(Mode::User, 2, 8);
+        machine
+            .handle_method_stub(NicaiMachine::method_stub_address(METHOD_KIND_GENERIC, 0x214) & !1);
+        assert_eq!(
+            machine.memory.r32(buf),
+            0xFFFF_FFFF,
+            "generic slots must not perform memset"
         );
     }
 

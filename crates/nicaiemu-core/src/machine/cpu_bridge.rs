@@ -8,8 +8,9 @@ use super::{
     arm_blx_immediate_target, fixed_manager_specs, service_trace_enabled, thumb_add_pc_target,
     NicaiMachine, APP_STORE_MANAGER, EXIT_ADDRESS, FIXED_GAMEOLD_OBJECT_SERVICE,
     FIXED_GAMEOLD_REGION_SERVICE, FIXED_MANAGER_GET, FIXED_MANAGER_INIT, LOG_NOOP_SERVICE,
-    MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE, NATIVE_DISPATCH_SERVICE,
-    NATIVE_SYSTEM_TIME_SERVICE, SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
+    MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE, METHOD_STUB_BASE, METHOD_STUB_KINDS,
+    METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SERVICE_BASE,
+    SERVICE_SIZE, TABLE_STRIDE,
 };
 
 impl NicaiMachine {
@@ -304,6 +305,13 @@ impl NicaiMachine {
             self.return_from_service();
             return Ok(());
         }
+        if (METHOD_STUB_BASE..METHOD_STUB_BASE + METHOD_STUB_KINDS * METHOD_STUB_STRIDE)
+            .contains(&address)
+        {
+            self.handle_method_stub(address);
+            self.return_from_service();
+            return Ok(());
+        }
         if (FIXED_MANAGER_INIT..FIXED_MANAGER_INIT + fixed_manager_specs().len() as u32 * 4)
             .contains(&address)
         {
@@ -312,12 +320,6 @@ impl NicaiMachine {
             let destination = self.register(0);
             if destination != 0 {
                 self.populate_table(destination, SERVICE_BASE + TABLE_STRIDE * group, count);
-            }
-            if std::env::var_os("CBE_TRACE").is_some() {
-                eprintln!(
-                    "[mgr-init] index={index} group={group} dest=0x{destination:08X} lr=0x{:08X}",
-                    self.register(reg::LR)
-                );
             }
             self.set_result(destination);
             self.return_from_service();

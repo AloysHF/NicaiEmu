@@ -6,8 +6,10 @@ use armv4t_emu::{reg, Memory};
 use super::super::{
     game_service_string_uses_wide_length, signed_coord, NicaiMachine, DREAM_FACTORY_FORMAT_BUFFER,
     DREAM_FACTORY_FORMAT_BUFFER_SIZE, DREAM_FACTORY_MEMORY_BLOCK_SLOT, DREAM_FACTORY_PACKAGE_SLOT,
-    FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, NATIVE_DISPATCH_SERVICE,
-    NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE, TABLE_STRIDE,
+    FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, METHOD_KIND_GENERIC,
+    METHOD_KIND_MEMORY, METHOD_STUB_BASE, METHOD_STUB_KINDS, METHOD_STUB_STRIDE,
+    NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE,
+    TABLE_STRIDE,
 };
 
 fn rect_contains_point(left: i32, top: i32, right: i32, bottom: i32, x: i32, y: i32) -> bool {
@@ -622,16 +624,102 @@ impl NicaiMachine {
         }
     }
 
-    /// Fill the null word-slots of a guest object with a callable dispatch
-    /// stub so later indirect calls through it land on executable code
-    /// instead of zero.  Already-populated slots are left alone.
+    /// Address of the per-slot method stub for `offset` bytes into a guest
+    /// object of the given table kind.  The low bit is set so a `bx` stays
+    /// in Thumb mode.
+    pub(crate) fn method_stub_address(kind: u32, offset: u32) -> u32 {
+        (METHOD_STUB_BASE
+            + (kind % METHOD_STUB_KINDS) * METHOD_STUB_STRIDE
+            + (offset % METHOD_STUB_STRIDE))
+            | 1
+    }
+
+    /// Fill the null word-slots of a guest object with callable per-slot
+    /// method stubs so later indirect calls through it land on executable
+    /// code with known semantics instead of zero.  Already-populated slots
+    /// are left alone.
     fn fill_zero_method_slots(&mut self, obj: u32, size: u32) {
         if obj == 0 {
             return;
         }
         for offset in (0..size).step_by(4) {
             if self.memory.r32(obj + offset) == 0 {
-                self.memory.w32(obj + offset, NATIVE_DISPATCH_SERVICE | 1);
+                self.memory.w32(
+                    obj + offset,
+                    Self::method_stub_address(METHOD_KIND_GENERIC, offset),
+                );
+            }
+        }
+    }
+
+    /// Dispatch a per-slot object method.  `stub` is the aligned stub address;
+    /// the table kind and the byte offset of the slot are encoded in it.  The
+    /// memory-manager table (id 143) documents alloc/free/memset at
+    /// 0x9c/0xa0/0x214; everything else behaves like the reference's
+    /// `h_unimpl` and returns zero.
+    pub(crate) fn handle_method_stub(&mut self, stub: u32) {
+        let rel = stub.wrapping_sub(METHOD_STUB_BASE);
+        let kind = rel / METHOD_STUB_STRIDE;
+        let offset = rel % METHOD_STUB_STRIDE;
+        let r0 = self.register(0);
+        let r1 = self.register(1);
+        let r2 = self.register(2);
+        match (kind, offset) {
+            // memset(ptr, val, len) — mirrors h_old_memset, including its
+            // 4 MiB length clamp.  Only the memory-manager table owns this
+            // slot; a generic table with the same offset is left alone.
+            (METHOD_KIND_MEMORY, 0x214) => {
+                if r0 != 0 && (1..=0x40_0000).contains(&r2) {
+                    let bytes = vec![r1 as u8; r2 as usize];
+                    self.memory.write_bytes(r0, &bytes);
+                }
+                self.set_result(r0);
+            }
+            // alloc(size)
+            (METHOD_KIND_MEMORY, 0x9c) => {
+                let block = if r0 == 0 { 0 } else { self.allocate(r0) };
+                self.set_result(block);
+            }
+            // free(ptr)
+            (METHOD_KIND_MEMORY, 0xa0) => {
+                self.set_result(0);
+            }
+            _ => {
+                // Unlisted slots keep the calling convention the shared stub
+                // used to infer: a pointer-shaped first argument is an object
+                // method and returns zero (the reference's `h_unimpl`), while
+                // a plain id echoes itself and an r1 block size marks an
+                // object constructor whose block comes back through the
+                // caller's stack slots.
+                let code_start = self.executable.code_address();
+                let code_end = code_start.saturating_add(self.executable.code_image_size);
+                let data_start = self.executable.data_address();
+                let data_end = data_start.saturating_add(self.executable.data_image_size);
+                let pointer_shaped = (code_start..code_end).contains(&r0)
+                    || (data_start..data_end).contains(&r0)
+                    || (HEAP_BASE..HEAP_BASE + HEAP_SIZE as u32).contains(&r0);
+                if (16..=0x1000).contains(&r1) {
+                    let block = self.allocate(r1);
+                    let sp = self.register(reg::SP);
+                    if block != 0 && sp != 0 {
+                        self.memory.w32(sp + 68, block);
+                    }
+                    self.set_result(block);
+                } else if pointer_shaped {
+                    self.set_result(0);
+                } else if r1 == 1 {
+                    // Constructor-shaped call through an id: hand back a
+                    // callable stub via the caller's `ptr - 52` slot.
+                    let stub = NATIVE_DISPATCH_SERVICE | 1;
+                    let sp = self.register(reg::SP);
+                    if sp != 0 {
+                        self.memory.w32(sp + 68, stub.wrapping_add(52));
+                        self.memory.w32(sp + 36, stub);
+                    }
+                    self.set_result(stub);
+                } else {
+                    self.set_result(r0);
+                }
             }
         }
     }
@@ -652,11 +740,14 @@ impl NicaiMachine {
                 if self.native_system_info == 0 {
                     self.native_system_info = self.allocate(0x400);
                     let info = self.native_system_info;
-                    // Fill every slot with a callable dispatch stub so guest
+                    // Fill every slot with a per-slot callable stub so guest
                     // code that indexes unlisted offsets still gets a valid
-                    // function pointer instead of a null call.
+                    // function pointer with known semantics.
                     for offset in (0..0x400u32).step_by(4) {
-                        self.memory.w32(info + offset, NATIVE_DISPATCH_SERVICE | 1);
+                        self.memory.w32(
+                            info + offset,
+                            Self::method_stub_address(METHOD_KIND_MEMORY, offset),
+                        );
                     }
                     self.memory
                         .w32(info + 0x9c, SERVICE_BASE + TABLE_STRIDE * 2 + 13 * 4);
@@ -684,24 +775,18 @@ impl NicaiMachine {
                         self.memory
                             .w32(info + offset, NATIVE_SYSTEM_TIME_SERVICE + index * 4);
                     }
+                    // 0xf0 is the native-dispatch entry the guest routes
+                    // arbitrary ids through; it must stay the shared dispatch
+                    // stub rather than a per-slot method.
                     self.memory.w32(info + 0xf0, NATIVE_DISPATCH_SERVICE | 1);
-                    // Method slot 0xC0 is read by the shared big-endian
-                    // template's object dispatcher. The reference layout
-                    // leaves it sparse, but the guest calls it directly.
+                    // 0xC0 is read by the shared big-endian template as a
+                    // dispatch-style entry point.
                     self.memory.w32(info + 0xC0, NATIVE_DISPATCH_SERVICE | 1);
-                    // The shared template indexes a BSS pointer at 0x043F98DC
-                    // as a base for method-table lookups. Seed it with the
-                    // system-info block so those lookups land on real stubs.
                     // The shared template indexes a BSS method table through
-                    // a pointer at 0x043F98DC.  Fill any still-null slots with
-                    // a callable stub so indirect calls don't jump to zero.
+                    // a pointer at 0x043F98DC; fill its null slots too.
                     let table = self.memory.r32(0x043F98DC);
                     if table != 0 {
-                        for offset in (0..0x400u32).step_by(4) {
-                            if self.memory.r32(table + offset) == 0 {
-                                self.memory.w32(table + offset, NATIVE_DISPATCH_SERVICE | 1);
-                            }
-                        }
+                        self.fill_zero_method_slots(table, 0x400);
                     }
                 }
                 self.memory.w32(output, self.native_system_info);
