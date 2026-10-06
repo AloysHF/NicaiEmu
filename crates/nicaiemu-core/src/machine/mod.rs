@@ -687,6 +687,11 @@ pub struct NicaiMachine {
     /// Cached buffer returned by DF_DataPackage_GetFullPaths.
     #[serde(skip, default)]
     data_package_path_buffer: u32,
+    /// Cached DF map render/scroll buffers handed out by F_4 indices 12/11.
+    #[serde(skip, default)]
+    df_render_buffer: u32,
+    #[serde(skip, default)]
+    df_vscroll_buffer: u32,
     /// Deferred guest callbacks (billing results, payment prompts, …) that
     /// the firmware delivers after the initiating service returns, each
     /// tagged so CancelSms can drop only the SMS results.
@@ -857,6 +862,8 @@ impl NicaiMachine {
             heap_allocations: BTreeMap::new(),
             auto_objects: BTreeMap::new(),
             data_package_path_buffer: 0,
+            df_render_buffer: 0,
+            df_vscroll_buffer: 0,
             pending_callbacks: VecDeque::new(),
             billing_reg: BTreeMap::new(),
             free_heap_blocks: Vec::new(),
@@ -1715,6 +1722,8 @@ impl NicaiMachine {
             heap_allocations: BTreeMap::new(),
             auto_objects: BTreeMap::new(),
             data_package_path_buffer: 0,
+            df_render_buffer: 0,
+            df_vscroll_buffer: 0,
             pending_callbacks: VecDeque::new(),
             billing_reg: BTreeMap::new(),
             free_heap_blocks: Vec::new(),
@@ -3378,6 +3387,16 @@ mod tests {
             0,
             "textbox method slot installed"
         );
+
+        // F_4 getters hand out persistent zero-filled map buffers instead
+        // of zero, so callers' next method load has a real target.
+        machine.handle_df_engine_service(12);
+        let render = machine.register(0);
+        assert_ne!(render, 0, "render buffer allocated");
+        machine.handle_df_engine_service(12);
+        assert_eq!(machine.register(0), render, "buffer is cached");
+        machine.handle_df_engine_service(11);
+        assert_ne!(machine.register(0), 0, "vscroll buffer allocated");
     }
 
     /// Per-slot method stubs must be distinguishable by address, and the

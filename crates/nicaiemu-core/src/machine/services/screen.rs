@@ -83,6 +83,26 @@ impl NicaiMachine {
                 let capacity = self.register(1);
                 self.initialize_data_package(package, capacity);
             }
+            // F_4 map-buffer plumbing: the inits create the engine buffers
+            // and the getters hand them out on demand.  Returning zero left
+            // callers with a NULL buffer whose next method load jumped
+            // through a bx thunk to 0x00000000.
+            1 => {
+                self.ensure_df_render_buffer();
+                self.set_result(0);
+            }
+            2 => {
+                self.ensure_df_vscroll_buffer();
+                self.set_result(0);
+            }
+            11 => {
+                let buffer = self.ensure_df_vscroll_buffer();
+                self.set_result(buffer);
+            }
+            12 => {
+                let buffer = self.ensure_df_render_buffer();
+                self.set_result(buffer);
+            }
             // F_4 exposes the same initDF* builders as the gameold method
             // table (F_0 slots 0x12c / 0x13c / 0x1b4).  The service path
             // used to return zero without building the object, so callers
@@ -99,5 +119,33 @@ impl NicaiMachine {
             }
             _ => self.set_result(0),
         }
+    }
+
+    /// Create-on-demand: the DF map render buffer the F_4 getter returns.
+    /// Sized for a full 240x400 RGB565 frame with headroom; zero-filled so
+    /// guest field reads see a cleared structure.
+    fn ensure_df_render_buffer(&mut self) -> u32 {
+        if self.df_render_buffer == 0 {
+            let buffer = self.allocate(0x30000);
+            if buffer != 0 {
+                let zeros = vec![0u8; 0x30000];
+                self.memory.write_bytes(buffer, &zeros);
+            }
+            self.df_render_buffer = buffer;
+        }
+        self.df_render_buffer
+    }
+
+    /// Create-on-demand: the scene scroll buffer (smaller working set).
+    fn ensure_df_vscroll_buffer(&mut self) -> u32 {
+        if self.df_vscroll_buffer == 0 {
+            let buffer = self.allocate(0x10000);
+            if buffer != 0 {
+                let zeros = vec![0u8; 0x10000];
+                self.memory.write_bytes(buffer, &zeros);
+            }
+            self.df_vscroll_buffer = buffer;
+        }
+        self.df_vscroll_buffer
     }
 }
