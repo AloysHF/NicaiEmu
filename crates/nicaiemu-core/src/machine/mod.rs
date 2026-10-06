@@ -960,6 +960,9 @@ impl NicaiMachine {
             .write_file(DATA_PACKAGE_CBE_PATH, archive.bytes().to_vec());
         // Resolve the default Auto orientation from the content-identity profile.
         machine.effective_orientation = orientation_for_archive(archive.bytes());
+        // Sidecar files shipped next to the CBE (pay kernels, save records,
+        // update data) stand in for the device filesystem.
+        machine.virtual_fs.set_host_dir(archive.path().parent());
         Ok(machine)
     }
 
