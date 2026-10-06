@@ -1083,79 +1083,100 @@ impl NicaiMachine {
         let output = self.memory.r32(argument);
         let handle = self.memory.r32(argument + 4);
         let size = self.memory.r32(argument + 8);
-        if output == 0 || size < 4 {
+        // Results are written as u32 for size >= 4 and u16 for size 2..3: the
+        // shared template's measure-call marshals a 2-byte result slot and
+        // reads it back after the request returns.
+        if output == 0 || size < 2 {
             return;
         }
-        self.memory.w32(output, 0);
-        match handle {
+        let value = match handle {
             0x8f => {
                 if self.native_system_info == 0 {
-                    self.native_system_info = self.allocate(0x400);
-                    let info = self.native_system_info;
-                    // Fill every slot with a per-slot callable stub so guest
-                    // code that indexes unlisted offsets still gets a valid
-                    // function pointer with known semantics.
-                    for offset in (0..0x400u32).step_by(4) {
-                        self.memory.w32(
-                            info + offset,
-                            Self::method_stub_address(METHOD_KIND_MEMORY, offset),
-                        );
-                    }
-                    self.memory
-                        .w32(info + 0x9c, SERVICE_BASE + TABLE_STRIDE * 2 + 13 * 4);
-                    self.memory
-                        .w32(info + 0xa0, SERVICE_BASE + TABLE_STRIDE * 2 + 14 * 4);
-                    self.memory
-                        .w32(info + 0x24, SERVICE_BASE + TABLE_STRIDE * 4 + 9 * 4);
-                    self.memory
-                        .w32(info + 0x58, SERVICE_BASE + TABLE_STRIDE * 4 + 19 * 4);
-                    self.memory
-                        .w32(info + 0x70, SERVICE_BASE + TABLE_STRIDE * 4 + 5 * 4);
-                    self.memory
-                        .w32(info + 0x74, SERVICE_BASE + TABLE_STRIDE * 4 + 5 * 4);
-                    self.memory
-                        .w32(info + 0x78, SERVICE_BASE + TABLE_STRIDE * 4 + 6 * 4);
-                    self.populate_table(info + 0x20c, SERVICE_BASE + TABLE_STRIDE * 6, 22);
-                    for (offset, index) in [
-                        (0xa4, 2),
-                        (0xa8, 1),
-                        (0xac, 0),
-                        (0xb0, 3),
-                        (0xb4, 4),
-                        (0xb8, 5),
-                    ] {
-                        self.memory
-                            .w32(info + offset, NATIVE_SYSTEM_TIME_SERVICE + index * 4);
-                    }
-                    // 0xf0 is the native-dispatch entry the guest routes
-                    // arbitrary ids through; it must stay the shared dispatch
-                    // stub rather than a per-slot method.
-                    self.memory.w32(info + 0xf0, NATIVE_DISPATCH_SERVICE | 1);
-                    // 0xC0 is read by the shared big-endian template as a
-                    // dispatch-style entry point.
-                    self.memory.w32(info + 0xC0, NATIVE_DISPATCH_SERVICE | 1);
-                    // The shared template indexes a BSS method table through
-                    // a pointer at 0x043F98DC; fill its null slots too.
-                    let table = self.memory.r32(0x043F98DC);
-                    if table != 0 {
-                        self.fill_zero_method_slots(table, 0x400);
-                    }
+                    let info = self.build_native_system_info();
+                    self.native_system_info = info;
                 }
-                self.memory.w32(output, self.native_system_info);
+                Some(self.native_system_info)
             }
             0x8e => {
                 if self.native_property_info == 0 {
-                    self.native_property_info = self.allocate(0x100);
-                    self.memory.w32(
-                        self.native_property_info + 0x14,
-                        NATIVE_DISPATCH_SERVICE | 1,
-                    );
+                    let info = self.allocate(0x100);
+                    self.memory.w32(info + 0x14, NATIVE_DISPATCH_SERVICE | 1);
+                    self.native_property_info = info;
                 }
-                self.memory.w32(output, self.native_property_info);
+                Some(self.native_property_info)
             }
-            0x41a => self.memory.w32(output, u32::MAX),
-            _ => {}
+            0x41a => Some(u32::MAX),
+            // Shared-template measurement request (id computed as 0x7f << 3):
+            // its result feeds the render loop's terminate check.  A stable
+            // zero ends the loop instead of the stack being eaten by the
+            // stale stack-slot value; unknown handles keep the firmware's
+            // zero result.
+            _ => Some(0),
+        };
+        let Some(value) = value else {
+            return;
+        };
+        if size >= 4 {
+            self.memory.w32(output, value);
+        } else {
+            self.memory.w16(output, value as u16);
         }
+    }
+
+    /// One-time native system-info object: every slot is a callable stub so
+    /// sparse guest indexing stays off NULL, with the known firmware slots
+    /// rebound to their real services.
+    fn build_native_system_info(&mut self) -> u32 {
+        let info = self.allocate(0x400);
+        // Fill every slot with a per-slot callable stub so guest
+        // code that indexes unlisted offsets still gets a valid
+        // function pointer with known semantics.
+        for offset in (0..0x400u32).step_by(4) {
+            self.memory.w32(
+                info + offset,
+                Self::method_stub_address(METHOD_KIND_MEMORY, offset),
+            );
+        }
+        self.memory
+            .w32(info + 0x9c, SERVICE_BASE + TABLE_STRIDE * 2 + 13 * 4);
+        self.memory
+            .w32(info + 0xa0, SERVICE_BASE + TABLE_STRIDE * 2 + 14 * 4);
+        self.memory
+            .w32(info + 0x24, SERVICE_BASE + TABLE_STRIDE * 4 + 9 * 4);
+        self.memory
+            .w32(info + 0x58, SERVICE_BASE + TABLE_STRIDE * 4 + 19 * 4);
+        self.memory
+            .w32(info + 0x70, SERVICE_BASE + TABLE_STRIDE * 4 + 5 * 4);
+        self.memory
+            .w32(info + 0x74, SERVICE_BASE + TABLE_STRIDE * 4 + 5 * 4);
+        self.memory
+            .w32(info + 0x78, SERVICE_BASE + TABLE_STRIDE * 4 + 6 * 4);
+        self.populate_table(info + 0x20c, SERVICE_BASE + TABLE_STRIDE * 6, 22);
+        for (offset, index) in [
+            (0xa4, 2),
+            (0xa8, 1),
+            (0xac, 0),
+            (0xb0, 3),
+            (0xb4, 4),
+            (0xb8, 5),
+        ] {
+            self.memory
+                .w32(info + offset, NATIVE_SYSTEM_TIME_SERVICE + index * 4);
+        }
+        // 0xf0 is the native-dispatch entry the guest routes
+        // arbitrary ids through; it must stay the shared dispatch
+        // stub rather than a per-slot method.
+        self.memory.w32(info + 0xf0, NATIVE_DISPATCH_SERVICE | 1);
+        // 0xC0 is read by the shared big-endian template as a
+        // dispatch-style entry point.
+        self.memory.w32(info + 0xC0, NATIVE_DISPATCH_SERVICE | 1);
+        // The shared template indexes a BSS method table through
+        // a pointer at 0x043F98DC; fill its null slots too.
+        let table = self.memory.r32(0x043F98DC);
+        if table != 0 {
+            self.fill_zero_method_slots(table, 0x400);
+        }
+        info
     }
 
     pub(crate) fn handle_game_util_service(&mut self, index: u32) {

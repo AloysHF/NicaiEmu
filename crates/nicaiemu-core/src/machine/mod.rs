@@ -3246,6 +3246,42 @@ mod tests {
         );
     }
 
+    /// The native interface request honours two-byte result slots: the
+    /// shared template's measure-call marshals a u16 output and reads it
+    /// back, which is what terminates the render loop instead of letting
+    /// it eat the stack.  Four-byte slots keep the full-word writes.
+    #[test]
+    fn native_interface_request_writes_sized_results() {
+        let mut machine = machine_from_minimal_archive();
+        let record = machine.allocate(16);
+        let out = machine.allocate(4);
+        machine.memory.w32(out, 0xDEAD_BEEF);
+        machine.memory.w32(record, out);
+        machine.memory.w32(record + 4, 0x3f8);
+        machine.memory.w32(record + 8, 2);
+        machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+        machine.cpu.reg_set(Mode::User, 1, record);
+        machine.handle_native_dispatch_service();
+        assert_eq!(
+            machine.memory.r16(out),
+            0,
+            "u16 result slot receives the measure result"
+        );
+
+        let out4 = machine.allocate(4);
+        machine.memory.w32(record, out4);
+        machine.memory.w32(record + 4, 0x8f);
+        machine.memory.w32(record + 8, 4);
+        machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+        machine.cpu.reg_set(Mode::User, 1, record);
+        machine.handle_native_dispatch_service();
+        assert_ne!(
+            machine.memory.r32(out4),
+            0,
+            "system-info handle still writes a full word"
+        );
+    }
+
     /// Per-slot method stubs must be distinguishable by address, and the
     /// memory-manager table's memset slot must actually clear memory.
     #[test]
