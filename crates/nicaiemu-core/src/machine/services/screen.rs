@@ -4,7 +4,7 @@ use armv4t_emu::Memory;
 
 use super::super::{
     NicaiMachine, DREAM_FACTORY_MEMORY_BLOCK_SLOT, DREAM_FACTORY_PACKAGE_SLOT, MEMORY_BLOCK_PTR,
-    SCREEN_IS_IN_QUIT,
+    METHOD_KIND_GAMEOLD, SCREEN_IS_IN_QUIT,
 };
 
 impl NicaiMachine {
@@ -82,6 +82,20 @@ impl NicaiMachine {
                 let package = self.register(0);
                 let capacity = self.register(1);
                 self.initialize_data_package(package, capacity);
+            }
+            // F_4 exposes the same initDF* builders as the gameold method
+            // table (F_0 slots 0x12c / 0x13c / 0x1b4).  The service path
+            // used to return zero without building the object, so callers
+            // stored a NULL handle and crashed on the first method call
+            // through their bx thunk.  Route to the shared implementations.
+            3 | 7 | 9 => {
+                let slot = match index {
+                    3 => 0x012c, // initDFPictureLibrary
+                    7 => 0x013c, // initDFWindows
+                    _ => 0x01b4, // initDFActor
+                };
+                let stub = Self::method_stub_address(METHOD_KIND_GAMEOLD, slot) & !1;
+                self.handle_method_stub(stub);
             }
             _ => self.set_result(0),
         }

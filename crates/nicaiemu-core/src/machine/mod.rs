@@ -3336,6 +3336,38 @@ mod tests {
         );
     }
 
+    /// The DF-engine service path (group 11) builds the same objects as
+    /// the gameold method-table slots: returning zero left callers with a
+    // NULL handle whose first method call jumped through a NULL thunk.
+    #[test]
+    fn df_engine_init_services_build_the_object_graph() {
+        let mut machine = machine_from_minimal_archive();
+
+        // idx 9 = initDFActor: installs the actor method table at 0x10..0x28.
+        let actor = machine.allocate(0x40);
+        machine.cpu.reg_set(Mode::User, 0, actor);
+        machine.cpu.reg_set(Mode::User, 1, 7);
+        machine.cpu.reg_set(Mode::User, 2, 9);
+        machine.handle_df_engine_service(9);
+        assert_eq!(machine.register(0), actor, "actor pointer echoed");
+        assert_ne!(
+            machine.memory.r32(actor + 0x10),
+            0,
+            "actor method slot installed"
+        );
+
+        // idx 3 = initDFPictureLibrary: installs picture methods at 0x18..0x50.
+        let lib = machine.allocate(0x60);
+        machine.cpu.reg_set(Mode::User, 0, lib);
+        machine.cpu.reg_set(Mode::User, 1, 4);
+        machine.handle_df_engine_service(3);
+        assert_ne!(
+            machine.memory.r32(lib + 0x18),
+            0,
+            "picture-library method slot installed"
+        );
+    }
+
     /// Per-slot method stubs must be distinguishable by address, and the
     /// memory-manager table's memset slot must actually clear memory.
     #[test]
