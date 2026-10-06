@@ -687,6 +687,14 @@ pub struct NicaiMachine {
     /// Cached buffer returned by DF_DataPackage_GetFullPaths.
     #[serde(skip, default)]
     data_package_path_buffer: u32,
+    /// Deferred guest callbacks (billing results, payment prompts, …) that
+    /// the firmware delivers after the initiating service returns, each
+    /// tagged so CancelSms can drop only the SMS results.
+    #[serde(skip, default)]
+    pending_callbacks: VecDeque<(u32, Vec<u32>, &'static str)>,
+    /// Per-app billing registration state: (status, used).
+    #[serde(skip, default)]
+    billing_reg: BTreeMap<u16, (u8, u8)>,
     #[serde(skip, default)]
     free_heap_blocks: Vec<(u32, u32)>,
     app_main: u32,
@@ -849,6 +857,8 @@ impl NicaiMachine {
             heap_allocations: BTreeMap::new(),
             auto_objects: BTreeMap::new(),
             data_package_path_buffer: 0,
+            pending_callbacks: VecDeque::new(),
+            billing_reg: BTreeMap::new(),
             free_heap_blocks: Vec::new(),
             app_main: 0,
             app_exit: 0,
@@ -1267,6 +1277,7 @@ impl NicaiMachine {
         let had_screen_before_timers =
             self.active_screen != 0 || self.pending_screen != 0 || !self.screen_stack.is_empty();
         self.dispatch_timers(instruction_limit)?;
+        self.dispatch_pending_callbacks(instruction_limit)?;
         if self.finish_halted_frame() {
             return Ok(());
         }
@@ -1699,6 +1710,8 @@ impl NicaiMachine {
             heap_allocations: BTreeMap::new(),
             auto_objects: BTreeMap::new(),
             data_package_path_buffer: 0,
+            pending_callbacks: VecDeque::new(),
+            billing_reg: BTreeMap::new(),
             free_heap_blocks: Vec::new(),
             app_main: 0,
             app_exit: 0,
@@ -3174,6 +3187,62 @@ mod tests {
             machine.memory.r32(obj + 8),
             0,
             "null slot becomes a callable stub"
+        );
+    }
+
+    /// Billing returns follow the firmware: RemainDay only counts method 3,
+    /// SendSpecSms accepts app id 14 and defers its result callback, and
+    /// CancelSms drops exactly the pending SMS results.
+    #[test]
+    fn billing_service_defers_and_cancels_result_callbacks() {
+        let mut machine = machine_from_minimal_archive();
+        // GetRemainDay: method 3 → one remaining day, other methods → none.
+        machine.cpu.reg_set(Mode::User, 1, 3);
+        machine.handle_billing_service(1);
+        assert_eq!(machine.register(0), 1);
+        machine.cpu.reg_set(Mode::User, 1, 1);
+        machine.handle_billing_service(1);
+        assert_eq!(machine.register(0), 0);
+
+        // A Thumb `bx lr` routine stands in for the guest callbacks.
+        let stack = STACK_BASE + STACK_SIZE as u32 - 0x200;
+        let sms_cb = machine.allocate(4);
+        let pay_cb = machine.allocate(4);
+        machine.memory.w16(sms_cb, 0x4770);
+        machine.memory.w16(pay_cb, 0x4770);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        // Callback pointers arrive Thumb-tagged (low bit set).
+        machine.memory.w32(stack + 8, sms_cb | 1); // SendSpecSms callback slot
+        machine.cpu.reg_set(Mode::User, 0, 14); // app id the firmware accepts
+        machine.cpu.reg_set(Mode::User, 2, 6);
+        machine.handle_billing_service(15);
+        assert_eq!(machine.register(0), 1, "SendSpecSms reports accepted");
+
+        // Pay parks its callback in r2 and reports success through it.
+        machine.cpu.reg_set(Mode::User, 2, pay_cb | 1);
+        machine.handle_billing_service(2);
+        assert_eq!(machine.register(0), 0);
+        assert_eq!(
+            machine.pending_callbacks.len(),
+            2,
+            "sms and pay results are queued"
+        );
+
+        // CancelSms removes only the SMS result; the pay result survives.
+        machine.handle_billing_service(16);
+        assert_eq!(machine.pending_callbacks.len(), 1);
+        assert_eq!(machine.pending_callbacks[0].2, "payResult");
+
+        // Boot parks the CPU in User mode; a blank machine would still be
+        // in the reset supervisor mode whose banked LR the callback never
+        // sees.
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let before = machine.instruction_count;
+        machine.dispatch_pending_callbacks(100_000).unwrap();
+        assert!(machine.pending_callbacks.is_empty());
+        assert!(
+            machine.instruction_count > before,
+            "the deferred callback actually executed"
         );
     }
 

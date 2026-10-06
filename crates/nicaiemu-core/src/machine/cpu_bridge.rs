@@ -420,6 +420,7 @@ impl NicaiMachine {
             9 => self.handle_network_service(index),
             10 => self.handle_game_util_service(index),
             11 => self.handle_df_engine_service(index),
+            12 => self.handle_billing_service(index),
             13 => self.handle_ucs2_service(index),
             14 => self.handle_screen_service(index),
             16 => self.handle_game_lcd_service(index),
@@ -468,6 +469,16 @@ impl NicaiMachine {
 
     pub(super) fn register(&self, register: armv4t_emu::reg::Reg) -> u32 {
         self.cpu.reg_get(Mode::User, register)
+    }
+
+    /// Firmware argument `n` in the AAPCS sense: the first four arrive in
+    /// r0..r3 and the rest are on the caller's stack.
+    pub(super) fn argument(&mut self, n: u32) -> u32 {
+        if n < 4 {
+            return self.register(n as u8);
+        }
+        let sp = self.register(reg::SP);
+        self.memory.r32(sp.wrapping_add((n - 4) * 4))
     }
 
     pub(super) fn set_result(&mut self, value: u32) {
