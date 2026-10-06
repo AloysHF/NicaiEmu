@@ -1303,7 +1303,12 @@ impl NicaiMachine {
             self.screen_initialized = false;
         }
         if self.active_screen == 0 {
-            if self.timers.iter().any(|timer| timer.active) {
+            // A screenless frame is legitimate while asynchronous work is
+            // still in flight: guest timers (already handled) and network
+            // responses whose callback is what registers the first screen.
+            // Bailing before that callback runs kills the boot flow on the
+            // same frame the request was issued.
+            if self.timers.iter().any(|timer| timer.active) || !self.net_events.is_empty() {
                 self.key_down = 0;
                 self.pointer.end_frame();
                 return Ok(());
@@ -1882,6 +1887,55 @@ mod tests {
         // Third tick fires completion.
         machine.dispatch_network_events(10_000).unwrap();
         assert!(machine.net_events.is_empty());
+    }
+
+    /// PostHttpData queues one offline completion that only reaches the
+    /// guest while the boot flow is still screenless: screen-holding
+    /// games treat the synchronous success as final, screenless booters
+    /// need the callback to build their first screen.
+    #[test]
+    fn network_post_completion_is_screenless_gated() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.set_user_register(3, (SERVICE_BASE + 0x8000) | 1);
+        machine.handle_network_service(4);
+        assert_eq!(machine.register(0), 1, "POST reports accepted");
+        assert_eq!(machine.net_events.len(), 1);
+        let event = &machine.net_events[0];
+        assert_eq!(event.event_type, 9, "offline completion code in r3");
+        assert!(event.screenless_only);
+        assert_eq!(event.delay_frames, 3);
+
+        // A screen presented before the delay elapses drops the completion.
+        machine.active_screen = 1;
+        machine.dispatch_network_events(10_000).unwrap();
+        assert!(
+            machine.net_events.is_empty(),
+            "dropped once a screen exists"
+        );
+
+        // Without a screen the completion fires once the delay drains.
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.set_user_register(3, (SERVICE_BASE + 0x8000) | 1);
+        machine.handle_network_service(4);
+        for _ in 0..4 {
+            machine.dispatch_network_events(10_000).unwrap();
+        }
+        assert!(machine.net_events.is_empty(), "delivered while screenless");
+    }
+
+    /// A screenless frame waits while network completions are in flight;
+    /// the callback they deliver is what registers the first screen.  The
+    /// bail only returns once the queue is empty.
+    #[test]
+    fn screenless_frame_waits_for_pending_network_events() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.queue_net_event(0, 0, 0, 0, (SERVICE_BASE + 0x8000) | 1, 0, 1, false);
+        machine.run_frame(10_000).unwrap();
+        machine.dispatch_network_events(10_000).unwrap();
+        machine.dispatch_network_events(10_000).unwrap();
+        assert!(machine.net_events.is_empty());
+        let error = machine.run_frame(10_000).unwrap_err();
+        assert!(error.to_string().contains("no active screen"));
     }
 
     #[test]

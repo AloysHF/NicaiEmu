@@ -171,6 +171,11 @@ impl VirtualFileSystem {
             return None;
         }
         let file = self.files.get(&open.path)?;
+        // A seek past the end is legal; reading there yields EOF (empty),
+        // matching fread, instead of panicking on an inverted slice range.
+        if open.position >= file.len() {
+            return Some(Vec::new());
+        }
         let end = open.position.saturating_add(size).min(file.len());
         let data = file[open.position..end].to_vec();
         open.position = end;
@@ -363,6 +368,17 @@ mod tests {
         let mut fs = VirtualFileSystem::default();
         assert_eq!(fs.open("../outside", "w", 0), -1);
         assert!(!fs.create_directory("../../outside"));
+    }
+
+    #[test]
+    fn read_past_the_end_returns_empty_like_fread() {
+        let mut fs = VirtualFileSystem::default();
+        let handle = fs.open("a.bin", "w+", 0);
+        assert!(handle >= 0);
+        assert_eq!(fs.write(handle as u32, b"1234"), Some(4));
+        // A seek past the end is legal; reading there is EOF, not a panic.
+        assert_eq!(fs.seek(handle as u32, 100, 0), Some(100));
+        assert_eq!(fs.read(handle as u32, 16), Some(Vec::new()));
     }
 
     #[test]
