@@ -3366,6 +3366,18 @@ mod tests {
             0,
             "picture-library method slot installed"
         );
+
+        // Game-LCD idx 33 = InitTextBox (F_12), same builder as gameold
+        // 0x11c: installs the textbox method table at 0x1c..0x34.
+        let box_ptr = machine.allocate(0x40);
+        machine.cpu.reg_set(Mode::User, 0, box_ptr);
+        machine.handle_game_lcd_service(33);
+        assert_eq!(machine.register(0), 14, "textbox type id");
+        assert_ne!(
+            machine.memory.r32(box_ptr + 0x1c),
+            0,
+            "textbox method slot installed"
+        );
     }
 
     /// Per-slot method stubs must be distinguishable by address, and the

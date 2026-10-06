@@ -6,7 +6,7 @@ use log::warn;
 
 use super::{
     clip_axis, image_payload, service_trace_enabled, signed_coord, NicaiMachine,
-    DREAM_FACTORY_PACKAGE_SLOT, HEAP_SIZE, SCREEN_IMAGE, SCREEN_IMAGE_STRUCT,
+    DREAM_FACTORY_PACKAGE_SLOT, HEAP_SIZE, METHOD_KIND_GAMEOLD, SCREEN_IMAGE, SCREEN_IMAGE_STRUCT,
 };
 use crate::image_decoder;
 
@@ -748,6 +748,13 @@ impl NicaiMachine {
             20 => {
                 let result = self.decode_resource_stream(self.register(0));
                 self.set_result(result);
+            }
+            // F_12 InitTextBox is the same builder as the gameold method
+            // slot (F_0 0x11c).  Returning zero left callers holding a
+            // NULL text box whose next method load jumped through NULL.
+            33 => {
+                let stub = Self::method_stub_address(METHOD_KIND_GAMEOLD, 0x011c) & !1;
+                self.handle_method_stub(stub);
             }
             _ => self.set_result(0),
         }
