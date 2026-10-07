@@ -27,7 +27,8 @@ by supported games.
   resource lookup, image decoding
 - **ARM/Thumb CPU emulation** — little- and big-endian execution, interworking branches
 - **Service bridge** — firmware-style API for memory, resources, display,
-  input, text, fixed-point game math, and packed-rectangle collision detection
+  input, text, little-endian game-data reads, fixed-point game math, and
+  packed-rectangle collision detection
 - **Guest filesystem** — sandboxed in-memory files used by CBE installers and
   file-backed resource packages
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction

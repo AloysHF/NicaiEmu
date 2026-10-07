@@ -13,6 +13,10 @@ use super::super::{
     SCREEN_IS_IN_QUIT, SERVICE_BASE, TABLE_STRIDE,
 };
 
+fn read_little_endian_short(memory: &mut impl Memory, address: u32) -> i16 {
+    i16::from_le_bytes([memory.r8(address), memory.r8(address.wrapping_add(1))])
+}
+
 fn rect_contains_point(left: i32, top: i32, right: i32, bottom: i32, x: i32, y: i32) -> bool {
     x >= left && x <= right && y >= top && y <= bottom
 }
@@ -290,9 +294,9 @@ impl NicaiMachine {
                 let buffer = self.register(0);
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
-                let value = self.memory.r16(buffer.wrapping_add(offset));
+                let value = read_little_endian_short(&mut self.memory, buffer.wrapping_add(offset));
                 self.memory.w32(cursor, offset.wrapping_add(2));
-                self.set_result(value as u32);
+                self.set_result(value as i32 as u32);
             }
             92 => {
                 let buffer = self.register(0);
@@ -1329,9 +1333,9 @@ impl NicaiMachine {
                 let buffer = self.register(0);
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
-                let value = self.memory.r16(buffer.wrapping_add(offset));
+                let value = read_little_endian_short(&mut self.memory, buffer.wrapping_add(offset));
                 self.memory.w32(cursor, offset.wrapping_add(2));
-                self.set_result(value as u32);
+                self.set_result(value as i32 as u32);
             }
             20 => {
                 let buffer = self.register(0);
@@ -1386,10 +1390,25 @@ impl NicaiMachine {
 
 #[cfg(test)]
 mod tests {
-    use super::{df_degree, df_sin, packed_rectangles_overlap, rect_contains_point};
+    use super::{
+        df_degree, df_sin, packed_rectangles_overlap, read_little_endian_short, rect_contains_point,
+    };
+    use crate::machine::memory::MachineMemory;
 
     fn pack(high: i16, low: i16) -> u32 {
         u32::from(low as u16) | (u32::from(high as u16) << 16)
+    }
+
+    #[test]
+    fn game_short_reads_are_little_endian_and_signed() {
+        for big_endian in [false, true] {
+            let mut memory = MachineMemory::new(big_endian);
+            memory.map(0x1000, 2, false);
+            memory.load(0x1000, &[0x19, 0x00]).unwrap();
+            assert_eq!(read_little_endian_short(&mut memory, 0x1000), 0x19);
+            memory.load(0x1000, &[0x00, 0x80]).unwrap();
+            assert_eq!(read_little_endian_short(&mut memory, 0x1000), i16::MIN);
+        }
     }
 
     #[test]
