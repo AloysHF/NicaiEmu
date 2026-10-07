@@ -132,7 +132,8 @@ impl NicaiMachine {
             return;
         }
         match index {
-            1..=3 | 9 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index),
+            1..=3 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index),
+            9 => self.handle_game_lcd_service(9),
             14 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(12),
             24 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(21),
             32 | 33 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index - 5),
@@ -265,6 +266,7 @@ impl NicaiMachine {
                 self.initialize_fixed_gameold_region();
             }
             80 => {
+                self.initialize_memory_block(MEMORY_BLOCK_PTR, 0x40_0000);
                 self.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, 0);
                 self.memory
                     .w32(DREAM_FACTORY_MEMORY_BLOCK_SLOT, MEMORY_BLOCK_PTR);
@@ -680,6 +682,10 @@ impl NicaiMachine {
             return;
         }
         match id {
+            4 => {
+                self.state = super::super::MachineState::Halted;
+                self.set_result(0);
+            }
             0x79e => {
                 if std::env::var_os("CBE_TRACE").is_some() {
                     eprintln!(
@@ -711,6 +717,58 @@ impl NicaiMachine {
                             );
                         }
                     }
+                    // Native DF tables omit two slots before their constructors.
+                    for (offset, group, index) in [
+                        (0x2c, 3, 11),
+                        (0x30, 3, 12),
+                        (0x38, 3, 14),
+                        (0xf0, 3, 60),
+                        (0xf4, 3, 61),
+                        (0xf8, 3, 62),
+                        (0xfc, 3, 63),
+                        (0x100, 3, 64),
+                        (0x104, 3, 65),
+                        (0x108, 3, 66),
+                        (0x10c, 3, 67),
+                        (0x110, 3, 68),
+                        (0x114, 3, 71),
+                        (0x124, 3, 75),
+                        (0x128, 11, 4),
+                        (0x134, 11, 7),
+                        (0x138, 3, 80),
+                        (0x13c, 3, 81),
+                        (0x144, 3, 83),
+                        (0x148, 3, 84),
+                        (0x14c, 3, 85),
+                        (0x150, 3, 86),
+                        (0x190, 3, 102),
+                        (0x1ac, 11, 9),
+                        (0x1b0, 3, 110),
+                    ] {
+                        let current = self.memory.r32(argument + offset);
+                        if current == 0
+                            || current == Self::method_stub_address(METHOD_KIND_MEMORY, offset)
+                        {
+                            self.memory.w32(
+                                argument + offset,
+                                SERVICE_BASE + TABLE_STRIDE * group + index * 4,
+                            );
+                        }
+                    }
+                }
+                self.set_result(0);
+            }
+            0x9c => {
+                if argument != 0 {
+                    let panel = self.memory.r32(argument);
+                    let kind = self.memory.r16(argument + 4) as u32;
+                    let rectangle = self.memory.r32(argument + 8);
+                    super::screen::invalidate_panel(
+                        &mut self.memory,
+                        panel,
+                        kind as i16,
+                        rectangle,
+                    );
                 }
                 self.set_result(0);
             }
@@ -857,7 +915,9 @@ impl NicaiMachine {
             );
         }
         match (kind, offset) {
+            (METHOD_KIND_GAMEOLD, 0x130) => self.initialize_record(),
             (METHOD_KIND_PICTURE, _) => self.handle_picture_library_method(offset),
+            (METHOD_KIND_ACTOR, _) => self.handle_actor_method(offset),
             (METHOD_KIND_TEXTBOX, _) => self.handle_textbox_method(offset),
             // memset(ptr, val, len) — mirrors h_old_memset, including its
             // 4 MiB length clamp.  Only the memory-manager table owns this
@@ -1055,8 +1115,9 @@ impl NicaiMachine {
                             .w32(a + off, Self::method_stub_address(METHOD_KIND_ACTOR, off));
                     }
                     for off in [4u32, 6, 8, 10] {
-                        self.memory.w32(a + off, 0);
+                        self.memory.w16(a + off, 0);
                     }
+                    self.memory.w32(a + 12, 0);
                 }
                 self.set_result(a);
             }
@@ -1064,7 +1125,9 @@ impl NicaiMachine {
             // table and method table at 0x28..0x44.
             (METHOD_KIND_GAMEOLD, 0x013c) => {
                 let p = r0;
-                let n = r5;
+                let stack = self.register(reg::SP);
+                let context = self.memory.r32(stack);
+                let n = self.memory.r32(stack + 4);
                 if p != 0 {
                     let table = if n != 0 { self.allocate(4 * n) } else { 0 };
                     self.memory.w32(p + 12, table);
@@ -1078,8 +1141,14 @@ impl NicaiMachine {
                     self.memory.w32(p + 8, n);
                     self.memory.w32(p + 24, r1);
                     self.memory.w32(p + 28, r2);
+                    if n != 0 {
+                        let first = self.memory.r32(table);
+                        self.memory.w32(first, r1);
+                        self.memory.w32(first + 4, r2);
+                        self.memory.w32(p + 4, 1);
+                    }
                     self.memory.w32(p + 16, r3);
-                    self.memory.w32(p + 20, r4);
+                    self.memory.w32(p + 20, context);
                     for off in (0x28u32..=0x44).step_by(4) {
                         self.memory
                             .w32(p + off, Self::method_stub_address(METHOD_KIND_PANEL, off));
@@ -1362,12 +1431,38 @@ impl NicaiMachine {
                 Self::method_stub_address(METHOD_KIND_MEMORY, offset),
             );
         }
+        for (offset, index) in [(0x2c, 11), (0x30, 12), (0x38, 14)] {
+            self.memory
+                .w32(info + offset, SERVICE_BASE + TABLE_STRIDE * 3 + index * 4);
+        }
+        for offset in [0xd4, 0xd8, 0xdc, 0xe0, 0xe4] {
+            self.memory.w32(
+                info + offset,
+                Self::method_stub_address(METHOD_KIND_GAMEOLD, offset),
+            );
+        }
+        for (offset, group, index) in [
+            (0x114, 3, 71),
+            (0x124, 3, 75),
+            (0x128, 11, 4),
+            (0x134, 11, 7),
+            (0x138, 3, 80),
+            (0x13c, 3, 81),
+            (0x190, 3, 102),
+            (0x1ac, 11, 9),
+            (0x1b0, 3, 110),
+        ] {
+            self.memory.w32(
+                info + offset,
+                SERVICE_BASE + TABLE_STRIDE * group + index * 4,
+            );
+        }
         self.memory
             .w32(info + 0x9c, SERVICE_BASE + TABLE_STRIDE * 2 + 13 * 4);
         self.memory
             .w32(info + 0xa0, SERVICE_BASE + TABLE_STRIDE * 2 + 14 * 4);
         self.memory
-            .w32(info + 0x24, SERVICE_BASE + TABLE_STRIDE * 4 + 9 * 4);
+            .w32(info + 0x24, SERVICE_BASE + TABLE_STRIDE * 3 + 9 * 4);
         self.memory
             .w32(info + 0x58, SERVICE_BASE + TABLE_STRIDE * 4 + 19 * 4);
         self.memory

@@ -201,6 +201,20 @@ pub(crate) fn named_package_resources(
     start: usize,
     size: usize,
 ) -> Vec<HostResourcePackage> {
+    let mut packages = named_package_resources_at(data, start, size, 8, 12);
+    if packages.is_empty() {
+        packages = named_package_resources_at(data, start, size, 4, 8);
+    }
+    packages
+}
+
+fn named_package_resources_at(
+    data: &[u8],
+    start: usize,
+    size: usize,
+    count_offset: usize,
+    names_offset: usize,
+) -> Vec<HostResourcePackage> {
     let read_u32 = |offset: usize| {
         data.get(offset..offset + 4)
             .and_then(|bytes| bytes.try_into().ok())
@@ -209,7 +223,7 @@ pub(crate) fn named_package_resources(
     let Some(header_size) = read_u32(start).map(|value| value as usize) else {
         return Vec::new();
     };
-    let Some(package_count) = read_u32(start + 8).map(|value| value as usize) else {
+    let Some(package_count) = read_u32(start + count_offset).map(|value| value as usize) else {
         return Vec::new();
     };
     if header_size < 8 || !(2..=256).contains(&package_count) {
@@ -223,13 +237,16 @@ pub(crate) fn named_package_resources(
         return Vec::new();
     }
 
-    let mut cursor = start + 12;
+    let mut cursor = start + names_offset;
     let mut packages = Vec::with_capacity(package_count - 1);
     for _ in 1..package_count {
         let Some(&name_length) = data.get(cursor) else {
             return Vec::new();
         };
         let name_length = name_length as usize;
+        if !(1..=96).contains(&name_length) {
+            return Vec::new();
+        }
         let Some(name_end) = cursor.checked_add(1 + name_length) else {
             return Vec::new();
         };
@@ -324,6 +341,16 @@ mod tests {
         assert_eq!(packages[0].name, "pkg");
         assert_eq!(packages[0].resources.len(), 2);
         assert_eq!(packages[0].resources[0].data, [0x11]);
+        assert_eq!(packages[0].resources[1].data, [0x22, 0x33]);
+        // The short directory puts the count immediately after its size.
+        data[0..4].copy_from_slice(&12u32.to_le_bytes());
+        data[4..8].copy_from_slice(&2u32.to_le_bytes());
+        data[8] = 3;
+        data[9..12].copy_from_slice(b"pkg");
+        data[12..16].copy_from_slice(&24u32.to_le_bytes());
+        let packages = named_package_resources(&data, 0, data.len());
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "pkg");
         assert_eq!(packages[0].resources[1].data, [0x22, 0x33]);
     }
 }

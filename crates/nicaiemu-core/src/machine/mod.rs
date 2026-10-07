@@ -1303,7 +1303,10 @@ impl NicaiMachine {
         if had_screen_before_timers && self.finish_screen_callback_frame() {
             return Ok(());
         }
-        if self.uses_native_dispatch_abi() || self.native_app_parser != 0 {
+        if (self.uses_native_dispatch_abi() || self.native_app_parser != 0)
+            && self.active_screen == 0
+            && self.pending_screen == 0
+        {
             self.key_down = 0;
             if let Some(event) = self.pending_key_events.pop_front() {
                 update_key_bits(
@@ -1313,9 +1316,11 @@ impl NicaiMachine {
                     event.pressed,
                 );
             }
-            let result = self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit);
+            self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit)?;
             self.key_down = 0;
-            return result;
+            if self.active_screen == 0 && self.pending_screen == 0 {
+                return Ok(());
+            }
         }
         if self.pending_screen != 0 && self.pending_screen != self.active_screen {
             self.active_screen = self.pending_screen;
@@ -1394,7 +1399,10 @@ impl NicaiMachine {
             if self.finish_screen_callback_frame() {
                 return Ok(());
             }
-            self.key_down = 0;
+            // Native DF logic polls the press edge during its idle update.
+            if self.native_app_parser == 0 {
+                self.key_down = 0;
+            }
             if self.pending_screen != 0 && self.pending_screen != screen {
                 self.pointer.end_frame();
                 return Ok(());
@@ -3455,6 +3463,59 @@ mod tests {
     }
 
     #[test]
+    fn record_sections_roundtrip_little_endian_values_in_both_guest_byte_orders() {
+        fn call(machine: &mut NicaiMachine, object: u32, method: u32, args: [u32; 2]) -> u32 {
+            machine.cpu.reg_set(Mode::User, 0, object);
+            machine.cpu.reg_set(Mode::User, 1, args[0]);
+            machine.cpu.reg_set(Mode::User, 2, args[1]);
+            machine.handle_record_service(method);
+            machine.register(0)
+        }
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let object = machine.allocate(64);
+            let path = machine.allocate(32);
+            machine.memory.write_bytes(path, b"section-save.dat\0");
+            for (register, value) in [object, path, 32, 2].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, register as u8, value);
+            }
+            machine.initialize_record();
+            assert_eq!(call(&mut machine, object, 0, [0, 0]), 0);
+            assert_eq!(call(&mut machine, object, 3, [7, 0]), 1);
+            assert_eq!(call(&mut machine, object, 3, [4, 0]), 1);
+            assert_eq!(call(&mut machine, object, 3, [1, 0]), 0);
+            call(&mut machine, object, 7, [0, 0xab]);
+            call(&mut machine, object, 8, [0, 0xcdef]);
+            call(&mut machine, object, 9, [0, 0x12345678]);
+            assert_eq!(call(&mut machine, object, 9, [0, 1]), 0);
+            assert_eq!(machine.memory.r32(object + 20), 7);
+            assert_eq!(call(&mut machine, object, 1, [0, 0]), 1);
+            call(&mut machine, object, 2, [0, 0]);
+            assert_eq!(call(&mut machine, object, 0, [0, 0]), 1);
+            assert_eq!(machine.memory.r16(object + 12), 2);
+            assert_eq!(call(&mut machine, object, 4, [0, 0]), 0xab);
+            assert_eq!(call(&mut machine, object, 5, [0, 0]), 0xcdef);
+            assert_eq!(call(&mut machine, object, 6, [0, 0]), 0x12345678);
+            machine.memory.w32(object + 20, 0);
+            assert_eq!(call(&mut machine, object, 6, [1, 0]), 0);
+            assert_eq!(call(&mut machine, object, 6, [2, 0]), 0);
+            let bytes = machine.virtual_fs.read_file("section-save.dat").unwrap();
+            assert_eq!(
+                &bytes[..11],
+                &[2, 0, 7, 0, 0xab, 0xef, 0xcd, 0x78, 0x56, 0x34, 0x12]
+            );
+            machine
+                .virtual_fs
+                .write_file("section-save.dat", vec![2, 0, 255, 255]);
+            assert_eq!(call(&mut machine, object, 0, [0, 0]), 0);
+            assert_eq!(machine.memory.r16(object + 12), 0);
+        }
+    }
+
+    #[test]
     fn native_file_requests_create_write_reopen_and_read_in_both_byte_orders() {
         fn request(machine: &mut NicaiMachine, id: u32, words: [u32; 3]) -> u32 {
             let record = machine.allocate(16);
@@ -3747,6 +3808,138 @@ mod tests {
         machine.handle_game_service(1);
         assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0x1234);
         assert_eq!(machine.memory.r16(SCREEN_IMAGE + 2), 0x07e0);
+    }
+
+    #[test]
+    fn native_idle_logic_sees_press_edge_once() {
+        for native in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            machine.initialize_screen();
+            machine.state = MachineState::Ready;
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+            machine
+                .cpu
+                .reg_set(Mode::User, reg::SP, STACK_BASE + STACK_SIZE as u32);
+            let object = machine.allocate(64);
+            let screen = object + 24;
+            let logic = machine.allocate(24);
+            for (i, word) in [
+                0xb510, 0x1c04, 0x2906, 0xd103, 0x2020, 0x4b02, 0x4798, 0x6020, 0xbd10, 0x46c0,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                machine.memory.w16(logic + i as u32 * 2, word);
+            }
+            machine
+                .memory
+                .w32(logic + 20, SERVICE_BASE + TABLE_STRIDE * 3 + 11 * 4 | 1);
+            machine.memory.w32(screen + 8, logic | 1);
+            machine.pending_screen = screen;
+            machine.native_app_parser = if native { logic | 1 } else { 0 };
+            machine.set_key(5, true);
+            machine.run_frame(1000).unwrap();
+            assert_eq!(machine.memory.r32(object), u32::from(native));
+            machine.run_frame(1000).unwrap();
+            assert_eq!(
+                machine.memory.r32(object),
+                0,
+                "edge does not repeat on the next frame"
+            );
+        }
+    }
+
+    #[test]
+    fn native_invalidation_request_queues_the_guest_rectangle() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        let panel = machine.allocate(72);
+        let table = machine.allocate(4);
+        let rectangle = machine.allocate(8);
+        let queued = machine.allocate(8);
+        machine.memory.w32(panel + 8, 1);
+        machine.memory.w32(panel + 12, table);
+        machine.memory.w32(table, queued);
+        for (i, value) in [10, 20, 30, 40].into_iter().enumerate() {
+            machine.memory.w16(rectangle + i as u32 * 2, value);
+        }
+        let request = machine.allocate(12);
+        machine.memory.w32(request, panel);
+        machine.memory.w16(request + 4, 4);
+        machine.memory.w32(request + 8, rectangle);
+        machine.cpu.reg_set(Mode::User, 0, 0x9c);
+        machine.cpu.reg_set(Mode::User, 1, request);
+        machine.handle_native_dispatch_service();
+        assert_eq!(machine.memory.r32(panel + 4), 1);
+        for (i, value) in [10, 20, 30, 40].into_iter().enumerate() {
+            assert_eq!(machine.memory.r16(queued + i as u32 * 2), value);
+        }
+    }
+
+    #[test]
+    fn native_registered_screen_runs_callbacks_without_restarting_parser() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        machine.state = MachineState::Ready;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let object = machine.allocate(64);
+        let screen = object + 24;
+        let parser = machine.allocate(6);
+        let render = machine.allocate(8);
+        for (i, word) in [0x212a, 0x6001, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(parser + i as u32 * 2, word);
+        }
+        for (i, word) in [0x6901, 0x3101, 0x6101, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(render + i as u32 * 2, word);
+        }
+        machine.native_app_parser = parser | 1;
+        machine.memory.w32(screen + 12, render | 1);
+        machine.pending_screen = screen;
+        machine.run_frame(100).unwrap();
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object + 16), 2);
+        assert_eq!(machine.memory.r32(0), 0, "startup parser was not reinvoked");
+    }
+
+    #[test]
+    fn native_panel_traversal_calls_guest_logic_and_paint_once() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let context = machine.allocate(4);
+        let callback = machine.allocate(8);
+        for (i, word) in [0x6801, 0x3101, 0x6001, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(callback + i as u32 * 2, word);
+        }
+        let parent = machine.allocate(72);
+        let child = machine.allocate(72);
+        machine.memory.w32(parent + 36, child);
+        machine.memory.w32(child + 32, parent);
+        for panel in [parent, child] {
+            machine.memory.w32(panel + 16, context);
+            machine.memory.w32(panel + 20, context);
+            let table = machine.allocate(4);
+            let rectangle = machine.allocate(8);
+            machine.memory.w32(panel + 4, 1);
+            machine.memory.w32(panel + 8, 1);
+            machine.memory.w32(panel + 12, table);
+            machine.memory.w32(table, rectangle);
+            machine.memory.w32(panel + 44, callback | 1);
+            machine.memory.w32(panel + 48, callback | 1);
+        }
+        machine.cpu.reg_set(Mode::User, 4, 0xdeadbeef);
+        for offset in [0x34, 0x38] {
+            machine.cpu.reg_set(Mode::User, 0, parent);
+            machine
+                .invoke_callback(
+                    NicaiMachine::method_stub_address(METHOD_KIND_PANEL, offset),
+                    parent,
+                    0,
+                    0,
+                    1000,
+                )
+                .unwrap();
+        }
+        assert_eq!(machine.memory.r32(context), 4);
+        assert_eq!(machine.register(4), 0xdeadbeef);
     }
 
     #[test]

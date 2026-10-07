@@ -9,12 +9,14 @@ all of them as black screens. Some show only an update prompt, and some have
 monochrome interfaces. A usable startup must render correctly and accept its
 expected input without an emulator fault, including network-dependent titles.
 
-The A-library Metal new variant is confirmed failing: it halts on required
-startup file creation without a game screen. Native file-request handling now
-passes that assertion, but the application then faults on an uninitialized
-native manager slot at +0x138. It remains failing. Other former halt-only
-results can expose later missing interfaces after this file repair; those
-must not be reported as newly compatible games.
+The A-library Metal new variant now passes startup file and record setup and
+loads its title images and animation. Both native constructor tables must
+initialize the picture library when it is recreated after loading. Screen and
+window callbacks now execute rather than returning through inert methods.
+However, continuation input is not yet validated: the user reports no response
+to the confirm key at the prompt, and the native payment/property interface is
+still incomplete. It remains failing and is not marked compatible. Other former
+halt-only results can expose later missing interfaces after these repairs.
 
 The three commits after 0efb157 fill Scene method slots, allocate an inert list
 control and install inert Talker methods. Successful default scans after those

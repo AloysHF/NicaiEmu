@@ -53,7 +53,7 @@ fn add_panel_dirty_rect(memory: &mut impl Memory, panel: u32, rect: u32) {
     memory.w32(panel.wrapping_add(4), count.wrapping_add(1));
 }
 
-fn invalidate_panel(memory: &mut impl Memory, panel: u32, kind: i16, rect: u32) {
+pub(super) fn invalidate_panel(memory: &mut impl Memory, panel: u32, kind: i16, rect: u32) {
     if panel == 0 || rect == 0 {
         return;
     }
@@ -81,6 +81,71 @@ fn invalidate_panel(memory: &mut impl Memory, panel: u32, kind: i16, rect: u32) 
 }
 
 impl NicaiMachine {
+    pub(crate) fn handle_panel_service(&mut self, offset: u32) -> anyhow::Result<()> {
+        let root = self.register(0);
+        if offset == 0x38 {
+            return self.handle_fixed_gameold_region_service(4);
+        }
+        if offset == 0x28 {
+            let slot = self.register(2);
+            if root != 0 && slot <= 1 {
+                let child = self.register(1);
+                let mut tail = root;
+                if slot == 1 {
+                    let first = self.memory.r32(root + 36);
+                    if first == 0 {
+                        self.memory.w32(root + 36, child);
+                        self.set_result(0);
+                        return Ok(());
+                    }
+                    tail = first;
+                }
+                let mut visited = std::collections::BTreeSet::new();
+                while visited.insert(tail) && visited.len() <= 4096 {
+                    let next = self.memory.r32(tail + 32);
+                    if next == 0 {
+                        self.memory.w32(tail + 32, child);
+                        break;
+                    }
+                    tail = next;
+                }
+            }
+        } else if offset == 0x34 {
+            let mut pending = vec![root];
+            let mut visited = std::collections::BTreeSet::new();
+            while let Some(panel) = pending.pop() {
+                if panel == 0 || !visited.insert(panel) || visited.len() > 4096 {
+                    continue;
+                }
+                let callback = self.memory.r32(panel + 44);
+                // An untouched method slot has no guest callback registered.
+                if callback != 0
+                    && callback != Self::method_stub_address(super::super::METHOD_KIND_PANEL, 44)
+                {
+                    let context = self.memory.r32(panel + 16);
+                    let cpu = self.cpu;
+                    let result = self.invoke_callback(
+                        callback,
+                        context,
+                        0,
+                        0,
+                        crate::DEFAULT_INSTRUCTION_LIMIT,
+                    );
+                    self.cpu = cpu;
+                    result?;
+                }
+                pending.push(self.memory.r32(panel + 32));
+                pending.push(self.memory.r32(panel + 36));
+            }
+        } else if offset == 0x3c {
+            let kind = self.register(1) as i16;
+            let rectangle = self.register(2);
+            invalidate_panel(&mut self.memory, root, kind, rectangle);
+        }
+        self.set_result(0);
+        Ok(())
+    }
+
     pub(crate) fn handle_screen_service(&mut self, index: u32) {
         match index {
             0 | 2 | 3 => {
@@ -145,6 +210,7 @@ impl NicaiMachine {
 
     pub(crate) fn handle_df_engine_service(&mut self, index: u32) {
         match index {
+            4 => self.initialize_record(),
             8 => {
                 self.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, 0);
                 self.memory

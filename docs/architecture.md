@@ -117,3 +117,17 @@ coordinates; transparent blits preserve destination pixels for zero RGB565.
 `cbe_boot` loads the same archive and machine used by the desktop frontend. It can schedule phone-key presses at exact frames, run a fixed number of callbacks, print machine diagnostics, and save a screenshot. This is the preferred path for deterministic runtime regression checks.
 
 The desktop screenshot mode preserves the last framebuffer produced before a guest callback error. It only writes a PNG when guest execution has produced a framebuffer with more than one color; blank frames and startup failures are reported without creating a screenshot.
+
+### Native DF startup coverage (PR 71)
+
+Native DF constructors are bound in both registered and queried function tables.
+Registered screens take over the frame lifecycle after resource loading, and
+native idle logic can poll a press edge within the same frame. Record files use
+bounded sections with little-endian headers and values. Window callbacks receive
+stack-passed contexts and paint queued dirty rectangles. Animation resources load
+image references and cumulative frame timing; mirrored parts and collision
+methods remain unsupported.
+
+These changes restore visible content in the Metal new startup path. Its
+continuation prompt and subsequent menus are still under investigation; rendering
+a title is not evidence of playable compatibility.

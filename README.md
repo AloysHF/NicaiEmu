@@ -292,3 +292,17 @@ help. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for details.
 ## License
 
 This project is licensed under the [BSD 3-Clause License](LICENSE).
+
+### Native DF startup coverage (PR 71)
+
+Native DF constructors are bound in both registered and queried function tables.
+Registered screens take over the frame lifecycle after resource loading, and
+native idle logic can poll a press edge within the same frame. Record files use
+bounded sections with little-endian headers and values. Window callbacks receive
+stack-passed contexts and paint queued dirty rectangles. Animation resources load
+image references and cumulative frame timing; mirrored parts and collision
+methods remain unsupported.
+
+These changes restore visible content in the Metal new startup path. Its
+continuation prompt and subsequent menus are still under investigation; rendering
+a title is not evidence of playable compatibility.

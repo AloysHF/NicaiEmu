@@ -309,7 +309,12 @@ impl NicaiMachine {
         if (METHOD_STUB_BASE..METHOD_STUB_BASE + METHOD_STUB_KINDS * METHOD_STUB_STRIDE)
             .contains(&address)
         {
-            self.handle_method_stub(address);
+            let relative = address - METHOD_STUB_BASE;
+            if relative / METHOD_STUB_STRIDE == super::METHOD_KIND_PANEL {
+                self.handle_panel_service(relative % METHOD_STUB_STRIDE)?;
+            } else {
+                self.handle_method_stub(address);
+            }
             self.return_from_service();
             return Ok(());
         }
@@ -455,7 +460,7 @@ impl NicaiMachine {
             }
             21 => self.handle_data_package_service(index),
             22 => self.handle_download_service(index),
-            23 => self.set_result(0),
+            23 => self.handle_record_service(index),
             24 => self.handle_payment_service(index),
             25 => self.handle_download_resource_service(index),
             26 => self.handle_download_image_service(index),
