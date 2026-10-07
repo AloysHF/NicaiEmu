@@ -23,6 +23,17 @@ control and install inert Talker methods. Successful default scans after those
 changes do not prove rendering or gameplay. The historical tables below retain
 their original validation scope and are not a fresh all-variant certification.
 
+The gameold drawing API (table offset 0x00..0x3c) is now implemented —
+clipped image blits, full-screen draws, the number/UI-skin helpers, text and
+clip control — and native dispatch sid 82 hands out the v3 gameold table the
+native games call those slots through, with the v3 image-header layout (u32
+width/height, 16-byte headers) applied consistently. The A-library new-variant
+titles now render their real screens: 魔塔 shows its full main menu (76,800
+pixels, 132 colours), and 疯狂斗地主 / 超级玛丽 / 绝密宝藏 / 喜羊羊与灰太狼@新 /
+恶魔城 render menus or title screens instead of a blank framebuffer. One title
+(王牌伞兵 new variant) regressed from an early loading screen to a blank
+screen; it remains under investigation and is not claimed as fixed.
+
 CBE applications in the local validation corpus were run by the standalone emulator with default or application-specific capture timing. Every screenshot below is the RGB565 framebuffer produced by guest execution. If an application stops, times out, or leaves a single-color framebuffer, the batch does not create a screenshot. A successful startup capture does not guarantee that every screen or gameplay path works correctly.
 
 The Network column in the application list flags applications that require

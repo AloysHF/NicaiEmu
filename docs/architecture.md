@@ -78,6 +78,16 @@ Fixed GameManager image services route to GameLCD: indices 1-3 draw images,
 14 sets the clip, 24 returns it, and 32/33 draw opaque/transparent image targets.
 Both tables use the same source offsets and clip state.
 
+Native dispatch sid 82 copies the v3 gameold table into the caller's buffer:
+the drawing slots (0x00..0x3c) resolve to a dedicated service table (clipped
+image blits, full-screen draws, digits, the UI-skin helpers, text, clip
+control), the remaining slots to the shared service entries with the v3
+8-byte gap folded in, and slots the guest already filled are left alone.
+Building that library also switches image headers to the wide layout the
+native guests read: u32 width/height at +4/+8 with 16-byte headers, the
+screen header included. Every image-header access goes through the same
+pair of helpers, so narrow and wide titles share one code path.
+
 Unknown object method slots are assigned the inert object-method kind, never
 the global GameManager kind. Object arguments must not trigger global
 constructor heuristics that write through caller stack slots. These inert
