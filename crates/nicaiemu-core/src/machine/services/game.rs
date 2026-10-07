@@ -132,6 +132,8 @@ impl NicaiMachine {
             return;
         }
         match index {
+            9 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(9),
+            28..=31 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index - 5),
             0 => {
                 let source = self.resource_by_id(self.register(0));
                 let result = self.create_image_from_stream(source, 0);

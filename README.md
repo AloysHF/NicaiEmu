@@ -252,6 +252,8 @@ Text boxes wrap GBK text into guest line tables, track pages, draw screen or
 image targets, and release their owned line buffers.
 Legacy GameLCD supports image creation, clipped opaque/transparent blits,
 dimension queries and bounded GBK text with RGB888 colors.
+The fixed legacy game manager uses the same text renderer and returns concrete
+font metrics, allowing guest wrapping loops to make progress.
 Legacy picture libraries support resource loading, cached image indices, image
 sizes, clipped drawing, rectangle fills, target selection, and release.
 

@@ -128,6 +128,10 @@ playable offline are not flagged.
 
 ## Known Limitations
 
+- Undercover V10 no longer loops indefinitely in guest text wrapping after
+  fixing legacy font metrics. Idle startup remains on Loading; input can show
+  a purchase-failure message. Its usable menu/gameplay is not yet validated.
+
 - The A-library Three Kingdoms new variant now loads its dynamic executable
   after correcting resource-package classification. Its main menu renders after
   bounded text-box initialization and picture-library support. Legacy GameLCD

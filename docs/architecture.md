@@ -75,6 +75,8 @@ Screen logic and rendering callbacks are optional while firmware dialogs
 suspend the underlying screen. Deferred callbacks continue to run and can
 restore the screen; frames without rendering preserve existing pixels.
 
+The fixed game manager routes its string and font queries to the GameLCD renderer.
+Font queries return pixel metrics rather than echoing leftover stub addresses.
 Legacy GameLCD uses separate register/stack arguments for tile blits and
 bounded GBK strings (text, byte length, x, y, RGB888). Its clip rectangle lives
 in reserved screen-descriptor bytes and is therefore preserved by memory

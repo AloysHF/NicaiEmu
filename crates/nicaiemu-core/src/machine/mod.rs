@@ -3495,6 +3495,22 @@ mod tests {
     }
 
     #[test]
+    fn fixed_game_font_queries_return_metrics_instead_of_stub_addresses() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0010_0000;
+        machine.executable.code_image_size = 0x2000;
+        machine.executable.code_size = 4;
+        for (index, expected) in [(28, 8), (29, 8), (30, 16), (31, 16)] {
+            machine
+                .cpu
+                .reg_set(Mode::User, 0, SERVICE_BASE + TABLE_STRIDE * 3 + index * 4);
+            machine.handle_game_service(index);
+            assert_eq!(machine.register(0), expected);
+        }
+    }
+
+    #[test]
     fn paused_screen_preserves_frame_and_resumes_after_callback() {
         let mut machine = machine_from_minimal_archive();
         machine.initialize_screen();
