@@ -17,6 +17,15 @@ fn read_little_endian_short(memory: &mut impl Memory, address: u32) -> i16 {
     i16::from_le_bytes([memory.r8(address), memory.r8(address.wrapping_add(1))])
 }
 
+fn read_little_endian_int(memory: &mut impl Memory, address: u32) -> u32 {
+    u32::from_le_bytes([
+        memory.r8(address),
+        memory.r8(address.wrapping_add(1)),
+        memory.r8(address.wrapping_add(2)),
+        memory.r8(address.wrapping_add(3)),
+    ])
+}
+
 fn rect_contains_point(left: i32, top: i32, right: i32, bottom: i32, x: i32, y: i32) -> bool {
     x >= left && x <= right && y >= top && y <= bottom
 }
@@ -302,7 +311,7 @@ impl NicaiMachine {
                 let buffer = self.register(0);
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
-                let value = self.memory.r32(buffer.wrapping_add(offset));
+                let value = read_little_endian_int(&mut self.memory, buffer.wrapping_add(offset));
                 self.memory.w32(cursor, offset.wrapping_add(4));
                 self.set_result(value);
             }
@@ -1341,7 +1350,7 @@ impl NicaiMachine {
                 let buffer = self.register(0);
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
-                let value = self.memory.r32(buffer.wrapping_add(offset));
+                let value = read_little_endian_int(&mut self.memory, buffer.wrapping_add(offset));
                 self.memory.w32(cursor, offset.wrapping_add(4));
                 self.set_result(value);
             }
@@ -1391,7 +1400,8 @@ impl NicaiMachine {
 #[cfg(test)]
 mod tests {
     use super::{
-        df_degree, df_sin, packed_rectangles_overlap, read_little_endian_short, rect_contains_point,
+        df_degree, df_sin, packed_rectangles_overlap, read_little_endian_int,
+        read_little_endian_short, rect_contains_point,
     };
     use crate::machine::memory::MachineMemory;
 
@@ -1408,6 +1418,16 @@ mod tests {
             assert_eq!(read_little_endian_short(&mut memory, 0x1000), 0x19);
             memory.load(0x1000, &[0x00, 0x80]).unwrap();
             assert_eq!(read_little_endian_short(&mut memory, 0x1000), i16::MIN);
+        }
+    }
+
+    #[test]
+    fn game_int_reads_are_little_endian_independent_of_guest_endianness() {
+        for big_endian in [false, true] {
+            let mut memory = MachineMemory::new(big_endian);
+            memory.map(0x1000, 4, false);
+            memory.load(0x1000, &[0x78, 0x56, 0x34, 0x12]).unwrap();
+            assert_eq!(read_little_endian_int(&mut memory, 0x1000), 0x1234_5678);
         }
     }
 
