@@ -233,6 +233,10 @@ Detailed references by input mode:
 
 For the full game list with screenshots, see [Game Compatibility](docs/Game-Compatibility.md).
 
+Private I/O manager tables preserve the firmware's NV method discovery layout.
+This lets fixed-address applications initialize their storage callbacks without
+calling null pointers; successful startup does not guarantee complete gameplay.
+
 ## Testing
 
 Run the unit tests:

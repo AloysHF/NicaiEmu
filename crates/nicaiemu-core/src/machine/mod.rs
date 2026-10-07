@@ -988,14 +988,6 @@ impl NicaiMachine {
             let table = MANAGER_BASE + TABLE_STRIDE * (table_index + 1);
             let service = SERVICE_BASE + TABLE_STRIDE * table_index;
             self.populate_table(table, service, TABLE_STRIDE / 4);
-            // The Io manager's words are spaced 0x100 apart so the guest's
-            // NV-size probe (`obj[1] - obj[0]`) sees a block size it knows.
-            if table_index == 5 {
-                for index in 0..(TABLE_STRIDE / 4) {
-                    self.memory
-                        .w32(table + index * 4, IO_METHOD_BASE + index * IO_METHOD_STRIDE);
-                }
-            }
         }
         self.memory
             .w32(MANAGER_BASE + 8, MANAGER_BASE + TABLE_STRIDE);
@@ -1050,7 +1042,14 @@ impl NicaiMachine {
 
     fn populate_table(&mut self, table: u32, service: u32, count: u32) {
         for index in 0..count {
-            self.memory.w32(table + index * 4, service + index * 4);
+            // Private Io tables must preserve the shared table's NV probe ABI.
+            // Slots beyond the fixed Io interface use the dense service table.
+            let method = if service == SERVICE_BASE + TABLE_STRIDE * 5 && index < 24 {
+                IO_METHOD_BASE + index * IO_METHOD_STRIDE
+            } else {
+                service + index * 4
+            };
+            self.memory.w32(table + index * 4, method);
         }
     }
 
@@ -3251,6 +3250,55 @@ mod tests {
             0,
             "null slot becomes a callable stub"
         );
+    }
+
+    #[test]
+    fn io_initializers_preserve_callable_nv_methods() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_tables();
+            for (initializer, count) in [
+                (SERVICE_BASE, 30),
+                (SERVICE_BASE + TABLE_STRIDE * 17, 24),
+                (FIXED_MANAGER_INIT, 24),
+            ] {
+                let table = machine.allocate(0x80);
+                let output = machine.allocate(4);
+                machine.memory.w32(table + count * 4, 0x1234_5678);
+                machine.cpu.reg_set(Mode::User, 0, table);
+                machine.cpu.reg_set(Mode::User, reg::PC, initializer);
+                machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+                machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+                machine.run_until_return(100).unwrap();
+
+                let first = machine.memory.r32(table);
+                let second = machine.memory.r32(table + 4);
+                assert_eq!(second - first, 0x100, "NV method-size probe");
+                assert_eq!(machine.memory.r32(table + count * 4), 0x1234_5678);
+                let shared = MANAGER_BASE + TABLE_STRIDE * 6;
+                for index in 0..24 {
+                    assert_eq!(
+                        machine.memory.r32(table + index * 4),
+                        machine.memory.r32(shared + index * 4),
+                    );
+                }
+
+                let reader = machine.memory.r32(table + 0x44) + 0x1a;
+                machine.cpu.reg_set(Mode::User, 0, 0);
+                machine.cpu.reg_set(Mode::User, 1, output);
+                machine.cpu.reg_set(Mode::User, 2, 1);
+                machine.cpu.reg_set(Mode::User, 3, output + 1);
+                machine.cpu.reg_set(Mode::User, reg::PC, reader);
+                machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+                machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
+                machine.run_until_return(100).unwrap();
+                assert_eq!(machine.register(0), 1);
+                assert_eq!(machine.memory.r8(output + 1), 1);
+            }
+        }
     }
 
     /// Billing returns follow the firmware: RemainDay only counts method 3,
