@@ -3625,6 +3625,50 @@ mod tests {
     }
 
     #[test]
+    fn fixed_game_image_services_draw_without_overwriting_image_headers() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0010_0000;
+        machine.executable.code_image_size = 0x2000;
+        machine.executable.code_size = 4;
+        machine.initialize_screen();
+        let image = machine.allocate(12);
+        let pixels = machine.allocate(4);
+        machine.memory.w32(image, pixels);
+        machine.memory.w16(image + 4, 2);
+        machine.memory.w16(image + 6, 1);
+        machine.memory.w16(pixels, 0xf800);
+        machine.memory.w16(pixels + 2, 0x07e0);
+        machine.cpu.reg_set(Mode::User, 0, image);
+        machine.handle_game_service(3);
+        assert_eq!(machine.memory.r32(image), pixels);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0xf800);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + 2), 0x07e0);
+        for (i, value) in [1, 0, 1, 1].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, i as u8, value);
+        }
+        machine.handle_game_service(14);
+        let clip = machine.allocate(8);
+        machine.cpu.reg_set(Mode::User, 0, clip);
+        machine.handle_game_service(24);
+        assert_eq!(machine.memory.r16(clip), 1);
+        assert_eq!(machine.memory.r16(clip + 4), 1);
+        let stack = machine.allocate(12);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack, 1);
+        machine.memory.w32(stack + 4, 0);
+        machine.memory.w32(stack + 8, 0);
+        machine.memory.w16(SCREEN_IMAGE, 0x1234);
+        machine.memory.w16(SCREEN_IMAGE + 2, 0x1234);
+        for (i, value) in [image, 0, 0, 2].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, i as u8, value);
+        }
+        machine.handle_game_service(1);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0x1234);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + 2), 0x07e0);
+    }
+
+    #[test]
     fn requested_screen_resources_are_loaded_before_initialization() {
         for big_endian in [false, true] {
             let mut machine = NicaiMachine::new_blank_for_tests();

@@ -66,6 +66,10 @@ layout while each initializer writes only its declared number of slots.
 
 ## Rendering
 
+Fixed GameManager image services route to GameLCD: indices 1-3 draw images,
+14 sets the clip, 24 returns it, and 32/33 draw opaque/transparent image targets.
+Both tables use the same source offsets and clip state.
+
 Unknown object method slots are assigned the inert object-method kind, never
 the global GameManager kind. Object arguments must not trigger global
 constructor heuristics that write through caller stack slots. These inert

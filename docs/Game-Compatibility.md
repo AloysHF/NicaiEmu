@@ -126,11 +126,34 @@ playable offline are not flagged.
 | 73 | AppStore | tmp/nicai_game/AppStore.CBE | <img src="images/AppStore.png" width="120"> | 🌐 Required | ✅ Pass |
 | 74 | Google地图 | tmp/nicai_game/Google地图.CBE | <img src="images/Google地图.png" width="120"> | 🌐 Required | ✅ Pass |
 
+## Requested V10 Variant Checks
+
+These checks are separate from the 74-application table above. Startup passes
+for SMS-dependent titles after reaching their usable title/purchase screens;
+this does not validate gameplay behind an unavailable purchase service.
+
+| Variant | Verified result | Remaining limitation |
+| --- | --- | --- |
+| Three Kingdoms new V10 | Menu, introduction, purchase, offline failure recovery | Battle not validated behind SMS purchase |
+| Undercover V10 | Full cover, purchase and payment-failure screen | Gameplay not validated behind SMS purchase |
+| Soldier Assault V10 | Cover, introduction, purchase screen | Gameplay not validated behind SMS purchase |
+| Double Dragon V10 | Title and introduction | Gameplay faults in an uninitialized DF Scene window; window-only experiment then faults in Actor methods |
+| Westward Journey V10 | Resource load precedes initialization; background draws | Startup still faults in the missing Talker repaint method |
+| Super Bubble V10 | Early loading screen | Startup faults in the uninitialized DF Scene window |
+| Super Mario V10 | Title | Entering gameplay faults in the uninitialized DF Scene window |
+
+The Scene window is embedded at offset 0x628 in all three affected titles.
+Available API descriptions identify the constructors but do not specify the
+complete Scene/Actor or Listener/Talker layouts. Their behavior is not replaced
+with generic successful stubs, and these four variants remain failing.
+
 ## Known Limitations
 
 - Westward Journey V10 now loads requested screen resources before initialization,
   avoiding its first null object call. It still faults in an unimplemented
   Talker repaint method and is not yet startup-compatible.
+  Fixed GameManager image and clip services now share GameLCD drawing, so its
+  background is drawn before that remaining failure.
 
 - Double Dragon V10 now renders its title and introduction after isolating
   unknown object methods from global manager stubs. Entering gameplay still

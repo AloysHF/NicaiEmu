@@ -132,34 +132,15 @@ impl NicaiMachine {
             return;
         }
         match index {
-            9 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(9),
+            1..=3 | 9 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index),
+            14 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(12),
+            24 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(21),
+            32 | 33 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index - 5),
             28..=31 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index - 5),
             0 => {
                 let source = self.resource_by_id(self.register(0));
                 let result = self.create_image_from_stream(source, 0);
                 self.set_result(result);
-            }
-            1 | 2 if self.uses_fixed_manager_abi() => {
-                let source = self.register(0);
-                let source_x = signed_coord(self.register(1));
-                let source_y = signed_coord(self.register(2));
-                let width = signed_coord(self.register(3));
-                let stack = self.register(reg::SP);
-                let height = signed_coord(self.memory.r32(stack));
-                let destination_x = signed_coord(self.memory.r32(stack + 4));
-                let destination_y = signed_coord(self.memory.r32(stack + 8));
-                self.blit_image(
-                    super::super::SCREEN_IMAGE_STRUCT,
-                    source,
-                    source_x,
-                    source_y,
-                    width,
-                    height,
-                    destination_x,
-                    destination_y,
-                    index == 2,
-                );
-                self.set_result(0);
             }
             23 => {
                 let result = self.decode_resource_stream(self.register(0));
@@ -190,9 +171,6 @@ impl NicaiMachine {
             12 => {
                 let mask = self.register(0);
                 self.set_result(u32::from(self.key_held & mask != 0));
-            }
-            14 if self.uses_fixed_manager_abi() => {
-                self.set_result(self.register(1).wrapping_add(self.register(3)));
             }
             15 if self.uses_fixed_manager_abi() => {
                 let image = self.register(0);

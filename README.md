@@ -254,6 +254,7 @@ Legacy GameLCD supports image creation, clipped opaque/transparent blits,
 dimension queries and bounded GBK text with RGB888 colors.
 The fixed legacy game manager uses the same text renderer and returns concrete
 font metrics, allowing guest wrapping loops to make progress.
+Its full-screen, clipped image and clip-query entry points share GameLCD drawing.
 Legacy window repaint dispatches guest painters for dirty rectangles and
 walks child and sibling windows while preserving caller registers.
 Legacy picture libraries support resource loading, cached image indices, image
