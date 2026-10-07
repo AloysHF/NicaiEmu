@@ -655,9 +655,21 @@ impl NicaiMachine {
                 self.set_result(NATIVE_DISPATCH_SERVICE | 1);
             }
             0x52 => {
+                // Native app-object registration: install the standard
+                // system API into the registered object.  Games copy these
+                // slots (alloc at +0x9c, free at +0xa0) into their own
+                // manager objects during boot; leaving them null makes the
+                // later mallocBigMen call jump to 0x0.  Zero slots become
+                // callable MEMORY stubs so any other read stays safe.
                 if argument != 0 {
-                    self.memory
-                        .w32(self.executable.data_address() + 0x1724, argument);
+                    for offset in (0..0x100u32).step_by(4) {
+                        if self.memory.r32(argument + offset) == 0 {
+                            self.memory.w32(
+                                argument + offset,
+                                Self::method_stub_address(METHOD_KIND_MEMORY, offset),
+                            );
+                        }
+                    }
                 }
                 self.set_result(0);
             }
