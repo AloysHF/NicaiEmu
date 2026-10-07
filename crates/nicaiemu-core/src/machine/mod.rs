@@ -3496,6 +3496,56 @@ mod tests {
     }
 
     #[test]
+    fn legacy_textbox_wraps_pages_and_releases_line_tables() {
+        let mut machine = machine_from_minimal_archive();
+        machine.initialize_screen();
+        let textbox = machine.allocate(0x38);
+        let stack = machine.allocate(8);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack, 16);
+        machine.memory.w32(stack + 4, 14);
+        machine.cpu.reg_set(Mode::User, 0, textbox);
+        machine.cpu.reg_set(Mode::User, 2, 10);
+        machine.cpu.reg_set(Mode::User, 3, 20);
+        machine.handle_game_service(71);
+        assert_eq!(machine.memory.r16(textbox + 24), 16);
+        assert_eq!(machine.memory.r16(textbox + 26), 14);
+        let text = machine.allocate(8);
+        machine.memory.write_bytes(text, b"ABCD\nE\0");
+        machine.cpu.reg_set(Mode::User, 0, textbox);
+        machine.cpu.reg_set(Mode::User, 1, text);
+        machine
+            .handle_method_stub(NicaiMachine::method_stub_address(METHOD_KIND_TEXTBOX, 0x24) & !1);
+        assert_eq!(machine.memory.r8(textbox + 16), 3);
+        assert_eq!(machine.memory.r8(textbox + 17), 1);
+        assert_eq!(machine.memory.r8(textbox + 18), 3);
+        let starts = machine.memory.r32(textbox + 8);
+        let lengths = machine.memory.r32(textbox + 12);
+        assert_eq!(machine.memory.r16(starts + 2), 2);
+        assert_eq!(machine.memory.r16(starts + 4), 5);
+        assert_eq!(machine.memory.r8(lengths), 2);
+        machine.memory.w8(textbox + 19, 1);
+        machine.cpu.reg_set(Mode::User, 0, textbox);
+        machine.cpu.reg_set(Mode::User, 1, 0xff0000);
+        machine
+            .handle_method_stub(NicaiMachine::method_stub_address(METHOD_KIND_TEXTBOX, 0x28) & !1);
+        let mut red = 0;
+        for y in 20..36 {
+            for x in 10..26 {
+                red += usize::from(machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2) == 0xf800);
+            }
+        }
+        assert!(red > 0);
+        machine.cpu.reg_set(Mode::User, 0, textbox);
+        machine
+            .handle_method_stub(NicaiMachine::method_stub_address(METHOD_KIND_TEXTBOX, 0x30) & !1);
+        assert_eq!(machine.memory.r32(textbox + 8), 0);
+        assert_eq!(machine.memory.r32(textbox + 12), 0);
+        assert!(!machine.heap_allocations.contains_key(&starts));
+        assert!(!machine.heap_allocations.contains_key(&lengths));
+    }
+
+    #[test]
     fn legacy_lcd_clips_tiles_preserves_alpha_and_bounds_text() {
         for big_endian in [false, true] {
             let mut machine = NicaiMachine::new_blank_for_tests();

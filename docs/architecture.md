@@ -61,6 +61,12 @@ layout while each initializer writes only its declared number of slots.
 
 ## Rendering
 
+Legacy text boxes retain GBK byte offsets and byte lengths in owned line
+tables, expose page counts in the guest object, and render the selected page
+with horizontal/vertical alignment and RGB888 colors. Constructors receive
+the final geometry arguments on the stack. Drawing respects the configured
+line height; releasing a box frees its line tables without freeing guest text.
+
 The guest owns a 240×400 RGB565 screen. Image resources are reconstructed from the CBE GIF variant or firmware PNG representation, decoded, and copied into guest image objects. Some custom GIF headers resemble ICO files, so a failed standard-image decode falls back to the CBE decoder. The desktop frontend converts the completed screen to 32-bit RGB for `minifb`. Text is decoded as GBK and rasterized from an embedded Unicode font, so the core does not depend on host fonts. Text coordinates live in the presented display space: for landscape-packaged games the glyphs are mapped from the 400×240 display back into the 240×400 framebuffer pixel by pixel, and games that submit `DrawText` with zero coordinates inherit the pen origin latched from the preceding `GetScreenImage` call.
 
 ## Headless execution

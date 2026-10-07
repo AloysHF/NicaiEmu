@@ -830,6 +830,7 @@ impl NicaiMachine {
         }
         match (kind, offset) {
             (METHOD_KIND_PICTURE, _) => self.handle_picture_library_method(offset),
+            (METHOD_KIND_TEXTBOX, _) => self.handle_textbox_method(offset),
             // memset(ptr, val, len) — mirrors h_old_memset, including its
             // 4 MiB length clamp.  Only the memory-manager table owns this
             // slot; a generic table with the same offset is left alone.
@@ -1101,7 +1102,11 @@ impl NicaiMachine {
                 let tb = r0;
                 if tb != 0 {
                     for (i, off) in [20u32, 22, 24, 26].into_iter().enumerate() {
-                        let v = self.register(2 + i as u8) as u16;
+                        let v = if i < 2 {
+                            self.register(2 + i as u8) as u16
+                        } else {
+                            self.memory.r32(self.register(reg::SP) + (i as u32 - 2) * 4) as u16
+                        };
                         self.memory.w16(tb + off, v);
                     }
                     self.memory.w32(tb, 0);

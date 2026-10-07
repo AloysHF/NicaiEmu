@@ -11,6 +11,157 @@ use super::{
 use crate::image_decoder;
 
 impl NicaiMachine {
+    pub(crate) fn handle_textbox_method(&mut self, offset: u32) {
+        let textbox = self.register(0);
+        if textbox == 0 {
+            self.set_result(0);
+            return;
+        }
+        match offset {
+            0x1c => {
+                for i in 0..4u32 {
+                    let value = if i < 3 {
+                        self.register(i as u8 + 1)
+                    } else {
+                        self.memory.r32(self.register(reg::SP))
+                    };
+                    self.memory.w16(textbox + 20 + i * 2, value as u16);
+                }
+            }
+            0x20 | 0x34 => {
+                self.memory.w16(
+                    textbox + if offset == 0x20 { 6 } else { 4 },
+                    self.register(1) as u16,
+                );
+            }
+            0x24 => {
+                let text = self.register(1);
+                let width = self.memory.r16(textbox + 24) as i16 as i32;
+                let height = self.memory.r16(textbox + 26) as i16 as i32;
+                let line_height = self.memory.r16(textbox + 6).max(1) as i32;
+                let bytes = self.read_c_bytes(text, 65535);
+                let mut lines = Vec::new();
+                let (mut start, mut position, mut pixels) = (0usize, 0usize, 0i32);
+                while position < bytes.len() && lines.len() < 127 {
+                    if bytes[position] == b'\n' {
+                        lines.push((start, position - start));
+                        position += 1;
+                        start = position;
+                        pixels = 0;
+                        continue;
+                    }
+                    let count = if bytes[position] & 0x80 != 0 && position + 1 < bytes.len() {
+                        2
+                    } else {
+                        1
+                    };
+                    let glyph_width = if count == 2 { 16 } else { 8 };
+                    if position > start
+                        && (pixels + glyph_width > width || position + count - start > 255)
+                    {
+                        lines.push((start, position - start));
+                        start = position;
+                        pixels = 0;
+                        if lines.len() == 127 {
+                            break;
+                        }
+                    }
+                    pixels += glyph_width;
+                    position += count;
+                }
+                if position > start && lines.len() < 127 {
+                    lines.push((start, position - start));
+                }
+                if width <= 0 || height <= 0 || text == 0 {
+                    lines.clear();
+                }
+                for field in [8, 12] {
+                    let allocation = self.memory.r32(textbox + field);
+                    self.deallocate(allocation);
+                    self.memory.w32(textbox + field, 0);
+                }
+                let starts = self.allocate((lines.len() as u32 * 2).max(2));
+                let lengths = self.allocate((lines.len() as u32).max(1));
+                self.memory.w32(textbox, text);
+                self.memory.w32(textbox + 8, starts);
+                self.memory.w32(textbox + 12, lengths);
+                for (i, (start, length)) in lines.iter().enumerate() {
+                    self.memory.w16(starts + i as u32 * 2, *start as u16);
+                    self.memory.w8(lengths + i as u32, *length as u8);
+                }
+                let per_page = (height / line_height).clamp(1, 127) as usize;
+                self.memory.w8(textbox + 16, lines.len() as u8);
+                self.memory.w8(textbox + 17, per_page as u8);
+                self.memory
+                    .w8(textbox + 18, lines.len().div_ceil(per_page) as u8);
+                self.memory.w8(textbox + 19, 0);
+            }
+            0x28 | 0x2c => {
+                let image = if offset == 0x2c {
+                    self.register(1)
+                } else {
+                    SCREEN_IMAGE_STRUCT
+                };
+                let rgb = self.register(if offset == 0x2c { 2 } else { 1 });
+                let color = ((((rgb >> 19) & 31) << 11)
+                    | (((rgb >> 10) & 63) << 5)
+                    | ((rgb >> 3) & 31)) as u16;
+                let text = self.memory.r32(textbox);
+                let starts = self.memory.r32(textbox + 8);
+                let lengths = self.memory.r32(textbox + 12);
+                let lines = self.memory.r8(textbox + 16) as u32;
+                let per_page = self.memory.r8(textbox + 17) as u32;
+                let first = self.memory.r8(textbox + 19) as u32 * per_page;
+                let style = self.memory.r16(textbox + 4);
+                let width = self.memory.r16(textbox + 24) as i16 as i32;
+                let height = self.memory.r16(textbox + 26) as i16 as i32;
+                let x = self.memory.r16(textbox + 20) as i16 as i32;
+                let mut y = self.memory.r16(textbox + 22) as i16 as i32;
+                let step = self.memory.r16(textbox + 6) as i32;
+                let count = lines.saturating_sub(first).min(per_page);
+                if style & 4 != 0 {
+                    y += (height - step * count as i32).max(0) / 2;
+                }
+                for line in first..first + count {
+                    let start = self.memory.r16(starts + line * 2) as u32;
+                    let length = self.memory.r8(lengths + line) as usize;
+                    let mut bytes = self.read_c_bytes(text + start, length as u32);
+                    bytes.truncate(length);
+                    let (decoded, _, _) = GBK.decode(&bytes);
+                    let text_width: i32 = decoded
+                        .chars()
+                        .map(|c| unifont::get_glyph(c).map_or(16, |g| g.get_width() as i32))
+                        .sum();
+                    let dx = if style & 2 != 0 {
+                        (width - text_width).max(0) / 2
+                    } else {
+                        0
+                    };
+                    self.draw_text_bytes_with_height(
+                        image,
+                        &bytes,
+                        x + dx,
+                        y,
+                        color,
+                        (step - 2).clamp(1, 16),
+                    );
+                    y += step;
+                }
+            }
+            0x30 => {
+                for field in [8, 12] {
+                    let pointer = self.memory.r32(textbox + field);
+                    self.deallocate(pointer);
+                    self.memory.w32(textbox + field, 0);
+                }
+                self.memory.w32(textbox, 0);
+                self.memory.w32(textbox + 16, 0);
+            }
+            _ => {}
+        }
+        self.set_result(0);
+    }
+
     pub(crate) fn handle_picture_library_method(&mut self, offset: u32) {
         let library = self.register(0);
         let argument = self.register(1);
@@ -893,13 +1044,46 @@ impl NicaiMachine {
     }
 
     fn draw_text_bytes(&mut self, bytes: &[u8], x: i32, y: i32, color: u16) {
+        self.draw_text_bytes_on_image(SCREEN_IMAGE_STRUCT, bytes, x, y, color);
+    }
+
+    fn draw_text_bytes_on_image(&mut self, image: u32, bytes: &[u8], x: i32, y: i32, color: u16) {
+        self.draw_text_bytes_with_height(image, bytes, x, y, color, 16);
+    }
+
+    fn draw_text_bytes_with_height(
+        &mut self,
+        image: u32,
+        bytes: &[u8],
+        x: i32,
+        y: i32,
+        color: u16,
+        glyph_height: i32,
+    ) {
         let (text, _, _) = GBK.decode(bytes);
         // Text coordinates live in the presented display space: the firmware
         // renders the glyphs itself, so a landscape-packaged game issues them
         // with 400x240 coordinates that have to be mapped back into the
         // 240x400 framebuffer pixel by pixel (identity for portrait games).
-        let swaps = self.effective_orientation.swaps_dimensions();
-        let (display_width, display_height) = if swaps { (400, 240) } else { (240, 400) };
+        let screen = image == 0 || image == SCREEN_IMAGE_STRUCT;
+        let swaps = screen && self.effective_orientation.swaps_dimensions();
+        let (pixels, width, height) = if screen {
+            (SCREEN_IMAGE, 240, 400)
+        } else {
+            (
+                self.memory.r32(image),
+                self.memory.r16(image + 4) as i32,
+                self.memory.r16(image + 6) as i32,
+            )
+        };
+        let (display_width, display_height) = if swaps {
+            (height, width)
+        } else {
+            (width, height)
+        };
+        if pixels == 0 {
+            return;
+        }
         let orientation = self.effective_orientation;
         let mut pen_x = x;
         for character in text.chars() {
@@ -907,7 +1091,7 @@ impl NicaiMachine {
                 pen_x += 16;
                 continue;
             };
-            for glyph_y in 0..16i32 {
+            for glyph_y in 0..glyph_height {
                 let display_y = y + glyph_y;
                 if !(0..display_height).contains(&display_y) {
                     continue;
@@ -915,15 +1099,15 @@ impl NicaiMachine {
                 for glyph_x in 0..glyph.get_width() as i32 {
                     let display_x = pen_x + glyph_x;
                     if (0..display_width).contains(&display_x)
-                        && glyph.get_pixel(glyph_x as usize, glyph_y as usize)
+                        && glyph.get_pixel(glyph_x as usize, (glyph_y * 16 / glyph_height) as usize)
                     {
                         let (screen_x, screen_y) = if swaps {
                             orientation.unrotate(display_x, display_y)
                         } else {
                             (display_x, display_y)
                         };
-                        let offset = (screen_y as u32 * 240 + screen_x as u32) * 2;
-                        self.memory.w16(SCREEN_IMAGE + offset, color);
+                        let offset = (screen_y as u32 * width as u32 + screen_x as u32) * 2;
+                        self.memory.w16(pixels + offset, color);
                     }
                 }
             }

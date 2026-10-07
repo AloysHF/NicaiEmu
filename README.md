@@ -246,6 +246,8 @@ compact memory packages. This restores dynamic code lookup for some titles;
 reaching an active screen still requires visual and input validation.
 Legacy text-box initialization uses its declared object layout and preserves
 adjacent screen state.
+Text boxes wrap GBK text into guest line tables, track pages, draw screen or
+image targets, and release their owned line buffers.
 Legacy GameLCD supports image creation, clipped opaque/transparent blits,
 dimension queries and bounded GBK text with RGB888 colors.
 Legacy picture libraries support resource loading, cached image indices, image
