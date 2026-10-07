@@ -246,6 +246,8 @@ compact memory packages. This restores dynamic code lookup for some titles;
 reaching an active screen still requires visual and input validation.
 Legacy text-box initialization uses its declared object layout and preserves
 adjacent screen state.
+Legacy picture libraries support resource loading, cached image indices, image
+sizes, clipped drawing, rectangle fills, target selection, and release.
 
 ## Testing
 

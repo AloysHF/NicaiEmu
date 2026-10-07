@@ -11,6 +11,199 @@ use super::{
 use crate::image_decoder;
 
 impl NicaiMachine {
+    pub(crate) fn handle_picture_library_method(&mut self, offset: u32) {
+        let library = self.register(0);
+        let argument = self.register(1);
+        if library == 0 {
+            self.set_result(u32::MAX);
+            return;
+        }
+        let count = self.memory.r16(library + 20) as u32;
+        let capacity = self.memory.r16(library + 8) as u32;
+        let images = self.memory.r32(library + 16);
+        let ids = self.memory.r32(library + 12);
+        let mut target = self.memory.r32(library + 4);
+        if target == 0 {
+            target = SCREEN_IMAGE_STRUCT;
+        }
+        match offset {
+            0x18 | 0x1c => {
+                let resource_id = if offset == 0x1c {
+                    let Some(id) = self.resource_id_by_name(argument) else {
+                        self.set_result(u32::MAX);
+                        return;
+                    };
+                    for index in 0..count {
+                        if self.memory.r16(ids + index * 2) as u32 == id {
+                            self.set_result(index);
+                            return;
+                        }
+                    }
+                    id
+                } else {
+                    u32::MAX
+                };
+                if count >= capacity || ids == 0 || images == 0 {
+                    self.set_result(u32::MAX);
+                    return;
+                }
+                let image = if offset == 0x1c {
+                    let source = self.resource_by_id(resource_id);
+                    self.create_image_from_stream(source, 0)
+                } else {
+                    let width = argument & 0xffff;
+                    let height = self.register(2) & 0xffff;
+                    let size = width
+                        .next_multiple_of(4)
+                        .saturating_mul(height)
+                        .saturating_mul(2);
+                    if width == 0 || height == 0 || size > HEAP_SIZE as u32 {
+                        self.set_result(u32::MAX);
+                        return;
+                    }
+                    let image = self.allocate(12);
+                    let pixels = self.allocate(size);
+                    if pixels == 0 {
+                        self.deallocate(image);
+                        self.set_result(u32::MAX);
+                        return;
+                    }
+                    self.memory.write_bytes(pixels, &vec![0; size as usize]);
+                    self.memory.w32(image, pixels);
+                    self.memory.w16(image + 4, width as u16);
+                    self.memory.w16(image + 6, height as u16);
+                    self.memory.w8(image + 8, 1);
+                    image
+                };
+                if image == 0 {
+                    self.set_result(u32::MAX);
+                    return;
+                }
+                self.memory.w32(images + count * 4, image);
+                self.memory.w16(ids + count * 2, resource_id as u16);
+                self.memory.w16(library + 20, (count + 1) as u16);
+                self.set_result(count);
+            }
+            0x20 | 0x24 => {
+                let index = argument & 0xffff;
+                let image = if index < count {
+                    self.memory.r32(images + index * 4)
+                } else {
+                    0
+                };
+                let size = if image == 0 {
+                    0
+                } else {
+                    self.memory.r16(image + if offset == 0x20 { 4 } else { 6 }) as u32
+                };
+                self.set_result(size);
+            }
+            0x28 => {
+                let x = signed_coord(argument);
+                let y = signed_coord(self.register(2));
+                let width = signed_coord(self.register(3));
+                let stack = self.register(reg::SP);
+                let height = signed_coord(self.memory.r32(stack));
+                let color = self.memory.r32(stack + 4) as u16;
+                let pixels = self.memory.r32(target);
+                let target_width = self.memory.r16(target + 4) as i32;
+                let target_height = self.memory.r16(target + 6) as i32;
+                self.paint_rect(
+                    x,
+                    y,
+                    width,
+                    height,
+                    color,
+                    false,
+                    target_width,
+                    target_height,
+                    pixels,
+                );
+                self.set_result(0);
+            }
+            0x30 | 0x34 | 0x38 | 0x3c | 0x40 => {
+                let index = argument & 0xffff;
+                if index < count {
+                    let image = self.memory.r32(images + index * 4);
+                    let (dx, dy, sx, sy, width, height) = if offset == 0x30 {
+                        (
+                            0,
+                            0,
+                            0,
+                            0,
+                            self.memory.r16(image + 4) as i32,
+                            self.memory.r16(image + 6) as i32,
+                        )
+                    } else if offset == 0x34 || offset == 0x38 {
+                        (
+                            signed_coord(self.register(2)),
+                            signed_coord(self.register(3)),
+                            0,
+                            0,
+                            self.memory.r16(image + 4) as i32,
+                            self.memory.r16(image + 6) as i32,
+                        )
+                    } else {
+                        let stack = self.register(reg::SP);
+                        (
+                            signed_coord(self.register(2)),
+                            signed_coord(self.register(3)),
+                            signed_coord(self.memory.r32(stack)),
+                            signed_coord(self.memory.r32(stack + 4)),
+                            signed_coord(self.memory.r32(stack + 8)),
+                            signed_coord(self.memory.r32(stack + 12)),
+                        )
+                    };
+                    self.blit_image(
+                        target,
+                        image,
+                        sx,
+                        sy,
+                        width,
+                        height,
+                        dx,
+                        dy,
+                        offset == 0x38 || offset == 0x40,
+                    );
+                }
+                self.set_result(0);
+            }
+            0x4c => {
+                self.memory.w32(library + 4, argument);
+                let width = if argument == 0 {
+                    240
+                } else {
+                    self.memory.r16(argument + 4) as u32
+                };
+                self.set_result(width);
+            }
+            0x50 => {
+                if self.memory.r8(library + 22) == 1 {
+                    for index in 0..count {
+                        let image = self.memory.r32(images + index * 4);
+                        if image != 0 {
+                            let pixels = self.memory.r32(image);
+                            self.deallocate(pixels);
+                            self.deallocate(image);
+                        }
+                    }
+                    self.deallocate(ids);
+                    self.deallocate(images);
+                    let line = self.memory.r32(library);
+                    self.deallocate(line);
+                    self.memory.w32(library, 0);
+                    self.memory.w32(library + 4, 0);
+                    self.memory.w32(library + 12, 0);
+                    self.memory.w32(library + 16, 0);
+                    self.memory.w16(library + 20, 0);
+                    self.memory.w8(library + 22, 0);
+                }
+                self.set_result(0);
+            }
+            _ => self.set_result(0),
+        }
+    }
+
     pub(crate) fn fill_screen_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: u16) {
         let left = x.clamp(0, 240);
         let top = y.clamp(0, 400);

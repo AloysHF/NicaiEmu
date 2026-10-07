@@ -829,6 +829,7 @@ impl NicaiMachine {
             );
         }
         match (kind, offset) {
+            (METHOD_KIND_PICTURE, _) => self.handle_picture_library_method(offset),
             // memset(ptr, val, len) — mirrors h_old_memset, including its
             // 4 MiB length clamp.  Only the memory-manager table owns this
             // slot; a generic table with the same offset is left alone.
@@ -1134,7 +1135,9 @@ impl NicaiMachine {
                         );
                     }
                     let line = self.allocate(480);
-                    self.memory.w32(lib + 0x54, line);
+                    self.memory.w32(lib, line);
+                    self.memory.w32(lib + 4, 0);
+                    self.memory.w8(lib + 22, 1);
                 }
                 self.set_result(lib);
             }

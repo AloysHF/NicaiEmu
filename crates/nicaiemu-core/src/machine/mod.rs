@@ -3491,6 +3491,79 @@ mod tests {
         }
     }
 
+    #[test]
+    fn picture_library_loads_caches_draws_and_releases_images() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                2,
+                1,
+                image::Rgb([255, 0, 0]),
+            ))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+            machine.resources.push(HostResource {
+                name: "test.png".into(),
+                data: png.into_inner(),
+            });
+            let package = machine.allocate(104);
+            machine.initialize_data_package(package, 0);
+            machine.load_main_resource_package(package);
+            let library = machine.allocate(0x54);
+            let name = machine.allocate(16);
+            machine.memory.write_bytes(name, b"test.png\0");
+            machine.cpu.reg_set(Mode::User, 0, library);
+            machine.cpu.reg_set(Mode::User, 1, 1);
+            machine.handle_method_stub(
+                NicaiMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0x12c) & !1,
+            );
+            let call = |machine: &mut NicaiMachine, offset, argument| {
+                machine.cpu.reg_set(Mode::User, 0, library);
+                machine.cpu.reg_set(Mode::User, 1, argument);
+                machine.handle_method_stub(
+                    NicaiMachine::method_stub_address(METHOD_KIND_PICTURE, offset) & !1,
+                );
+                machine.register(0)
+            };
+            assert_eq!(call(&mut machine, 0x1c, name), 0);
+            assert_eq!(
+                call(&mut machine, 0x1c, name),
+                0,
+                "cached image still works at capacity"
+            );
+            assert_eq!(machine.memory.r16(library + 20), 1);
+            assert_eq!(call(&mut machine, 0x20, 0), 2);
+            assert_eq!(call(&mut machine, 0x24, 0), 1);
+            assert_eq!(call(&mut machine, 0x20, u32::MAX), 0);
+            machine.cpu.reg_set(Mode::User, 2, 10);
+            machine.cpu.reg_set(Mode::User, 3, 20);
+            call(&mut machine, 0x34, 0);
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 10) * 2),
+                0xf800
+            );
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 11) * 2),
+                0xf800
+            );
+            assert_eq!(machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 12) * 2), 0);
+            let table = machine.memory.r32(library + 16);
+            let image = machine.memory.r32(table);
+            let pixels = machine.memory.r32(image);
+            call(&mut machine, 0x50, 0);
+            assert!(!machine.heap_allocations.contains_key(&pixels));
+            assert!(!machine.heap_allocations.contains_key(&image));
+            assert_eq!(machine.memory.r16(library + 20), 0);
+            assert_eq!(machine.memory.r32(library + 16), 0);
+            call(&mut machine, 0x50, 0);
+        }
+    }
+
     /// The DF-engine service path (group 11) builds the same objects as
     /// the gameold method-table slots: returning zero left callers with a
     // NULL handle whose first method call jumped through a NULL thunk.

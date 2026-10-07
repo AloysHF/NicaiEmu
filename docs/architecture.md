@@ -10,6 +10,13 @@ initializer as the direct text-box method path. Its methods end at offset
 0x34; applying the generic 0x100-byte constructor filler corrupts neighboring
 screen state even when the constructor itself returns without an error.
 
+Legacy picture-library methods maintain a bounded image-index table and resource
+ID cache, decode images through the shared stream decoder, and draw through the
+RGB565 blitter. The constructor stores its scanline at offset 0, target at 4,
+capacity at 8, ID/image arrays at 12/16, count at 20, and release marker at 22.
+Release frees the owned allocations and clears these fields; unknown image
+indices and exhausted capacities do not allocate fallback objects.
+
 NicaiEmu executes native CBE applications instead of replacing their game logic with a scene preview. The core is platform-independent and exposes a framebuffer plus phone-key input to frontends.
 
 ## Boot flow
