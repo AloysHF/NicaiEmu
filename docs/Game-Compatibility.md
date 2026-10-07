@@ -128,6 +128,10 @@ playable offline are not flagged.
 
 ## Known Limitations
 
+- The A-library Three Kingdoms new variant now loads its dynamic executable
+  after correcting resource-package classification, but still remains on its
+  update screen in the 200-frame check. It is not yet a validated startup.
+
 - Persistent guest file storage is not implemented.
 - The firmware network manager implements a minimal offline mock (connect/send/close/http-get plus deferred callbacks). Login-gated titles such as 恶魔城登录版 can leave their wait screen and render the title menu, but there is no live GPRS server, no persistent online session, and most 🌐 Required applications still stop after the mock handshake.
 - 战争机器 exits itself a few seconds after the background-intro screens are left idle: its intro timer loads the level-0 map (`map0d.map`), which the package does not contain, and the game's C runtime hits a divide-by-zero and calls `exit()`. The emulator now treats that semihosting exit as a normal halt, so the frontend keeps showing the last frame (press `R` to restart) instead of closing.

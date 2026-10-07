@@ -241,6 +241,10 @@ Private I/O manager tables preserve the firmware's NV method discovery layout.
 This lets fixed-address applications initialize their storage callbacks without
 calling null pointers; successful startup does not guarantee complete gameplay.
 
+Resource lookup distinguishes the file-package marker from adjacent fields in
+compact memory packages. This restores dynamic code lookup for some titles;
+reaching an active screen still requires visual and input validation.
+
 ## Testing
 
 Run the unit tests:

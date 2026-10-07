@@ -1,5 +1,10 @@
 # Architecture
 
+Resource-package lookup recognizes the exact extended file-package marker
+(`1` at offset 84). Compact in-memory descriptors can place unrelated pointer
+storage at that offset; treating every nonzero byte as a file marker incorrectly
+routes resident resources through file I/O and prevents dynamic code loading.
+
 NicaiEmu executes native CBE applications instead of replacing their game logic with a scene preview. The core is platform-independent and exposes a framebuffer plus phone-key input to frontends.
 
 ## Boot flow

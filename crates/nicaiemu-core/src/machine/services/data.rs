@@ -292,7 +292,9 @@ impl NicaiMachine {
         let data = self.memory.r32(package + 16);
         for index in 0..count {
             if self.memory.r16(ids + index * 2) as u32 == id {
-                if self.memory.r8(package + 84) != 0 {
+                // Extended file packages use the exact marker 1. Compact
+                // memory packages can have an adjacent pointer at this offset.
+                if self.memory.r8(package + 84) == 1 {
                     return self.read_file_backed_package_resource(package, data, count, index);
                 }
                 return self
@@ -525,4 +527,53 @@ fn resource_names_match(left: &str, right: &str) -> bool {
     let left = left.rsplit(['/', '\\']).next().unwrap_or(left);
     let right = right.rsplit(['/', '\\']).next().unwrap_or(right);
     left.eq_ignore_ascii_case(right)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn package_lookup_distinguishes_file_marker_from_adjacent_pointer() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = super::super::super::memory::MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let package = machine.allocate(104);
+            let ids = machine.allocate(2);
+            let offsets = machine.allocate(4);
+            let payload = machine.allocate(4);
+            machine.memory.w16(package + 8, 1);
+            machine.memory.w32(package + 16, offsets);
+            machine.memory.w32(package + 20, ids);
+            machine.memory.w16(ids, 7);
+            machine.memory.w32(offsets, payload);
+            machine
+                .memory
+                .write_bytes(payload, &[0xb5, 0x70, 0x47, 0x70]);
+            machine.memory.w32(package + 84, 0x0500_0000);
+            machine.memory.w32(package + 92, u32::MAX);
+            assert_eq!(machine.package_resource_by_id(package, 7), payload);
+
+            let handle = machine.virtual_fs.open("resource.bin", "w+", 0) as u32;
+            machine
+                .virtual_fs
+                .write(handle, &[0x12, 0x34, 0x56, 0x78])
+                .unwrap();
+            machine.memory.w8(package + 84, 1);
+            machine.memory.w32(package + 88, 0);
+            machine.memory.w32(package + 92, handle);
+            machine.memory.w32(package + 96, 4);
+            machine.memory.w32(offsets, 0);
+            let loaded = machine.package_resource_by_id(package, 7);
+            assert_ne!(loaded, 0);
+            assert_eq!(
+                (0..4)
+                    .map(|offset| machine.memory.r8(loaded + offset))
+                    .collect::<Vec<_>>(),
+                [0x12, 0x34, 0x56, 0x78]
+            );
+        }
+    }
 }
