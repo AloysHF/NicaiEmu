@@ -235,6 +235,9 @@ impl NicaiMachine {
             66 => self.set_result(self.pointer.x as u32),
             67 => self.set_result(self.pointer.y as u32),
             68 => self.set_result(self.key_down),
+            71 => {
+                self.handle_method_stub(Self::method_stub_address(METHOD_KIND_GAMEOLD, 0x11c) & !1);
+            }
             75 if self.uses_fixed_manager_abi() => {
                 let object = self.register(0);
                 let capacity = self.register(1) & 0xffff;

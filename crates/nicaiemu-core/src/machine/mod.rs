@@ -3468,6 +3468,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn legacy_textbox_constructor_preserves_adjacent_screen_state() {
+        let mut machine = machine_from_minimal_archive();
+        let textbox = machine.allocate(0x138);
+        machine.cpu.reg_set(Mode::User, 0, textbox);
+        machine.cpu.reg_set(Mode::User, 2, 12);
+        machine.cpu.reg_set(Mode::User, 3, 18);
+        machine.handle_game_service(71);
+        assert_eq!(machine.memory.r16(textbox + 6), 14);
+        assert_eq!(machine.memory.r16(textbox + 20), 12);
+        assert_eq!(machine.memory.r16(textbox + 22), 18);
+        for offset in (0x1c..=0x34).step_by(4) {
+            assert_ne!(machine.memory.r32(textbox + offset), 0);
+        }
+        for offset in 0x38..0x138 {
+            assert_eq!(
+                machine.memory.r8(textbox + offset),
+                0,
+                "adjacent byte {offset:x}"
+            );
+        }
+    }
+
     /// The DF-engine service path (group 11) builds the same objects as
     /// the gameold method-table slots: returning zero left callers with a
     // NULL handle whose first method call jumped through a NULL thunk.

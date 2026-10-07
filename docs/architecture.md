@@ -5,6 +5,11 @@ Resource-package lookup recognizes the exact extended file-package marker
 storage at that offset; treating every nonzero byte as a file marker incorrectly
 routes resident resources through file I/O and prevents dynamic code loading.
 
+The legacy GameManagerOld text-box constructor (index 71) uses the same bounded
+initializer as the direct text-box method path. Its methods end at offset
+0x34; applying the generic 0x100-byte constructor filler corrupts neighboring
+screen state even when the constructor itself returns without an error.
+
 NicaiEmu executes native CBE applications instead of replacing their game logic with a scene preview. The core is platform-independent and exposes a framebuffer plus phone-key input to frontends.
 
 ## Boot flow
