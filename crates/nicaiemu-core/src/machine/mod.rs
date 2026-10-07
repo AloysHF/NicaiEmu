@@ -1345,6 +1345,10 @@ impl NicaiMachine {
                 self.register(reg::SP),
             );
         }
+        // Requested resources must exist before the new screen initializes.
+        if self.load_pending_screen_resources(screen, screen_this, instruction_limit)? {
+            return Ok(());
+        }
         if !self.screen_initialized {
             let init = self.memory.r32(screen);
             self.invoke_callback(init, screen_this, 0, 0, instruction_limit)?;
@@ -1353,16 +1357,9 @@ impl NicaiMachine {
             }
             self.screen_initialized = true;
         }
-        if self.resource_load_pending
-            && (self.resource_load_screen == 0 || self.resource_load_screen == screen)
-        {
-            self.resource_load_pending = false;
-            self.resource_load_screen = 0;
-            let load_resource = self.memory.r32(screen + 24);
-            self.invoke_callback(load_resource, screen_this, 0, 0, instruction_limit)?;
-            if self.finish_screen_callback_frame() {
-                return Ok(());
-            }
+        // Initialization may itself request another resource callback.
+        if self.load_pending_screen_resources(screen, screen_this, instruction_limit)? {
+            return Ok(());
         }
         if self.pending_screen != 0 && self.pending_screen != screen {
             self.key_down = 0;
@@ -1458,6 +1455,24 @@ impl NicaiMachine {
         self.key_down = 0;
         self.pointer.end_frame();
         true
+    }
+
+    fn load_pending_screen_resources(
+        &mut self,
+        screen: u32,
+        screen_this: u32,
+        instruction_limit: u64,
+    ) -> Result<bool> {
+        if !self.resource_load_pending
+            || (self.resource_load_screen != 0 && self.resource_load_screen != screen)
+        {
+            return Ok(false);
+        }
+        self.resource_load_pending = false;
+        self.resource_load_screen = 0;
+        let load_resource = self.memory.r32(screen + 24);
+        self.invoke_callback(load_resource, screen_this, 0, 0, instruction_limit)?;
+        Ok(self.finish_screen_callback_frame())
     }
 
     fn finish_screen_callback_frame(&mut self) -> bool {
@@ -3606,6 +3621,43 @@ mod tests {
                 .reg_set(Mode::User, 0, SERVICE_BASE + TABLE_STRIDE * 3 + index * 4);
             machine.handle_game_service(index);
             assert_eq!(machine.register(0), expected);
+        }
+    }
+
+    #[test]
+    fn requested_screen_resources_are_loaded_before_initialization() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            machine.state = MachineState::Ready;
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+            let object = machine.allocate(64);
+            let screen = object + 24;
+            let load = machine.allocate(6);
+            let init = machine.allocate(6);
+            for (callback, words) in [
+                (load, [0x212a, 0x6101, 0x4770]), // Store the loaded resource.
+                (init, [0x6901, 0x6141, 0x4770]), // Copy the resource into initialized state.
+            ] {
+                for (i, word) in words.into_iter().enumerate() {
+                    machine.memory.w16(callback + i as u32 * 2, word);
+                }
+            }
+            machine.memory.w32(screen, init | 1);
+            machine.memory.w32(screen + 24, load | 1);
+            machine.pending_screen = screen;
+            machine.resource_load_pending = true;
+            machine.resource_load_screen = screen;
+            machine.run_frame(100).unwrap();
+            assert_eq!(machine.memory.r32(object + 20), 42);
+            assert!(!machine.resource_load_pending);
+            assert!(machine.screen_initialized);
+            machine.memory.w32(object + 16, 7);
+            machine.run_frame(100).unwrap();
+            assert_eq!(machine.memory.r32(object + 16), 7);
         }
     }
 

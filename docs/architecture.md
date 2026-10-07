@@ -28,6 +28,11 @@ NicaiEmu executes native CBE applications instead of replacing their game logic 
 5. Applications that contain an installer can extract their named resource packages into the sandboxed guest filesystem before launching the installed entry point.
 6. Each 100ms guest tick invokes the active screen's logic and render callbacks.
 
+
+Pending resource callbacks bound to a new screen run before its initialization,
+so initialization can use the objects created by resource loading. Requests
+issued during initialization still run before logic and rendering.
+
 ## Guest memory
 
 The machine uses checked sparse regions rather than reserving the entire 32-bit address space. Guest reads and writes honor the executable's byte order. Initialized data, stack, heap, service-manager state, and framebuffer storage are writable. Unmapped accesses are recorded for diagnostics, and an unmapped instruction fetch stops execution with an error.

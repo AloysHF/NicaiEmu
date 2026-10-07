@@ -128,6 +128,10 @@ playable offline are not flagged.
 
 ## Known Limitations
 
+- Westward Journey V10 now loads requested screen resources before initialization,
+  avoiding its first null object call. It still faults in an unimplemented
+  Talker repaint method and is not yet startup-compatible.
+
 - Double Dragon V10 now renders its title and introduction after isolating
   unknown object methods from global manager stubs. Entering gameplay still
   faults in an unimplemented scene-object method; gameplay is not compatible.

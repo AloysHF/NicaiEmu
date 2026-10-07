@@ -262,6 +262,11 @@ Fixed-address picture-library entry points use the same implementation.
 Unknown object methods use separate inert stubs so they cannot invoke global
 manager constructors or overwrite saved return addresses.
 
+
+Pending resource callbacks bound to a new screen run before its initialization,
+so initialization can use the objects created by resource loading. Requests
+issued during initialization still run before logic and rendering.
+
 ## Testing
 
 Run the unit tests:
