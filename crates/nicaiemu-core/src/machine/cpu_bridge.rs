@@ -11,7 +11,7 @@ use super::{
     FIXED_MANAGER_INIT, IO_METHOD_BASE, IO_METHOD_STRIDE, IO_NV_READ_OFFSET, IO_NV_WRITE_OFFSET,
     LOG_NOOP_SERVICE, MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE, METHOD_STUB_BASE,
     METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE,
-    SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
+    OLDLIB_DRAW_SERVICE, SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
 };
 
 impl NicaiMachine {
@@ -351,6 +351,12 @@ impl NicaiMachine {
             // Return the shared dense function table so bootstrap code can
             // treat the manager as an object with callable slots.
             self.set_result(MANAGER_BASE + TABLE_STRIDE * (group + 1));
+            self.return_from_service();
+            return Ok(());
+        }
+        if (OLDLIB_DRAW_SERVICE..OLDLIB_DRAW_SERVICE + 0x40).contains(&address) {
+            let index = (address - OLDLIB_DRAW_SERVICE) / 4;
+            self.handle_oldlib_draw_service(index);
             self.return_from_service();
             return Ok(());
         }

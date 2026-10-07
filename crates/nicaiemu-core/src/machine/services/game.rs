@@ -10,7 +10,7 @@ use super::super::{
     METHOD_KIND_AUTO, METHOD_KIND_GAMEOLD, METHOD_KIND_MEMBLOCK, METHOD_KIND_MEMORY,
     METHOD_KIND_PANEL, METHOD_KIND_PICTURE, METHOD_KIND_TEXTBOX, METHOD_STUB_BASE,
     METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE,
-    SCREEN_IS_IN_QUIT, SERVICE_BASE, TABLE_STRIDE,
+    OLDLIB_DRAW_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE, TABLE_STRIDE,
 };
 
 fn read_little_endian_short(memory: &mut impl Memory, address: u32) -> i16 {
@@ -135,11 +135,59 @@ impl NicaiMachine {
             1..=3 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index),
             9 => self.handle_game_lcd_service(9),
             14 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(12),
+            // Old-lib drawing slots (F_0 0x00..0x3c).  The native games reach
+            // them two ways: straight through the shared service table and
+            // through their gameold table copy (sid 82, whose drawing slots
+            // live in OLDLIB_DRAW_SERVICE).  Slot 14 is deliberately NOT
+            // mapped here: the shared table's 0x38 is a resource-name lookup
+            // for the native_system_info path, while the sid-82 table's
+            // 0x38 is SetClip.
+            1 if self.uses_native_dispatch_abi() => self.draw_image_with_clip(false),
+            2 if self.uses_native_dispatch_abi() => self.draw_image_with_clip(true),
+            3 if self.uses_native_dispatch_abi() => self.draw_full_screen(),
+            4 if self.uses_native_dispatch_abi() => self.draw_number_service(),
+            5 if self.uses_native_dispatch_abi() => self.draw_ui(),
+            6 if self.uses_native_dispatch_abi() => self.draw_ui_four_x_repeat(),
+            7 if self.uses_native_dispatch_abi() => self.draw_ui_single_repeat(),
+            8 if self.uses_native_dispatch_abi() => self.draw_ui_horizontal(),
+            10 if self.uses_native_dispatch_abi() => self.release_oldlib_image(),
+            13 if self.uses_native_dispatch_abi() => self.set_result(0),
+            15 if self.uses_native_dispatch_abi() => self.oldlib_image_height(),
+            37 | 39 if self.uses_native_dispatch_abi() => self.malloc_big_service(),
+            38 | 40 if self.uses_native_dispatch_abi() => self.free_big_service(),
+            44 if self.uses_native_dispatch_abi() => {
+                // OldLib_0b0: get_tick — the guest's millisecond clock.
+                // The guest also polls it in wait loops, so the value has
+                // to keep moving within a frame (mirrors the reference's
+                // same-slot repeat acceleration).
+                let repeats = self.service_calls.get(&(3, 44)).copied().unwrap_or(0);
+                let mut tick = (self.frame_count as u32).wrapping_mul(100);
+                if repeats > 64 {
+                    tick = tick.wrapping_add(16 * (repeats - 64) as u32);
+                } else if repeats > 8 {
+                    tick = tick.wrapping_add((repeats - 8) as u32);
+                }
+                self.set_result(tick);
+            }
+            45 if self.uses_native_dispatch_abi() => {
+                // OldLib_0b4: sys_sleep(ms) — the firmware advances its
+                // clock; our clock follows the frame counter.
+                self.set_result(0);
+            }
+            46 if self.uses_native_dispatch_abi() => {
+                // RefresScreen: the framebuffer is committed at frame end.
+                self.set_result(0);
+            }
             24 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(21),
             32 | 33 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index - 5),
             28..=31 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index - 5),
             0 => {
-                let source = self.resource_by_id(self.register(0));
+                let argument = self.register(0);
+                let source = if argument >= 0x10000 {
+                    self.resource_by_name(argument)
+                } else {
+                    self.resource_by_id(argument)
+                };
                 let result = self.create_image_from_stream(source, 0);
                 self.set_result(result);
             }
@@ -178,7 +226,7 @@ impl NicaiMachine {
                 let height = if image == 0 {
                     0
                 } else {
-                    self.memory.r16(image + 6) as u32
+                    self.image_dims(image).1 as u32
                 };
                 self.set_result(height);
             }
@@ -187,7 +235,7 @@ impl NicaiMachine {
                 let width = if image == 0 {
                     0
                 } else {
-                    self.memory.r16(image + 4) as u32
+                    self.image_dims(image).0 as u32
                 };
                 self.set_result(width);
             }
@@ -532,11 +580,21 @@ impl NicaiMachine {
                 self.set_result(result);
             }
             _ => {
-                // Unknown constructors retain inert method slots. These must
-                // not share global manager semantics or write caller stack slots.
-                let obj = self.register(0);
-                self.fill_zero_method_slots(obj, 0x100);
-                self.set_result(obj);
+                if self.uses_native_dispatch_abi() {
+                    // The native games call the unhandled slots of their
+                    // gameold table copy directly (record, windows, actor
+                    // constructors live at these offsets in the v3 layout).
+                    // Route them to the per-slot method stubs so the table
+                    // path and the stub path share one implementation.
+                    let stub = Self::method_stub_address(METHOD_KIND_GAMEOLD, index * 4) & !1;
+                    self.handle_method_stub(stub);
+                } else {
+                    // Unknown constructors retain inert method slots. These must
+                    // not share global manager semantics or write caller stack slots.
+                    let obj = self.register(0);
+                    self.fill_zero_method_slots(obj, 0x100);
+                    self.set_result(obj);
+                }
             }
         }
     }
@@ -702,58 +760,48 @@ impl NicaiMachine {
                 self.set_result(NATIVE_DISPATCH_SERVICE | 1);
             }
             0x52 => {
-                // Native app-object registration: install the standard
-                // system API into the registered object.  Games copy these
-                // slots (alloc at +0x9c, free at +0xa0) into their own
-                // manager objects during boot; leaving them null makes the
-                // later mallocBigMen call jump to 0x0.  Zero slots become
-                // callable MEMORY stubs so any other read stays safe.
-                if argument != 0 {
-                    for offset in (0..0x100u32).step_by(4) {
-                        if self.memory.r32(argument + offset) == 0 {
-                            self.memory.w32(
-                                argument + offset,
-                                Self::method_stub_address(METHOD_KIND_MEMORY, offset),
-                            );
+                // sid 82: hand the caller a copy of the GameManagerOld
+                // table.  The native games keep it in their own buffer and
+                // call the slots straight out of it (drawing API, mallocs,
+                // key queries).  The table is the v3 layout: slots from
+                // 0x114 on are shifted down by the 8-byte gap the v3 SDK
+                // removed, so a v3 offset maps to the service entry of v2
+                // offset o (< 0x114) or o + 8.
+                let buffer = argument;
+                if buffer != 0 {
+                    const TABLE_BYTES: u32 = 0x26c;
+                    for offset in (0..TABLE_BYTES).step_by(4) {
+                        // The billing slots at the v3 tail are written below.
+                        if offset == 0x240 || offset == 0x244 {
+                            continue;
                         }
+                        // Preserve slots the guest already filled: some games
+                        // pre-populate their table and only ask for the
+                        // missing entries (overwriting them breaks those
+                        // games' own callbacks).
+                        if self.memory.r32(buffer + offset) != 0 {
+                            continue;
+                        }
+                        // Slot 0x38 is SetClip in the gameold table but a
+                        // resource-name lookup in the shared group-3 table
+                        // (the native_system_info path); route it through
+                        // the dedicated old-lib table so both stay correct.
+                        let source = if offset < 0x114 { offset } else { offset + 8 };
+                        let entry = if offset == 0x38 {
+                            OLDLIB_DRAW_SERVICE + offset
+                        } else {
+                            SERVICE_BASE + TABLE_STRIDE * 3 + source
+                        };
+                        self.memory.w32(buffer + offset, entry);
                     }
-                    // Native DF tables omit two slots before their constructors.
-                    for (offset, group, index) in [
-                        (0x2c, 3, 11),
-                        (0x30, 3, 12),
-                        (0x38, 3, 14),
-                        (0xf0, 3, 60),
-                        (0xf4, 3, 61),
-                        (0xf8, 3, 62),
-                        (0xfc, 3, 63),
-                        (0x100, 3, 64),
-                        (0x104, 3, 65),
-                        (0x108, 3, 66),
-                        (0x10c, 3, 67),
-                        (0x110, 3, 68),
-                        (0x114, 3, 71),
-                        (0x124, 3, 75),
-                        (0x128, 11, 4),
-                        (0x134, 11, 7),
-                        (0x138, 3, 80),
-                        (0x13c, 3, 81),
-                        (0x144, 3, 83),
-                        (0x148, 3, 84),
-                        (0x14c, 3, 85),
-                        (0x150, 3, 86),
-                        (0x190, 3, 102),
-                        (0x1ac, 11, 9),
-                        (0x1b0, 3, 110),
-                    ] {
-                        let current = self.memory.r32(argument + offset);
-                        if current == 0
-                            || current == Self::method_stub_address(METHOD_KIND_MEMORY, offset)
-                        {
-                            self.memory.w32(
-                                argument + offset,
-                                SERVICE_BASE + TABLE_STRIDE * group + index * 4,
-                            );
-                        }
+                    // Billing slots the v3 table carries at +0x240/+0x244.
+                    if self.memory.r32(buffer + 0x240) == 0 {
+                        self.memory
+                            .w32(buffer + 0x240, SERVICE_BASE + TABLE_STRIDE * 12);
+                    }
+                    if self.memory.r32(buffer + 0x244) == 0 {
+                        self.memory
+                            .w32(buffer + 0x244, SERVICE_BASE + TABLE_STRIDE * 12 + 4);
                     }
                 }
                 self.set_result(0);
@@ -775,7 +823,34 @@ impl NicaiMachine {
             0x41a | 0x41b | 0x41c | 0x427 | 0x42a => {
                 self.handle_native_file_request(id, argument);
             }
-            0x8e | 0x8f | 0x97 | 0xac | 0x421 => {
+            0x8f => {
+                // GameManagerOld@v3 request: hand out the v3-ordered API
+                // table and switch image headers to the wide layout these
+                // guests read (u32 width/height at +4/+8), mirroring the
+                // reference's gfx.wide flip when the v3 library is built.
+                if self.gamelib_v3_table == 0 {
+                    if self.native_system_info == 0 {
+                        let info = self.build_native_system_info();
+                        self.native_system_info = info;
+                    }
+                    self.gamelib_v3_table = self.native_system_info;
+                    if !self.wide_images {
+                        self.wide_images = true;
+                        self.write_screen_header();
+                    }
+                }
+                self.set_result(self.gamelib_v3_table);
+            }
+            0x8e => {
+                // mF_GetGMemoryBlockPtr: the global property/block object.
+                if self.native_property_info == 0 {
+                    let info = self.allocate(0x100);
+                    self.memory.w32(info + 0x14, NATIVE_DISPATCH_SERVICE | 1);
+                    self.native_property_info = info;
+                }
+                self.set_result(self.native_property_info);
+            }
+            0x421 => {
                 if std::env::var_os("CBE_TRACE").is_some() {
                     eprintln!(
                         "[dispatch] id=0x{id:x} r1=0x{:08X} lr=0x{:08X}",
@@ -783,7 +858,8 @@ impl NicaiMachine {
                         self.register(reg::LR)
                     );
                 }
-                self.set_result(id)
+                // Network probe: the offline firmware reports failure.
+                self.set_result(0);
             }
             0x3ed => {
                 if argument != 0 {
@@ -835,10 +911,98 @@ impl NicaiMachine {
                     }
                     self.set_result(stub);
                 } else {
-                    self.set_result(id)
+                    // Unknown sid: hand out a cached per-sid object (a
+                    // table of zero-returning stubs) and publish it through
+                    // the caller's frame, mirroring the reference's
+                    // `old_obj` plus its frame writeback.  Guests that pass
+                    // a frame read the result from frame + 8.
+                    let table = self.native_object(id);
+                    if argument != 0 {
+                        self.memory.w32(argument + 8, table);
+                    }
+                    self.set_result(table);
                 }
             }
         }
+    }
+
+    /// Old-lib drawing API slots (F_0 0x00..0x3c), reached only through the
+    /// gameold table copy the native games request with sid 82.
+    pub(crate) fn handle_oldlib_draw_service(&mut self, index: u32) {
+        match index {
+            0 => {
+                let argument = self.register(0);
+                let source = if argument >= 0x10000 {
+                    self.resource_by_name(argument)
+                } else {
+                    self.resource_by_id(argument)
+                };
+                let result = self.create_image_from_stream(source, 0);
+                self.set_result(result);
+            }
+            1 => self.draw_image_with_clip(false),
+            2 => self.draw_image_with_clip(true),
+            3 => self.draw_full_screen(),
+            4 => self.draw_number_service(),
+            5 => self.draw_ui(),
+            6 => self.draw_ui_four_x_repeat(),
+            7 => self.draw_ui_single_repeat(),
+            8 => self.draw_ui_horizontal(),
+            9 => self.draw_string_oldlib(),
+            10 => self.release_oldlib_image(),
+            11 => {
+                let mask = self.register(0);
+                self.set_result(u32::from(self.key_down & mask != 0));
+            }
+            12 => {
+                let mask = self.register(0);
+                self.set_result(u32::from(self.key_held & mask != 0));
+            }
+            14 => self.set_oldlib_clip(),
+            15 => self.oldlib_image_height(),
+            _ => self.set_result(0),
+        }
+    }
+
+    /// OldLib_09c / OldLib_094: malloc_big(size) — a zeroed heap block.
+    fn malloc_big_service(&mut self) {
+        let size = self.register(0);
+        if size == 0 || size > HEAP_SIZE as u32 {
+            self.set_result(0);
+            return;
+        }
+        let block = self.allocate(size);
+        if block != 0 {
+            self.memory.write_bytes(block, &vec![0; size as usize]);
+        }
+        self.set_result(block);
+    }
+
+    /// OldLib_0a0 / OldLib_098: free_big(ptr).
+    fn free_big_service(&mut self) {
+        let pointer = self.register(0);
+        if pointer != 0 {
+            self.deallocate(pointer);
+        }
+        self.set_result(0);
+    }
+
+    /// Cached per-sid object for an unknown native dispatch id: a table of
+    /// callable zero-returning stubs so the guest can both read it back and
+    /// call through it without landing on NULL.
+    fn native_object(&mut self, sid: u32) -> u32 {
+        if let Some(&table) = self.native_objects.get(&sid) {
+            return table;
+        }
+        let table = self.allocate(0x100);
+        for offset in (0..0x100u32).step_by(4) {
+            self.memory.w32(
+                table + offset,
+                Self::method_stub_address(METHOD_KIND_AUTO, offset),
+            );
+        }
+        self.native_objects.insert(sid, table);
+        table
     }
 
     /// Address of the per-slot method stub for `offset` bytes into a guest
@@ -1382,7 +1546,7 @@ impl NicaiMachine {
         // Results are written as u32 for size >= 4 and u16 for size 2..3: the
         // shared template's measure-call marshals a 2-byte result slot and
         // reads it back after the request returns.
-        if output == 0 || size < 2 {
+        if output == 0 || size == 0 {
             return;
         }
         let value = match handle {
@@ -1407,6 +1571,10 @@ impl NicaiMachine {
                     .copied()
                     .unwrap_or(u32::MAX),
             ),
+            // Tables handed out by the dispatch path are opaque handles:
+            // the fetch writes them back verbatim, matching the reference's
+            // fetch, which never interprets the handle.
+            _ if self.is_native_table(handle) => Some(handle),
             // Shared-template measurement request (id computed as 0x7f << 3):
             // its result feeds the render loop's terminate check.  A stable
             // zero ends the loop instead of the stack being eaten by the
@@ -1419,9 +1587,21 @@ impl NicaiMachine {
         };
         if size >= 4 {
             self.memory.w32(output, value);
-        } else {
+        } else if size >= 2 {
             self.memory.w16(output, value as u16);
+        } else {
+            self.memory.w8(output, value as u8);
         }
+    }
+
+    /// True when `handle` is one of the table pointers the native dispatch
+    /// path hands out (the fetch writes it back to the caller untouched).
+    fn is_native_table(&self, handle: u32) -> bool {
+        handle != 0
+            && (handle == self.native_system_info
+                || handle == self.native_property_info
+                || handle == self.gamelib_v3_table
+                || self.native_objects.values().any(|table| *table == handle))
     }
 
     /// One-time native system-info object: every slot is a callable stub so

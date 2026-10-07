@@ -122,6 +122,10 @@ const FIXED_MANAGER_INIT: u32 = SERVICE_BASE + 0xe000;
 const FIXED_MANAGER_GET: u32 = FIXED_MANAGER_INIT + 18 * 4;
 const FIXED_MANAGER_DIRECTORY: u32 = MANAGER_BASE + 0xa000;
 const FIXED_GAMEOLD_OBJECT_SERVICE: u32 = SERVICE_BASE + 0xd000;
+/// Old-lib drawing API table (F_0 0x00..0x3c): only the gameold table copy
+/// (native dispatch sid 82) points here, so the plain group-3 service
+/// semantics stay intact for the native_system_info path.
+const OLDLIB_DRAW_SERVICE: u32 = SERVICE_BASE + 0xd200;
 const FIXED_GAMEOLD_REGION_SERVICE: u32 = SERVICE_BASE + 0xd100;
 const NATIVE_DISPATCH_SERVICE: u32 = SERVICE_BASE + 0xf000;
 const NATIVE_SYSTEM_TIME_SERVICE: u32 = SERVICE_BASE + 0xf100;
@@ -489,6 +493,10 @@ fn signed_coord(value: u32) -> i32 {
     value as u16 as i16 as i32
 }
 
+fn default_oldlib_clip() -> [i32; 4] {
+    [0, 0, 240, 400]
+}
+
 fn arm_blx_immediate_target(pc: u32, instruction: u32) -> Option<u32> {
     if instruction & 0xfe00_0000 != 0xfa00_0000 {
         return None;
@@ -715,6 +723,23 @@ pub struct NicaiMachine {
     /// Diagnostic-only: excluded from save states, capped in run_until_return.
     #[serde(skip, default)]
     recent_branches: VecDeque<(u32, u32)>,
+    /// v3 gamelib image-header mode: width/height as u32 at +4/+8 with the
+    /// kind byte at +12 (16-byte headers), switched on when the guest asks
+    /// for the v3 GameManagerOld table through native dispatch sid 143.
+    #[serde(default)]
+    wide_images: bool,
+    /// Cached v3 GameManagerOld table handed out by native dispatch sid 143.
+    #[serde(default)]
+    gamelib_v3_table: u32,
+    /// Per-sid objects handed out by native dispatch for unknown ids: each
+    /// is a table of zero-returning stubs, mirroring the reference's
+    /// `old_obj(sid)`.
+    #[serde(default)]
+    native_objects: std::collections::BTreeMap<u32, u32>,
+    /// Clip rectangle of the old-lib drawing API (SetClip and the DrawUI
+    /// family), stored as [x0, y0, x1, y1].
+    #[serde(default = "default_oldlib_clip")]
+    oldlib_clip: [i32; 4],
     /// Full register file captured at the most recent branch, so a fault that
     /// executes junk between the branch and the crash still reports the state
     /// at dispatch time. Diagnostic-only, not serialized.
@@ -879,6 +904,10 @@ impl NicaiMachine {
             last_pc: 0,
             recent_pcs: VecDeque::with_capacity(32),
             recent_branches: VecDeque::with_capacity(16),
+            wide_images: false,
+            gamelib_v3_table: 0,
+            oldlib_clip: default_oldlib_clip(),
+            native_objects: std::collections::BTreeMap::new(),
             branch_regs: None,
             pending_screen: 0,
             active_screen: 0,
@@ -1044,13 +1073,67 @@ impl NicaiMachine {
 
     fn initialize_screen(&mut self) {
         self.memory.w32(SCREEN_IMAGE_STRUCT, SCREEN_IMAGE);
-        self.memory.w16(SCREEN_IMAGE_STRUCT + 4, 240);
-        self.memory.w16(SCREEN_IMAGE_STRUCT + 6, 400);
-        self.memory.w16(SCREEN_IMAGE_STRUCT + 8, 240);
-        self.memory.w16(SCREEN_IMAGE_STRUCT + 12, 0);
-        self.memory.w16(SCREEN_IMAGE_STRUCT + 14, 0);
+        self.write_screen_header();
+    }
+
+    /// Screen framebuffer header: narrow layout keeps the u16 width/height
+    /// pair at +4/+6 with the stride at +8; the wide (v3 gamelib) layout
+    /// stores u32 width at +4 and u32 height at +8.
+    fn write_screen_header(&mut self) {
+        if self.wide_images {
+            self.memory.w32(SCREEN_IMAGE_STRUCT + 4, 240);
+            self.memory.w32(SCREEN_IMAGE_STRUCT + 8, 400);
+            self.memory.w32(SCREEN_IMAGE_STRUCT + 12, 0);
+        } else {
+            self.memory.w16(SCREEN_IMAGE_STRUCT + 4, 240);
+            self.memory.w16(SCREEN_IMAGE_STRUCT + 6, 400);
+            self.memory.w16(SCREEN_IMAGE_STRUCT + 8, 240);
+            self.memory.w16(SCREEN_IMAGE_STRUCT + 12, 0);
+            self.memory.w16(SCREEN_IMAGE_STRUCT + 14, 0);
+        }
         self.memory.w16(SCREEN_IMAGE_STRUCT + 16, 240);
         self.memory.w16(SCREEN_IMAGE_STRUCT + 18, 400);
+    }
+
+    /// Image width/height pair, laid out per the active header mode.
+    fn image_dims(&mut self, image: u32) -> (i32, i32) {
+        if self.wide_images {
+            (
+                self.memory.r32(image + 4) as i32,
+                self.memory.r32(image + 8) as i32,
+            )
+        } else {
+            (
+                self.memory.r16(image + 4) as i32,
+                self.memory.r16(image + 6) as i32,
+            )
+        }
+    }
+
+    fn write_image_dims(&mut self, image: u32, width: u32, height: u32) {
+        if self.wide_images {
+            self.memory.w32(image + 4, width);
+            self.memory.w32(image + 8, height);
+        } else {
+            self.memory.w16(image + 4, width as u16);
+            self.memory.w16(image + 6, height as u16);
+        }
+    }
+
+    fn image_kind_offset(&self) -> u32 {
+        if self.wide_images {
+            12
+        } else {
+            8
+        }
+    }
+
+    fn image_header_len(&self) -> u32 {
+        if self.wide_images {
+            16
+        } else {
+            12
+        }
     }
 
     fn populate_table(&mut self, table: u32, service: u32, count: u32) {
@@ -1770,6 +1853,10 @@ impl NicaiMachine {
             last_pc: 0,
             recent_pcs: VecDeque::new(),
             recent_branches: VecDeque::new(),
+            wide_images: false,
+            gamelib_v3_table: 0,
+            native_objects: std::collections::BTreeMap::new(),
+            oldlib_clip: default_oldlib_clip(),
             branch_regs: None,
             pending_screen: 0,
             active_screen: 0,
@@ -4327,6 +4414,116 @@ mod tests {
             0x5A5A_5A5A,
             "version query must not write through [sp + 68]"
         );
+    }
+
+    /// The gameold table copy (native dispatch sid 82) binds the v3 slot
+    /// layout: the drawing API lives in the dedicated old-lib table, the
+    /// rest maps onto the group-3 service entries with the v3 gap folded in.
+    #[test]
+    fn gameold_table_copy_binds_the_v3_slots() {
+        let mut machine = machine_from_minimal_archive();
+        let buffer = machine.allocate(0x26c);
+        machine.cpu.reg_set(Mode::User, 0, 0x52);
+        machine.cpu.reg_set(Mode::User, 1, buffer);
+        machine.handle_native_dispatch_service();
+        assert_eq!(
+            machine.memory.r32(buffer + 0x04),
+            SERVICE_BASE + TABLE_STRIDE * 3 + 0x04,
+            "DrawImageWithClip maps to the group-3 drawing slot"
+        );
+        assert_eq!(
+            machine.memory.r32(buffer + 0x38),
+            OLDLIB_DRAW_SERVICE + 0x38,
+            "slot 0x38 is SetClip here, not the group-3 name lookup"
+        );
+        assert_eq!(
+            machine.memory.r32(buffer + 0xf0),
+            SERVICE_BASE + TABLE_STRIDE * 3 + 0xf0,
+            "below the gap the v3 offset maps to the same v2 offset"
+        );
+        assert_eq!(
+            machine.memory.r32(buffer + 0x114),
+            SERVICE_BASE + TABLE_STRIDE * 3 + 0x11c,
+            "past the gap the v3 offset maps 8 bytes up"
+        );
+        assert_eq!(
+            machine.memory.r32(buffer + 0x240),
+            SERVICE_BASE + TABLE_STRIDE * 12,
+            "the billing slots ride at the v3 tail"
+        );
+    }
+
+    /// SetClip latches the old-lib clip rectangle and returns its bottom
+    /// edge; a blit outside the clip is dropped before it touches the
+    /// framebuffer.
+    #[test]
+    fn oldlib_set_clip_gates_blits() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        machine.cpu.reg_set(Mode::User, 0, 10);
+        machine.cpu.reg_set(Mode::User, 1, 20);
+        machine.cpu.reg_set(Mode::User, 2, 100);
+        machine.cpu.reg_set(Mode::User, 3, 50);
+        machine.handle_oldlib_draw_service(14);
+        assert_eq!(machine.register(0), 70, "SetClip returns the bottom edge");
+        assert_eq!(machine.oldlib_clip, [10, 20, 110, 70]);
+
+        // Fully outside the clip: nothing is painted.
+        let image = machine.allocate(machine.image_header_len());
+        let pixels = machine.allocate(4 * 4 * 2);
+        machine.memory.w32(image, pixels);
+        machine.write_image_dims(image, 4, 4);
+        let kind = machine.image_kind_offset();
+        machine.memory.w8(image + kind, 1);
+        machine.memory.w16(pixels, 0xf800);
+        let mut blit = |machine: &mut NicaiMachine, dx: u32, dy: u32| {
+            machine.cpu.reg_set(Mode::User, 0, image);
+            machine.cpu.reg_set(Mode::User, 1, 0);
+            machine.cpu.reg_set(Mode::User, 2, 0);
+            machine.cpu.reg_set(Mode::User, 3, 4);
+            machine.cpu.reg_set(Mode::User, 4, 4);
+            machine.cpu.reg_set(Mode::User, 5, dx);
+            machine.cpu.reg_set(Mode::User, 6, dy);
+            machine.handle_oldlib_draw_service(1);
+        };
+        blit(&mut machine, 0, 0);
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (0 * 240) * 2),
+            0,
+            "a blit outside the clip rectangle stays off the framebuffer"
+        );
+        blit(&mut machine, 16, 24);
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (24 * 240 + 16) * 2),
+            0xf800,
+            "a blit inside the clip lands on the framebuffer"
+        );
+    }
+
+    /// The v3 games read image headers with u32 width/height at +4/+8; the
+    /// screen header follows the same layout once the v3 library is built.
+    #[test]
+    fn wide_image_headers_store_u32_dimensions() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE_STRUCT + 4),
+            240,
+            "narrow default"
+        );
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE_STRUCT + 6),
+            400,
+            "narrow default"
+        );
+        machine.wide_images = true;
+        machine.write_screen_header();
+        assert_eq!(machine.memory.r32(SCREEN_IMAGE_STRUCT + 4), 240);
+        assert_eq!(machine.memory.r32(SCREEN_IMAGE_STRUCT + 8), 400);
+        let image = machine.allocate(machine.image_header_len());
+        assert_eq!(machine.image_header_len(), 16, "wide headers are 16 bytes");
+        machine.write_image_dims(image, 320, 240);
+        assert_eq!(machine.image_dims(image), (320, 240));
     }
 
     /// The blank-canvas slot (0x18) must accept a zero height like the
