@@ -1,5 +1,13 @@
 # Architecture
 
+Native dispatch file operations marshal a three-word argument record. Requests
+0x41a (open), 0x41b (write), 0x427 (read) and 0x42a (size) return a request identifier;
+the subsequent 0x7d1 request retrieves the most recent scalar for that identifier.
+Close (0x41c) returns its status directly. Paths use the guest filesystem's
+byte-order-aware decoder, while mode strings remain byte strings. Handle zero is
+valid, EOF returns the number of bytes actually read, and invalid operations
+return 0xffffffff. The files remain in memory and are not persisted to the host.
+
 Resource-package lookup recognizes the exact extended file-package marker
 (`1` at offset 84). Compact in-memory descriptors can place unrelated pointer
 storage at that offset; treating every nonzero byte as a file marker incorrectly

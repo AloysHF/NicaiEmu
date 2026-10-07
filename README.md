@@ -263,6 +263,11 @@ Fixed-address picture-library entry points use the same implementation.
 Unknown object methods use separate inert stubs so they cannot invoke global
 manager constructors or overwrite saved return addresses.
 
+Native file requests support open, close, size, read and write through the same
+guest filesystem, including their deferred scalar-result retrieval. This fixes
+required startup file creation; it does not implement missing native object
+methods or establish that a previously blank application is now usable.
+
 
 Pending resource callbacks bound to a new screen run before its initialization,
 so initialization can use the objects created by resource loading. Requests

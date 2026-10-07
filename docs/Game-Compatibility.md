@@ -1,5 +1,26 @@
 # Game Compatibility
 
+## PR 71 black-screen audit (2026-10-07)
+
+At 799b41f, the three-library scan reported 249 successful process exits out of
+250 files. That is not a compatibility result. A low-color/low-pixel filter
+identified 90 candidates for visual and input inspection; it does not classify
+all of them as black screens. Some show only an update prompt, and some have
+monochrome interfaces. A usable startup must render correctly and accept its
+expected input without an emulator fault, including network-dependent titles.
+
+The A-library Metal new variant is confirmed failing: it halts on required
+startup file creation without a game screen. Native file-request handling now
+passes that assertion, but the application then faults on an uninitialized
+native manager slot at +0x138. It remains failing. Other former halt-only
+results can expose later missing interfaces after this file repair; those
+must not be reported as newly compatible games.
+
+The three commits after 0efb157 fill Scene method slots, allocate an inert list
+control and install inert Talker methods. Successful default scans after those
+changes do not prove rendering or gameplay. The historical tables below retain
+their original validation scope and are not a fresh all-variant certification.
+
 CBE applications in the local validation corpus were run by the standalone emulator with default or application-specific capture timing. Every screenshot below is the RGB565 framebuffer produced by guest execution. If an application stops, times out, or leaves a single-color framebuffer, the batch does not create a screenshot. A successful startup capture does not guarantee that every screen or gameplay path works correctly.
 
 The Network column in the application list flags applications that require

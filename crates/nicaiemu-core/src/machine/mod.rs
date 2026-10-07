@@ -769,6 +769,8 @@ pub struct NicaiMachine {
     native_system_info: u32,
     native_property_info: u32,
     #[serde(skip, default)]
+    native_file_results: BTreeMap<u32, u32>,
+    #[serde(skip, default)]
     virtual_fs: VirtualFileSystem,
     #[serde(skip, default)]
     pub(crate) net_channels: Vec<services::network::NetChannel>,
@@ -955,6 +957,7 @@ impl NicaiMachine {
             native_app_init: 0,
             native_system_info: 0,
             native_property_info: 0,
+            native_file_results: BTreeMap::new(),
             virtual_fs: VirtualFileSystem::default(),
             net_channels: vec![
                 services::network::NetChannel::default();
@@ -1799,6 +1802,7 @@ impl NicaiMachine {
             native_app_init: 0,
             native_system_info: 0,
             native_property_info: 0,
+            native_file_results: BTreeMap::new(),
             virtual_fs: VirtualFileSystem::default(),
             net_channels: vec![
                 services::network::NetChannel::default();
@@ -3450,10 +3454,87 @@ mod tests {
         );
     }
 
+    #[test]
+    fn native_file_requests_create_write_reopen_and_read_in_both_byte_orders() {
+        fn request(machine: &mut NicaiMachine, id: u32, words: [u32; 3]) -> u32 {
+            let record = machine.allocate(16);
+            for (index, value) in words.into_iter().enumerate() {
+                machine.memory.w32(record + index as u32 * 4, value);
+            }
+            machine.cpu.reg_set(Mode::User, 0, id);
+            machine.cpu.reg_set(Mode::User, 1, record);
+            machine.handle_native_dispatch_service();
+            if id == 0x41c {
+                return machine.register(0);
+            }
+            assert_eq!(machine.register(0), id);
+            let output = machine.allocate(4);
+            machine.memory.w32(output, 0xDEAD_BEEF);
+            machine.memory.w32(record, output);
+            machine.memory.w32(record + 4, id);
+            machine.memory.w32(record + 8, 4);
+            machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+            machine.cpu.reg_set(Mode::User, 1, record);
+            machine.handle_native_dispatch_service();
+            machine.memory.r32(output)
+        }
+
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let path = machine.allocate(64);
+            for (index, byte) in b"native-save.dat\0".iter().enumerate() {
+                if big_endian {
+                    machine
+                        .memory
+                        .w16(path + index as u32 * 2, u16::from(*byte));
+                } else {
+                    machine.memory.w8(path + index as u32, *byte);
+                }
+            }
+            let mode = machine.allocate(8);
+            machine.memory.write_bytes(mode, b"rb\0");
+            assert_eq!(request(&mut machine, 0x41a, [2, path, mode]), u32::MAX);
+
+            machine.memory.write_bytes(mode, b"wb\0");
+            let handle = request(&mut machine, 0x41a, [2, path, mode]);
+            assert_eq!(handle, 0, "the first valid file handle is zero");
+            let buffer = machine.allocate(16);
+            machine.memory.write_bytes(buffer, b"\x01\x02\x80\xff");
+            assert_eq!(request(&mut machine, 0x41b, [buffer, 4, handle]), 4);
+            assert_eq!(request(&mut machine, 0x42a, [handle, 0, 0]), 4);
+            assert_eq!(request(&mut machine, 0x41c, [handle, 0, 0]), 0);
+            assert_eq!(request(&mut machine, 0x42a, [handle, 0, 0]), u32::MAX);
+
+            machine.memory.write_bytes(mode, b"rb\0");
+            let handle = request(&mut machine, 0x41a, [2, path, mode]);
+            machine.memory.write_bytes(buffer, &[0x55; 16]);
+            assert_eq!(request(&mut machine, 0x427, [buffer, 16, handle]), 4);
+            assert_eq!(
+                machine.memory.r32(buffer),
+                if big_endian { 0x0102_80ff } else { 0xff80_0201 }
+            );
+            assert_eq!(
+                machine.memory.r8(buffer + 4),
+                0x55,
+                "EOF leaves the buffer tail intact"
+            );
+            assert_eq!(request(&mut machine, 0x427, [buffer, 4, handle]), 0);
+            assert_eq!(
+                request(&mut machine, 0x427, [buffer, 4, u32::MAX]),
+                u32::MAX
+            );
+            assert_eq!(request(&mut machine, 0x41c, [handle, 0, 0]), 0);
+            assert_eq!(request(&mut machine, 0x41c, [handle, 0, 0]), u32::MAX);
+        }
+    }
+
     /// The native interface request honours two-byte result slots: the
     /// shared template's measure-call marshals a u16 output and reads it
     /// back, which is what terminates the render loop instead of letting
-    /// it eat the stack.  Four-byte slots keep the full-word writes.
+    /// it eat the stack. Four-byte slots keep the full-word writes.
     #[test]
     fn native_interface_request_writes_sized_results() {
         let mut machine = machine_from_minimal_archive();

@@ -714,7 +714,10 @@ impl NicaiMachine {
                 }
                 self.set_result(0);
             }
-            0x8e | 0x8f | 0x97 | 0xac | 0x421 | 0x41a => {
+            0x41a | 0x41b | 0x41c | 0x427 | 0x42a => {
+                self.handle_native_file_request(id, argument);
+            }
+            0x8e | 0x8f | 0x97 | 0xac | 0x421 => {
                 if std::env::var_os("CBE_TRACE").is_some() {
                     eprintln!(
                         "[dispatch] id=0x{id:x} r1=0x{:08X} lr=0x{:08X}",
@@ -1239,6 +1242,60 @@ impl NicaiMachine {
         }
     }
 
+    /// Native file operations marshal arguments into a three-word record and
+    /// retrieve their scalar result through the subsequent interface request.
+    fn handle_native_file_request(&mut self, id: u32, argument: u32) {
+        let result = if argument == 0 {
+            u32::MAX
+        } else {
+            let first = self.memory.r32(argument);
+            match id {
+                0x41a => {
+                    let path_ptr = self.memory.r32(argument + 4);
+                    let mode_ptr = self.memory.r32(argument + 8);
+                    let path = self.read_file_path(path_ptr);
+                    let mode = self.read_c_string(mode_ptr, 8);
+                    self.virtual_fs.open(&path, &mode, first) as u32
+                }
+                0x41c => self.virtual_fs.close(first) as u32,
+                0x42a => self
+                    .virtual_fs
+                    .size(first)
+                    .map_or(u32::MAX, |size| size as u32),
+                0x41b | 0x427 => {
+                    let count = self.memory.r32(argument + 4);
+                    let handle = self.memory.r32(argument + 8);
+                    if count == 0 {
+                        0
+                    } else if first == 0 || count > HEAP_SIZE as u32 {
+                        u32::MAX
+                    } else if id == 0x427 {
+                        match self.virtual_fs.read(handle, count as usize) {
+                            Some(bytes) if self.memory.write_bytes(first, &bytes) => {
+                                bytes.len() as u32
+                            }
+                            _ => u32::MAX,
+                        }
+                    } else {
+                        let bytes: Vec<_> = (0..count)
+                            .map(|offset| self.memory.r8(first.wrapping_add(offset)))
+                            .collect();
+                        self.virtual_fs
+                            .write(handle, &bytes)
+                            .map_or(u32::MAX, |size| size as u32)
+                    }
+                }
+                _ => u32::MAX,
+            }
+        };
+        if id == 0x41c {
+            self.set_result(result);
+        } else {
+            self.native_file_results.insert(id, result);
+            self.set_result(id);
+        }
+    }
+
     fn handle_native_interface_request(&mut self, argument: u32) {
         if argument == 0 {
             return;
@@ -1268,7 +1325,12 @@ impl NicaiMachine {
                 }
                 Some(self.native_property_info)
             }
-            0x41a => Some(u32::MAX),
+            0x41a | 0x41b | 0x427 | 0x42a => Some(
+                self.native_file_results
+                    .get(&handle)
+                    .copied()
+                    .unwrap_or(u32::MAX),
+            ),
             // Shared-template measurement request (id computed as 0x7f << 3):
             // its result feeds the render loop's terminate check.  A stable
             // zero ends the loop instead of the stack being eaten by the
