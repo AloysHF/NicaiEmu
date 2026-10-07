@@ -65,6 +65,12 @@ The guest owns a 240×400 RGB565 screen. Image resources are reconstructed from 
 
 ## Headless execution
 
+Legacy GameLCD uses separate register/stack arguments for tile blits and
+bounded GBK strings (text, byte length, x, y, RGB888). Its clip rectangle lives
+in reserved screen-descriptor bytes and is therefore preserved by memory
+snapshots. Clip adjustment advances source coordinates as well as destination
+coordinates; transparent blits preserve destination pixels for zero RGB565.
+
 `cbe_boot` loads the same archive and machine used by the desktop frontend. It can schedule phone-key presses at exact frames, run a fixed number of callbacks, print machine diagnostics, and save a screenshot. This is the preferred path for deterministic runtime regression checks.
 
 The desktop screenshot mode preserves the last framebuffer produced before a guest callback error. It only writes a PNG when guest execution has produced a framebuffer with more than one color; blank frames and startup failures are reported without creating a screenshot.

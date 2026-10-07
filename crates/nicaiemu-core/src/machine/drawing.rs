@@ -889,7 +889,11 @@ impl NicaiMachine {
 
     fn draw_text(&mut self, address: u32, x: i32, y: i32, color: u16) {
         let bytes = self.read_c_bytes(address, 4096);
-        let (text, _, _) = GBK.decode(&bytes);
+        self.draw_text_bytes(&bytes, x, y, color);
+    }
+
+    fn draw_text_bytes(&mut self, bytes: &[u8], x: i32, y: i32, color: u16) {
+        let (text, _, _) = GBK.decode(bytes);
         // Text coordinates live in the presented display space: the firmware
         // renders the glyphs itself, so a landscape-packaged game issues them
         // with 400x240 coordinates that have to be mapped back into the
@@ -929,6 +933,94 @@ impl NicaiMachine {
 
     pub(crate) fn handle_game_lcd_service(&mut self, index: u32) {
         match index {
+            0 => {
+                let image = self.create_image_from_stream(self.register(0), 0);
+                self.set_result(image);
+            }
+            1 | 2 => {
+                let stack = self.register(reg::SP);
+                let height = signed_coord(self.memory.r32(stack));
+                let x = signed_coord(self.memory.r32(stack + 4));
+                let y = signed_coord(self.memory.r32(stack + 8));
+                self.legacy_clipped_blit(
+                    SCREEN_IMAGE_STRUCT,
+                    self.register(0),
+                    signed_coord(self.register(1)),
+                    signed_coord(self.register(2)),
+                    signed_coord(self.register(3)),
+                    height,
+                    x,
+                    y,
+                    index == 2,
+                );
+                self.set_result(0);
+            }
+            3 => {
+                self.draw_image_at(self.register(0), 0, 0, false);
+                self.set_result(0);
+            }
+            9 => {
+                let rgb = self.memory.r32(self.register(reg::SP));
+                let color =
+                    (((rgb >> 19) & 31) << 11) | (((rgb >> 10) & 63) << 5) | ((rgb >> 3) & 31);
+                let length = signed_coord(self.register(1));
+                let mut bytes = self.read_c_bytes(self.register(0), 4096);
+                if length >= 0 {
+                    bytes.truncate(length as usize);
+                }
+                self.draw_text_bytes(
+                    &bytes,
+                    signed_coord(self.register(2)),
+                    signed_coord(self.register(3)),
+                    color as u16,
+                );
+                self.set_result(0);
+            }
+            13 | 14 => {
+                let offset = if index == 13 { 6 } else { 4 };
+                let size = self.memory.r16(self.register(0) + offset) as u32;
+                self.set_result(size);
+            }
+            12 => {
+                for offset in 0..4 {
+                    self.memory.w16(
+                        SCREEN_IMAGE_STRUCT + 12 + offset * 2,
+                        self.register(offset as u8) as u16,
+                    );
+                }
+                self.set_result(0);
+            }
+            21 => {
+                let output = self.register(0);
+                if output != 0 {
+                    for offset in 0..4 {
+                        let value = self.memory.r16(SCREEN_IMAGE_STRUCT + 12 + offset * 2);
+                        self.memory.w16(output + offset * 2, value);
+                    }
+                }
+                self.set_result(output);
+            }
+            23..=26 => self.set_result(if index <= 24 { 8 } else { 16 }),
+            27 | 28 => {
+                let stack = self.register(reg::SP);
+                let width = signed_coord(self.memory.r32(stack));
+                let height = signed_coord(self.memory.r32(stack + 4));
+                let x = signed_coord(self.memory.r32(stack + 8));
+                let y = signed_coord(self.memory.r32(stack + 12));
+                self.legacy_clipped_blit(
+                    self.register(0),
+                    self.register(1),
+                    signed_coord(self.register(2)),
+                    signed_coord(self.register(3)),
+                    width,
+                    height,
+                    x,
+                    y,
+                    index == 28,
+                );
+                self.set_result(0);
+            }
+            32 => self.set_result(SCREEN_IMAGE),
             11 => {
                 let image = self.register(0);
                 if image != 0 {
@@ -950,6 +1042,43 @@ impl NicaiMachine {
                 self.handle_method_stub(stub);
             }
             _ => self.set_result(0),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn legacy_clipped_blit(
+        &mut self,
+        destination: u32,
+        source: u32,
+        sx: i32,
+        sy: i32,
+        width: i32,
+        height: i32,
+        x: i32,
+        y: i32,
+        alpha: bool,
+    ) {
+        // Store the clip in the reserved screen descriptor bytes so memory snapshots preserve it.
+        let cx = self.memory.r16(SCREEN_IMAGE_STRUCT + 12) as i16 as i32;
+        let cy = self.memory.r16(SCREEN_IMAGE_STRUCT + 14) as i16 as i32;
+        let cw = self.memory.r16(SCREEN_IMAGE_STRUCT + 16) as i16 as i32;
+        let ch = self.memory.r16(SCREEN_IMAGE_STRUCT + 18) as i16 as i32;
+        let left = x.max(cx);
+        let top = y.max(cy);
+        let right = (x + width).min(cx + cw);
+        let bottom = (y + height).min(cy + ch);
+        if right > left && bottom > top {
+            self.blit_image(
+                destination,
+                source,
+                sx + left - x,
+                sy + top - y,
+                right - left,
+                bottom - top,
+                left,
+                top,
+                alpha,
+            );
         }
     }
 

@@ -1044,6 +1044,10 @@ impl NicaiMachine {
         self.memory.w16(SCREEN_IMAGE_STRUCT + 4, 240);
         self.memory.w16(SCREEN_IMAGE_STRUCT + 6, 400);
         self.memory.w16(SCREEN_IMAGE_STRUCT + 8, 240);
+        self.memory.w16(SCREEN_IMAGE_STRUCT + 12, 0);
+        self.memory.w16(SCREEN_IMAGE_STRUCT + 14, 0);
+        self.memory.w16(SCREEN_IMAGE_STRUCT + 16, 240);
+        self.memory.w16(SCREEN_IMAGE_STRUCT + 18, 400);
     }
 
     fn populate_table(&mut self, table: u32, service: u32, count: u32) {
@@ -3488,6 +3492,78 @@ mod tests {
                 0,
                 "adjacent byte {offset:x}"
             );
+        }
+    }
+
+    #[test]
+    fn legacy_lcd_clips_tiles_preserves_alpha_and_bounds_text() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            let image = machine.allocate(12);
+            let pixels = machine.allocate(8);
+            machine.memory.w32(image, pixels);
+            machine.memory.w16(image + 4, 4);
+            machine.memory.w16(image + 6, 1);
+            for (i, value) in [0x1111, 0, 0xf800, 0x2222].into_iter().enumerate() {
+                machine.memory.w16(pixels + i as u32 * 2, value);
+            }
+            for (register, value) in [11, 20, 2, 1].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, register as u8, value);
+            }
+            machine.handle_game_lcd_service(12);
+            let stack = machine.allocate(16);
+            machine.cpu.reg_set(Mode::User, reg::SP, stack);
+            machine.memory.w32(stack, 1);
+            machine.memory.w32(stack + 4, 10);
+            machine.memory.w32(stack + 8, 20);
+            for (register, value) in [image, 0, 0, 4].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, register as u8, value);
+            }
+            machine
+                .memory
+                .w16(SCREEN_IMAGE + (20 * 240 + 11) * 2, 0xffff);
+            machine.handle_game_lcd_service(2);
+            assert_eq!(machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 10) * 2), 0);
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 11) * 2),
+                0xffff
+            );
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 12) * 2),
+                0xf800
+            );
+            assert_eq!(machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 13) * 2), 0);
+            machine.cpu.reg_set(Mode::User, 0, image);
+            machine.handle_game_lcd_service(1);
+            assert_eq!(machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 11) * 2), 0);
+            let output = machine.allocate(8);
+            machine.cpu.reg_set(Mode::User, 0, output);
+            machine.handle_game_lcd_service(21);
+            assert_eq!(machine.memory.r16(output), 11);
+            assert_eq!(machine.memory.r16(output + 4), 2);
+            let text = machine.allocate(4);
+            machine.memory.write_bytes(text, b"AB\0");
+            for (register, value) in [text, 1, 30, 40].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, register as u8, value);
+            }
+            machine.memory.w32(stack, 0xff0000);
+            machine.handle_game_lcd_service(9);
+            let mut red = 0;
+            for y in 40..56 {
+                for x in 30..46 {
+                    let value = machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2);
+                    if x < 38 {
+                        red += usize::from(value == 0xf800);
+                    } else {
+                        assert_eq!(value, 0, "text length limits drawing to the first glyph");
+                    }
+                }
+            }
+            assert!(red > 0);
         }
     }
 
