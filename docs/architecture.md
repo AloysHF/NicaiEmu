@@ -61,6 +61,11 @@ layout while each initializer writes only its declared number of slots.
 
 ## Rendering
 
+Unknown object method slots are assigned the inert object-method kind, never
+the global GameManager kind. Object arguments must not trigger global
+constructor heuristics that write through caller stack slots. These inert
+methods do not establish support for the object's unimplemented behavior.
+
 Fixed-address picture-library services share the legacy picture implementation
 for load/cache, image sizes, drawing targets and owned-resource release. The
 constructor initializes the default target and ownership marker explicitly.

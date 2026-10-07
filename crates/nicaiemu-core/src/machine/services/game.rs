@@ -532,12 +532,8 @@ impl NicaiMachine {
                 self.set_result(result);
             }
             _ => {
-                // Unrecognised gameold ids act as object constructors: the
-                // guest passes a struct in r0 and later reads method pointers
-                // out of it.  The firmware fills every slot with a callable
-                // stub; leaving them null makes the next indirect call jump
-                // to zero.  Only zero slots are touched, so scalar-returning
-                // services and already-initialised objects are unaffected.
+                // Unknown constructors retain inert method slots. These must
+                // not share global manager semantics or write caller stack slots.
                 let obj = self.register(0);
                 self.fill_zero_method_slots(obj, 0x100);
                 self.set_result(obj);
@@ -833,7 +829,7 @@ impl NicaiMachine {
             if self.memory.r32(obj + offset) == 0 {
                 self.memory.w32(
                     obj + offset,
-                    Self::method_stub_address(METHOD_KIND_GAMEOLD, offset),
+                    Self::method_stub_address(METHOD_KIND_AUTO, offset),
                 );
             }
         }

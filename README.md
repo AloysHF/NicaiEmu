@@ -259,6 +259,8 @@ walks child and sibling windows while preserving caller registers.
 Legacy picture libraries support resource loading, cached image indices, image
 sizes, clipped drawing, rectangle fills, target selection, and release.
 Fixed-address picture-library entry points use the same implementation.
+Unknown object methods use separate inert stubs so they cannot invoke global
+manager constructors or overwrite saved return addresses.
 
 ## Testing
 

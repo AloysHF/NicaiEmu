@@ -128,6 +128,10 @@ playable offline are not flagged.
 
 ## Known Limitations
 
+- Double Dragon V10 now renders its title and introduction after isolating
+  unknown object methods from global manager stubs. Entering gameplay still
+  faults in an unimplemented scene-object method; gameplay is not compatible.
+
 - Undercover V10 now shows its full title cover and continue prompt, and
   confirms into the purchase screen after font, window and fixed picture-library
   repairs. Startup is verified; actual gameplay still requires offline SMS

@@ -3495,6 +3495,25 @@ mod tests {
     }
 
     #[test]
+    fn unknown_object_methods_preserve_stack_and_do_not_allocate() {
+        let mut machine = machine_from_minimal_archive();
+        let object = machine.allocate(0x100);
+        let stack = machine.allocate(0x80);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack + 68, 0x0f000001);
+        machine.cpu.reg_set(Mode::User, 0, object);
+        machine.handle_game_service(76);
+        let method = machine.memory.r32(object + 0x24);
+        let count = machine.heap_allocations.len();
+        machine.cpu.reg_set(Mode::User, 0, object);
+        machine.cpu.reg_set(Mode::User, 1, 700);
+        machine.handle_method_stub(method & !1);
+        assert_eq!(machine.memory.r32(stack + 68), 0x0f000001);
+        assert_eq!(machine.heap_allocations.len(), count);
+        assert_eq!(machine.register(0), 0);
+    }
+
+    #[test]
     fn fixed_picture_library_methods_create_draw_and_release_owned_images() {
         let mut machine = machine_from_minimal_archive();
         machine.initialize_screen();
