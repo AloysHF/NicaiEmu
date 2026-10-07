@@ -247,6 +247,8 @@ impl NicaiMachine {
                 let resource_ids = self.allocate(capacity.saturating_mul(2).max(2));
                 let pictures = self.allocate(capacity.saturating_mul(4).max(4));
                 self.memory.w32(object, scanline);
+                self.memory.w32(object + 4, 0);
+                self.memory.w8(object + 22, 1);
                 self.memory.w16(object + 8, capacity as u16);
                 self.memory.w32(object + 12, resource_ids);
                 self.memory.w32(object + 16, pictures);
@@ -544,16 +546,7 @@ impl NicaiMachine {
     }
 
     pub(crate) fn handle_fixed_gameold_object_service(&mut self, index: u32) {
-        if index == 4 {
-            let x = signed_coord(self.register(1));
-            let y = signed_coord(self.register(2));
-            let width = signed_coord(self.register(3));
-            let stack = self.register(reg::SP);
-            let height = signed_coord(self.memory.r32(stack));
-            let color = self.memory.r32(stack + 4) as u16;
-            self.fill_screen_rect(x, y, width, height, color);
-        }
-        self.set_result(0);
+        self.handle_picture_library_method(0x18 + index * 4);
     }
 
     pub(crate) fn handle_fixed_gameold_region_service(&mut self, index: u32) -> anyhow::Result<()> {

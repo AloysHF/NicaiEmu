@@ -3495,6 +3495,44 @@ mod tests {
     }
 
     #[test]
+    fn fixed_picture_library_methods_create_draw_and_release_owned_images() {
+        let mut machine = machine_from_minimal_archive();
+        machine.initialize_screen();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0010_0000;
+        machine.executable.code_image_size = 0x2000;
+        machine.executable.code_size = 4;
+        let library = machine.allocate(0x54);
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.cpu.reg_set(Mode::User, 1, 1);
+        machine.handle_game_service(75);
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.cpu.reg_set(Mode::User, 1, 2);
+        machine.cpu.reg_set(Mode::User, 2, 1);
+        machine.handle_fixed_gameold_object_service(0);
+        assert_eq!(machine.register(0), 0);
+        assert_eq!(machine.memory.r16(library + 20), 1);
+        let table = machine.memory.r32(library + 16);
+        let image = machine.memory.r32(table);
+        let pixels = machine.memory.r32(image);
+        machine.memory.w16(pixels, 0xf800);
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.cpu.reg_set(Mode::User, 1, 0);
+        machine.cpu.reg_set(Mode::User, 2, 10);
+        machine.cpu.reg_set(Mode::User, 3, 20);
+        machine.handle_fixed_gameold_object_service(7);
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 10) * 2),
+            0xf800
+        );
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.handle_fixed_gameold_object_service(14);
+        assert_eq!(machine.memory.r16(library + 20), 0);
+        assert!(!machine.heap_allocations.contains_key(&pixels));
+        assert!(!machine.heap_allocations.contains_key(&image));
+    }
+
+    #[test]
     fn window_repaint_calls_guest_painters_and_preserves_caller_registers() {
         let mut machine = machine_from_minimal_archive();
         machine.initialize_screen();

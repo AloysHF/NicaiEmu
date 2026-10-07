@@ -61,6 +61,10 @@ layout while each initializer writes only its declared number of slots.
 
 ## Rendering
 
+Fixed-address picture-library services share the legacy picture implementation
+for load/cache, image sizes, drawing targets and owned-resource release. The
+constructor initializes the default target and ownership marker explicitly.
+
 Fixed legacy window repaint clips each dirty rectangle, invokes its guest
 paint callback synchronously with the configured context, and visits child
 and sibling windows. CPU registers are restored after each nested painter;

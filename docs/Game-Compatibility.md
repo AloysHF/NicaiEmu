@@ -128,9 +128,10 @@ playable offline are not flagged.
 
 ## Known Limitations
 
-- Undercover V10 no longer loops indefinitely in guest text wrapping after
-  fixing legacy font metrics. Window repaint now shows its continue prompt,
-  but resource images and usable menu/gameplay are not yet validated.
+- Undercover V10 now shows its full title cover and continue prompt, and
+  confirms into the purchase screen after font, window and fixed picture-library
+  repairs. Startup is verified; actual gameplay still requires offline SMS
+  purchase and has not been validated.
 
 - The A-library Three Kingdoms new variant now loads its dynamic executable
   after correcting resource-package classification. Its main menu renders after
