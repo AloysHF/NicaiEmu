@@ -140,7 +140,17 @@ impl NicaiMachine {
             self.memory.w32(package + 16, offsets);
             self.memory.w32(package + 20, ids);
             self.memory.w32(package + 24, 0);
-            self.memory.w32(package + 96, 0);
+            // The file-backed end field (+96) lives past the firmware-visible
+            // struct.  Games sometimes pass a stack-allocated package whose
+            // frame ends before it, so only clear it inside a host heap block
+            // we allocated ourselves; otherwise the write lands on the
+            // caller's saved registers (it zeroed 鹿鼎记's saved LR).
+            if self
+                .allocation_size(package)
+                .is_some_and(|size| size >= 100)
+            {
+                self.memory.w32(package + 96, 0);
+            }
             debug!("loaded {count} CBE resources into guest memory");
         } else {
             warn!("CBE main resource package is empty");
