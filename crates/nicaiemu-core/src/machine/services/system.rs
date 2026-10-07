@@ -1,11 +1,11 @@
-//! System and root manager services (groups 0 and 1).
+//! System, root and control manager services (groups 0, 1 and 8).
 
 use armv4t_emu::Memory;
 
 use super::super::{
     fixed_manager_specs, manager_initializer_count, NicaiMachine, DL_IMAGE_MANAGER,
-    DL_LOAD_MANAGER, DL_PAY_MANAGER, DL_RESOURCE_MANAGER, MANAGER_BASE, SERVICE_BASE, TABLE_STRIDE,
-    VIDEO_MANAGER,
+    DL_LOAD_MANAGER, DL_PAY_MANAGER, DL_RESOURCE_MANAGER, MANAGER_BASE, METHOD_KIND_AUTO,
+    SERVICE_BASE, TABLE_STRIDE, VIDEO_MANAGER,
 };
 
 impl NicaiMachine {
@@ -250,6 +250,35 @@ impl NicaiMachine {
         // Shared dense function table for the manager, so the guest can
         // treat the result as an object with callable slots.
         self.set_result(MANAGER_BASE + TABLE_STRIDE * (group + 1));
+    }
+
+    /// Group 8 — the control manager (fixed-manager slot 3).  Index 6 is the
+    /// control factory: the guest passes a slot pointer, expects an instance
+    /// written back into it, and then chains calls through the instance's
+    /// method block at +0xE4..+0x138.  Returning zero left the slot empty, so
+    /// the first `ldr r2, [obj, #0xe4]; bx r2` jumped to NULL.
+    pub(crate) fn handle_ctrl_service(&mut self, index: u32) {
+        match index {
+            6 => {
+                const CONTROL_SIZE: u32 = 0x200;
+                let slot = self.register(0);
+                let mut object = 0;
+                if slot != 0 {
+                    object = self.allocate(CONTROL_SIZE);
+                    if object != 0 {
+                        for offset in (0..CONTROL_SIZE).step_by(4) {
+                            self.memory.w32(
+                                object + offset,
+                                Self::method_stub_address(METHOD_KIND_AUTO, offset),
+                            );
+                        }
+                        self.memory.w32(slot, object);
+                    }
+                }
+                self.set_result(object);
+            }
+            _ => self.set_result(0),
+        }
     }
 
     pub(crate) fn handle_net_app_service(&mut self, index: u32) {

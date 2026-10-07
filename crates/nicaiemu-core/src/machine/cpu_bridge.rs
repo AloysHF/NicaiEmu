@@ -417,6 +417,7 @@ impl NicaiMachine {
             5 => self.handle_file_service(index),
             6 => self.handle_stdio_service(index),
             7 => self.handle_timer_service(index),
+            8 => self.handle_ctrl_service(index),
             9 => self.handle_network_service(index),
             10 => self.handle_game_util_service(index),
             11 => self.handle_df_engine_service(index),
