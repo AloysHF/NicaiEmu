@@ -17,6 +17,39 @@ fn rect_contains_point(left: i32, top: i32, right: i32, bottom: i32, x: i32, y: 
     x >= left && x <= right && y >= top && y <= bottom
 }
 
+/// Leading-integer parse for the guest `atoi`/`atol` exports.
+fn parse_ascii_integer(text: &str) -> u32 {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    let negative = index < bytes.len() && bytes[index] == b'-';
+    if negative {
+        index += 1;
+    }
+    let mut value: i64 = 0;
+    let mut saw_digit = false;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        saw_digit = true;
+        value = value
+            .saturating_mul(10)
+            .saturating_add((bytes[index] - b'0') as i64);
+        if value > i32::MAX as i64 {
+            value = i32::MAX as i64;
+        }
+        index += 1;
+    }
+    if !saw_digit {
+        return 0;
+    }
+    if negative {
+        (-(value.min(0x8000_0000))) as i32 as u32
+    } else {
+        value as u32
+    }
+}
+
 fn packed_rectangles_overlap(
     first_position: u32,
     first_size: u32,
@@ -408,6 +441,75 @@ impl NicaiMachine {
                     .wrapping_mul(1_103_515_245)
                     .wrapping_add(12_345);
                 self.set_result((self.rand_state >> 16) & 0x7fff);
+            }
+            // Firmware exports at F_0 offsets 0x224..0x274 (indices 137..157).
+            // Falling through to the object-constructor default here corrupts
+            // memory (it treats scalar arguments like 0x3EB as object
+            // pointers) and returns the wrong value — 极品飞车 formats the
+            // GetPayNum result with an in-place sprintf, so a 4-digit return
+            // overruns the format string and walks the pointer table.
+            137 => self.set_result(0), // vm_log_trace
+            142 => {
+                // strcat(dst, src)
+                let destination = self.register(0);
+                let source = self.register(1);
+                if destination != 0 && source != 0 {
+                    let mut end = destination;
+                    while end.wrapping_sub(destination) < 0x1_0000 && self.memory.r8(end) != 0 {
+                        end = end.wrapping_add(1);
+                    }
+                    let mut offset = 0u32;
+                    loop {
+                        let byte = self.memory.r8(source.wrapping_add(offset));
+                        self.memory.w8(end.wrapping_add(offset), byte);
+                        if byte == 0 || offset >= 0x1_0000 {
+                            break;
+                        }
+                        offset += 1;
+                    }
+                }
+                self.set_result(destination);
+            }
+            143 | 145 => {
+                // atol / atoi
+                let text = self.read_c_string(self.register(0), 64);
+                self.set_result(parse_ascii_integer(&text));
+            }
+            144 => {
+                // memmove(dst, src, n) — copy through a temp buffer so
+                // overlapping ranges behave like memmove, not memcpy.
+                let destination = self.register(0);
+                let source = self.register(1);
+                let count = self.register(2).min(0x1_0000);
+                if destination != 0 && source != 0 && count != 0 {
+                    let bytes: Vec<u8> = (0..count)
+                        .map(|offset| self.memory.r8(source.wrapping_add(offset)))
+                        .collect();
+                    self.memory.write_bytes(destination, &bytes);
+                }
+                self.set_result(destination);
+            }
+            146..=156 => {
+                // BILLING_* family — same semantics as the dedicated billing
+                // group; offline answers keep in-place %d formatting short.
+                self.handle_billing_service(index - 146);
+            }
+            157 => {
+                // vMstricmp(a, b) — case-insensitive compare, 0 when equal.
+                let left = self.read_c_string(self.register(0), 256);
+                let right = self.read_c_string(self.register(1), 256);
+                let result = if left.eq_ignore_ascii_case(&right) {
+                    0
+                } else {
+                    let l = left.to_ascii_lowercase();
+                    let r = right.to_ascii_lowercase();
+                    match l.cmp(&r) {
+                        std::cmp::Ordering::Less => u32::MAX,
+                        std::cmp::Ordering::Greater => 1,
+                        std::cmp::Ordering::Equal => 0,
+                    }
+                };
+                self.set_result(result);
             }
             _ => {
                 // Unrecognised gameold ids act as object constructors: the
