@@ -71,6 +71,10 @@ The guest owns a 240×400 RGB565 screen. Image resources are reconstructed from 
 
 ## Headless execution
 
+Screen logic and rendering callbacks are optional while firmware dialogs
+suspend the underlying screen. Deferred callbacks continue to run and can
+restore the screen; frames without rendering preserve existing pixels.
+
 Legacy GameLCD uses separate register/stack arguments for tile blits and
 bounded GBK strings (text, byte length, x, y, RGB888). Its clip rectangle lives
 in reserved screen-descriptor bytes and is therefore preserved by memory

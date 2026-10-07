@@ -1439,9 +1439,8 @@ impl NicaiMachine {
         }
         if self.pending_screen == 0 || self.pending_screen == screen {
             let render = self.memory.r32(screen + 12);
-            if render == 0 {
-                bail!("CBE screen at 0x{screen:08X} has no render callback");
-            }
+            // Modal firmware dialogs temporarily clear screen callbacks.
+            // A missing render callback preserves the frame until guest restoration.
             self.invoke_callback(render, screen_this, 0, 0, instruction_limit)?;
             if self.finish_screen_callback_frame() {
                 return Ok(());
@@ -3493,6 +3492,36 @@ mod tests {
                 "adjacent byte {offset:x}"
             );
         }
+    }
+
+    #[test]
+    fn paused_screen_preserves_frame_and_resumes_after_callback() {
+        let mut machine = machine_from_minimal_archive();
+        machine.initialize_screen();
+        machine.state = MachineState::Ready;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let object = machine.allocate(64);
+        let screen = object + 24;
+        machine.active_screen = screen;
+        machine.pending_screen = screen;
+        machine.screen_initialized = true;
+        machine.memory.w16(SCREEN_IMAGE, 0xf800);
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0xf800);
+        assert_eq!(machine.state(), MachineState::Ready);
+        let restore = machine.allocate(4);
+        machine.memory.w16(restore, 0x60c1); // str r1, [r0, #12]
+        machine.memory.w16(restore + 2, 0x4770); // bx lr
+        let render = machine.allocate(6);
+        machine.memory.w16(render, 0x212a); // movs r1, #42
+        machine.memory.w16(render + 2, 0x6101); // str r1, [r0, #16]
+        machine.memory.w16(render + 4, 0x4770);
+        machine
+            .pending_callbacks
+            .push_back((restore | 1, vec![screen, render | 1], "test"));
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object + 16), 42);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0xf800);
     }
 
     #[test]

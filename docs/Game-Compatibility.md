@@ -132,8 +132,9 @@ playable offline are not flagged.
   after correcting resource-package classification. Its main menu renders after
   bounded text-box initialization and picture-library support. Legacy GameLCD
   drawing and text-box methods now show the introduction and purchase text.
-  Confirming purchase still leaves a screen without its render callback;
-  later gameplay remains unvalidated.
+  The modal purchase flow can pause and restore callbacks without a runtime
+  fault. Startup/menu and purchase-failure recovery are verified; actual play
+  remains blocked by the offline SMS purchase flow and has not been validated.
 
 - Persistent guest file storage is not implemented.
 - The firmware network manager implements a minimal offline mock (connect/send/close/http-get plus deferred callbacks). Login-gated titles such as 恶魔城登录版 can leave their wait screen and render the title menu, but there is no live GPRS server, no persistent online session, and most 🌐 Required applications still stop after the mock handshake.

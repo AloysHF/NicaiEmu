@@ -244,6 +244,8 @@ calling null pointers; successful startup does not guarantee complete gameplay.
 Resource lookup distinguishes the file-package marker from adjacent fields in
 compact memory packages. This restores dynamic code lookup for some titles;
 reaching an active screen still requires visual and input validation.
+Modal dialogs may pause screen callbacks; the frame remains visible while
+deferred results restore the guest screen.
 Legacy text-box initialization uses its declared object layout and preserves
 adjacent screen state.
 Text boxes wrap GBK text into guest line tables, track pages, draw screen or
