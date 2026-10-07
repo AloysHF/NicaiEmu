@@ -206,6 +206,10 @@ Notes and limits:
 
 - A few titles are not playable for unrelated reasons (for example the
   network-dependent ones). See [Game Compatibility](docs/Game-Compatibility.md).
+- Network-dependent titles count as compatible once they start; services
+  provided by defunct external servers are outside the startup criterion.
+- The network application manager preserves entry descriptors and dispatches
+  their startup callbacks independently of the manager initialization directory.
 - The standalone `--show-gamepad` overlay is a read-only debug view of the
   merged key state, not a playable virtual keyboard.
 

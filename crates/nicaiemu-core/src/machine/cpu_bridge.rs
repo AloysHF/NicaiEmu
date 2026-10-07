@@ -426,6 +426,7 @@ impl NicaiMachine {
             16 => self.handle_game_lcd_service(index),
             17 => self.handle_manager_service(index),
             18 => self.handle_audio_service(index),
+            29 => self.handle_net_app_service(index),
             20 => {
                 if index == 6 {
                     let descriptor = self.register(0);

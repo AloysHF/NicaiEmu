@@ -212,7 +212,7 @@ fn fixed_manager_specs() -> &'static [(u32, u32, u32)] {
         (0x58, 16, 0xa0 / 4),
         (0x60, 10, 0xa0 / 4),
         (0x68, 11, 0x3c / 4),
-        (0x70, 17, 0xf0 / 4),
+        (0x70, 29, 0xf0 / 4),
         (0x78, 18, 0x24 / 4),
         (0x80, 3, 0x27c / 4),
         (0x8c, 19, 0x1c / 4),
@@ -234,6 +234,7 @@ fn manager_initializer_count(index: u32) -> Option<u32> {
         20 => TABLE_STRIDE / 4,
         22 => 24,
         24 => 40,
+        28 => 61,
         30 => 31,
         32 => 144,
         35 => 11,
@@ -989,6 +990,11 @@ impl NicaiMachine {
             let service = SERVICE_BASE + TABLE_STRIDE * table_index;
             self.populate_table(table, service, TABLE_STRIDE / 4);
         }
+        self.populate_table(
+            MANAGER_BASE + TABLE_STRIDE * 30,
+            SERVICE_BASE + TABLE_STRIDE * 29,
+            61,
+        );
         self.memory
             .w32(MANAGER_BASE + 8, MANAGER_BASE + TABLE_STRIDE);
         self.memory.w32(MANAGER_BASE + 12, LOG_NOOP_SERVICE);
@@ -3250,6 +3256,75 @@ mod tests {
             0,
             "null slot becomes a callable stub"
         );
+    }
+
+    #[test]
+    fn net_app_entry_preserves_descriptor_and_delivers_guest_callback() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_tables();
+            let callback = machine.allocate(12);
+            let output = machine.allocate(4);
+            machine.memory.w16(callback, 0x2117); // movs r1, #23
+            machine.memory.w16(callback + 2, 0x4a01); // ldr r2, [pc, #4]
+            machine.memory.w16(callback + 4, 0x6011); // str r1, [r2]
+            machine.memory.w16(callback + 6, 0x4770); // bx lr
+            machine.memory.w32(callback + 8, output);
+            let descriptor = STACK_BASE + STACK_SIZE as u32 - 0x300;
+            machine.memory.w32(descriptor, 0x1234_5678);
+            machine.memory.w32(descriptor + 4, callback | 1);
+            let shared = MANAGER_BASE + TABLE_STRIDE * 30;
+            assert_ne!(shared, MANAGER_BASE + TABLE_STRIDE * 18);
+            for entry_path in 0..4 {
+                let table = if entry_path == 0 {
+                    machine.handle_root_service(29);
+                    machine.register(0)
+                } else if entry_path == 1 {
+                    machine.handle_manager_service(29);
+                    machine.register(0)
+                } else {
+                    let private = machine.allocate(0x100);
+                    machine.cpu.reg_set(Mode::User, 0, private);
+                    if entry_path == 2 {
+                        machine.handle_root_service(28);
+                    } else {
+                        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+                        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+                        machine
+                            .cpu
+                            .reg_set(Mode::User, reg::PC, FIXED_MANAGER_INIT + 14 * 4);
+                        machine.run_until_return(100).unwrap();
+                    }
+                    private
+                };
+                assert_eq!(machine.memory.r32(table), machine.memory.r32(shared));
+                for method in 0..2 {
+                    machine.cpu.reg_set(Mode::User, 0, descriptor);
+                    machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+                    machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+                    machine.cpu.reg_set(
+                        Mode::User,
+                        reg::PC,
+                        machine.memory.r32(table + method * 4),
+                    );
+                    machine.run_until_return(100).unwrap();
+                    assert_eq!(machine.memory.r32(descriptor), 0x1234_5678);
+                    assert_eq!(machine.memory.r32(descriptor + 4), callback | 1);
+                    assert_eq!(machine.pending_callbacks.len(), 1);
+                    machine.memory.w32(output, 0);
+                    machine.cpu.reg_set(Mode::User, 2, output);
+                    machine.cpu.reg_set(Mode::User, reg::SP, descriptor - 0x100);
+                    machine.dispatch_pending_callbacks(100).unwrap();
+                    assert_eq!(machine.memory.r32(output), 23);
+                }
+            }
+            machine.cpu.reg_set(Mode::User, 0, 0);
+            machine.handle_net_app_service(0);
+            assert!(machine.pending_callbacks.is_empty());
+        }
     }
 
     #[test]

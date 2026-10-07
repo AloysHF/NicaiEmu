@@ -7,6 +7,10 @@ the original phone's GPRS connection and cannot be used offline: their
 WAP/GPRS-era back-end servers were shut down years ago, so they no longer
 work even on original hardware.
 
+For startup compatibility, a network-dependent application passes once it
+starts without an emulator fault. Waiting for an unavailable external server
+does not constitute a startup failure.
+
 Games packaged for the original phone's rotated landscape display present the
 240×400 framebuffer rotated 90 degrees counterclockwise as 400×240. The
 orientation is resolved automatically from a content-identity profile keyed by
@@ -18,6 +22,12 @@ the titles appear on the original hardware.
 The current core recognizes little- and big-endian ARM/Thumb CBE executables designed for a 240×400 display, including variable segment headers and fixed-address manager-directory variants. It implements the firmware subsets needed for memory blocks, native and installed data packages, image and text drawing, screen changes, sandboxed guest files, timers, keypad input, and touch input.
 
 Validated behavior includes executable initialization, startup and narrative screens, archive extraction, file-backed resource-image decoding, Chinese text and HUD rendering, keypad input, screen-logic touch events (tap down/up/drag) with the LCD manager's point-in-rect hit test for tap-driven menus, fixed-point trigonometry, packed-rectangle collision detection, and continued frame execution. Guest-initiated exits through the ARM/Thumb semihosting interface are treated as normal halts, and headless capture preserves a valid guest-rendered framebuffer if a later callback stops.
+
+Network application entry methods use a separate service table from the manager
+initialization directory. They preserve the caller's descriptor and defer its
+startup callback until the initiating call returns. This repairs the entry path
+used by Small Cool V10; that variant still faults while constructing its list
+control, so it is not yet counted as a successful startup.
 
 ## Summary
 

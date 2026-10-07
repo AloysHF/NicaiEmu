@@ -128,7 +128,7 @@ impl NicaiMachine {
             22 | 23 => Some(16),
             24 | 25 => Some(10),
             26 | 27 => Some(11),
-            28 | 29 => Some(17),
+            28 | 29 => Some(29),
             30 | 31 => Some(18),
             32 | 33 => Some(3),
             35 | 36 => Some(19),
@@ -167,8 +167,6 @@ impl NicaiMachine {
                     if index == 26 {
                         self.memory.w32(destination + 8 * 4, service + 8 * 4);
                         self.memory.w32(destination + 10 * 4, service + 10 * 4);
-                    } else if index == 28 {
-                        self.memory.w32(destination + 60 * 4, service + 60 * 4);
                     } else {
                         let count = manager_initializer_count(index).unwrap_or(0);
                         self.populate_table(destination, service, count);
@@ -236,7 +234,7 @@ impl NicaiMachine {
             23 => 16, // VMGetGameLcdManager
             25 => 10, // VMGetGameUtilManager
             27 => 11, // VMGetDFEnginelManager
-            29 => 17, // VMGetNetAppManager
+            29 => 29, // VMGetNetAppManager
             31 => 18, // VMGetAudioManager
             33 => 3,  // VMGetGameManagerOld
             36 => 19, // vMGetGSensorManager
@@ -252,6 +250,15 @@ impl NicaiMachine {
         // Shared dense function table for the manager, so the guest can
         // treat the result as an object with callable slots.
         self.set_result(MANAGER_BASE + TABLE_STRIDE * (group + 1));
+    }
+
+    pub(crate) fn handle_net_app_service(&mut self, index: u32) {
+        let descriptor = self.register(0);
+        if (index == 0 || index == 1) && descriptor != 0 {
+            let callback = self.memory.r32(descriptor.wrapping_add(4));
+            self.defer_callback(callback, vec![], "netAppEntry");
+        }
+        self.set_result(0);
     }
 
     /// Group 12 — the billing manager (vmspec F_2).  Games gate their
