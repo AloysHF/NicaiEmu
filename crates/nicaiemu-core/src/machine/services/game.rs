@@ -556,7 +556,7 @@ impl NicaiMachine {
         self.set_result(0);
     }
 
-    pub(crate) fn handle_fixed_gameold_region_service(&mut self, index: u32) {
+    pub(crate) fn handle_fixed_gameold_region_service(&mut self, index: u32) -> anyhow::Result<()> {
         let object = self.register(0);
         match index {
             0 => {
@@ -567,7 +567,7 @@ impl NicaiMachine {
                 self.set_result(object);
             }
             4 => {
-                self.memory.w32(object + 4, 0);
+                self.repaint_fixed_gameold_windows(object)?;
                 self.set_result(0);
             }
             5 => {
@@ -589,6 +589,42 @@ impl NicaiMachine {
             }
             _ => self.set_result(0),
         }
+        Ok(())
+    }
+
+    fn repaint_fixed_gameold_windows(&mut self, root: u32) -> anyhow::Result<()> {
+        let mut pending = vec![root];
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(object) = pending.pop() {
+            if object == 0 || !visited.insert(object) {
+                continue;
+            }
+            let count = self.memory.r32(object + 4).min(self.memory.r32(object + 8));
+            let entries = self.memory.r32(object + 12);
+            let callback = self.memory.r32(object + 48);
+            let context = self.memory.r32(object + 20);
+            for i in 0..count {
+                let rectangle = self.memory.r32(entries + i * 4);
+                for j in 0..4 {
+                    let value = self.memory.r16(rectangle + j * 2);
+                    self.memory
+                        .w16(super::super::SCREEN_IMAGE_STRUCT + 12 + j * 2, value);
+                }
+                // Guest painters run synchronously and must preserve the calling CPU context.
+                let cpu = self.cpu;
+                let result =
+                    self.invoke_callback(callback, context, 0, 0, crate::DEFAULT_INSTRUCTION_LIMIT);
+                self.cpu = cpu;
+                result?;
+                if self.state == super::super::MachineState::Halted {
+                    return Ok(());
+                }
+            }
+            self.memory.w32(object + 4, 0);
+            pending.push(self.memory.r32(object + 32));
+            pending.push(self.memory.r32(object + 36));
+        }
+        Ok(())
     }
 
     pub(crate) fn initialize_fixed_gameold_region(&mut self) {

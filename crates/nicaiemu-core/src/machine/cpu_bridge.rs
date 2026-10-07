@@ -358,7 +358,7 @@ impl NicaiMachine {
         }
         if (FIXED_GAMEOLD_REGION_SERVICE..FIXED_GAMEOLD_REGION_SERVICE + 8 * 4).contains(&address) {
             let index = (address - FIXED_GAMEOLD_REGION_SERVICE) / 4;
-            self.handle_fixed_gameold_region_service(index);
+            self.handle_fixed_gameold_region_service(index)?;
             self.return_from_service();
             return Ok(());
         }

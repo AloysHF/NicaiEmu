@@ -61,6 +61,11 @@ layout while each initializer writes only its declared number of slots.
 
 ## Rendering
 
+Fixed legacy window repaint clips each dirty rectangle, invokes its guest
+paint callback synchronously with the configured context, and visits child
+and sibling windows. CPU registers are restored after each nested painter;
+dirty queues are cleared after drawing. Guest callback errors propagate.
+
 Legacy text boxes retain GBK byte offsets and byte lengths in owned line
 tables, expose page counts in the guest object, and render the selected page
 with horizontal/vertical alignment and RGB888 colors. Constructors receive

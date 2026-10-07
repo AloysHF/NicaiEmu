@@ -3495,6 +3495,48 @@ mod tests {
     }
 
     #[test]
+    fn window_repaint_calls_guest_painters_and_preserves_caller_registers() {
+        let mut machine = machine_from_minimal_archive();
+        machine.initialize_screen();
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let context = machine.allocate(4);
+        let painter = machine.allocate(8);
+        for (i, word) in [0x6801, 0x3101, 0x6001, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(painter + i as u32 * 2, word);
+        }
+        let parent = machine.allocate(72);
+        let child = machine.allocate(72);
+        machine.memory.w32(parent + 36, child);
+        for (window, count) in [(parent, 2), (child, 1)] {
+            let table = machine.allocate(count * 4);
+            machine.memory.w32(window + 4, count);
+            machine.memory.w32(window + 8, count);
+            machine.memory.w32(window + 12, table);
+            machine.memory.w32(window + 20, context);
+            machine.memory.w32(window + 48, painter | 1);
+            for i in 0..count {
+                let rectangle = machine.allocate(8);
+                machine.memory.w32(table + i * 4, rectangle);
+                machine.memory.w16(rectangle, 10);
+                machine.memory.w16(rectangle + 2, 20);
+                machine.memory.w16(rectangle + 4, 30);
+                machine.memory.w16(rectangle + 6, 40);
+            }
+        }
+        machine.cpu.reg_set(Mode::User, 0, parent);
+        machine.cpu.reg_set(Mode::User, 4, 0xdeadbeef);
+        machine.cpu.reg_set(Mode::User, reg::LR, 0x12345679);
+        machine.handle_fixed_gameold_region_service(4).unwrap();
+        assert_eq!(machine.memory.r32(context), 3);
+        assert_eq!(machine.memory.r32(parent + 4), 0);
+        assert_eq!(machine.memory.r32(child + 4), 0);
+        assert_eq!(machine.register(4), 0xdeadbeef);
+        assert_eq!(machine.register(reg::LR), 0x12345679);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE_STRUCT + 12), 10);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE_STRUCT + 18), 40);
+    }
+
+    #[test]
     fn fixed_game_font_queries_return_metrics_instead_of_stub_addresses() {
         let mut machine = machine_from_minimal_archive();
         machine.executable.big_endian = true;
