@@ -6,7 +6,8 @@ use log::warn;
 
 use super::{
     clip_axis, image_payload, service_trace_enabled, signed_coord, NicaiMachine,
-    DREAM_FACTORY_PACKAGE_SLOT, HEAP_SIZE, METHOD_KIND_GAMEOLD, SCREEN_IMAGE, SCREEN_IMAGE_STRUCT,
+    DREAM_FACTORY_PACKAGE_SLOT, HEAP_SIZE, METHOD_KIND_AUTO, METHOD_KIND_GAMEOLD, SCREEN_IMAGE,
+    SCREEN_IMAGE_STRUCT,
 };
 use crate::image_decoder;
 
@@ -1224,6 +1225,23 @@ impl NicaiMachine {
             33 => {
                 let stub = Self::method_stub_address(METHOD_KIND_GAMEOLD, 0x011c) & !1;
                 self.handle_method_stub(stub);
+            }
+            39 => {
+                // Menu-label builder: the caller formats the label into the
+                // object's text buffer (+8) and hands us the header, whose two
+                // word slots are the object's method table.  They were left
+                // null, so the redraw loop's `ldr r7, [obj, #4]; bx r7` jumped
+                // to 0 on the first item.
+                let object = self.register(0);
+                if object != 0 {
+                    for offset in (0..8u32).step_by(4) {
+                        self.memory.w32(
+                            object + offset,
+                            Self::method_stub_address(METHOD_KIND_AUTO, offset),
+                        );
+                    }
+                }
+                self.set_result(object);
             }
             _ => self.set_result(0),
         }
