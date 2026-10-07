@@ -4301,6 +4301,78 @@ mod tests {
         );
     }
 
+    /// SysManager slot 0x78 (GetCoolBarKernelCurrentVersion) is a
+    /// zero-argument query.  Left to the generic constructor heuristic, the
+    /// stale r1 was read as a block size and the allocated block went
+    /// through [sp + 68], clobbering a live return address on the caller's
+    /// stack (observed as a jump into the heap on the fixed-manager games).
+    #[test]
+    fn sysinfo_version_query_returns_version_without_stack_writeback() {
+        let mut machine = machine_from_minimal_archive();
+        let frame = machine.allocate(0x100);
+        machine.memory.w32(frame + 68, 0x5A5A_5A5A);
+        machine.cpu.reg_set(Mode::User, 0, 0x1234);
+        machine.cpu.reg_set(Mode::User, 1, 0x190);
+        machine.cpu.reg_set(Mode::User, 2, 0);
+        machine.cpu.reg_set(Mode::User, armv4t_emu::reg::SP, frame);
+        machine
+            .handle_method_stub(NicaiMachine::method_stub_address(METHOD_KIND_MEMORY, 0x78) & !1);
+        assert_eq!(
+            machine.register(0),
+            42,
+            "GetCoolBarKernelCurrentVersion returns the kernel version"
+        );
+        assert_eq!(
+            machine.memory.r32(frame + 68),
+            0x5A5A_5A5A,
+            "version query must not write through [sp + 68]"
+        );
+    }
+
+    /// The blank-canvas slot (0x18) must accept a zero height like the
+    /// reference: the image registers with a null data pointer instead of
+    /// failing, so the guest's canvas slot is set for later scene draws.
+    #[test]
+    fn picture_library_accepts_zero_height_blank_canvas() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let library = machine.allocate(0x54);
+            machine.cpu.reg_set(Mode::User, 0, library);
+            machine.cpu.reg_set(Mode::User, 1, 1);
+            machine.handle_method_stub(
+                NicaiMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0x12c) & !1,
+            );
+            machine.cpu.reg_set(Mode::User, 0, library);
+            machine.cpu.reg_set(Mode::User, 1, 188);
+            machine.cpu.reg_set(Mode::User, 2, 0);
+            machine.handle_method_stub(
+                NicaiMachine::method_stub_address(METHOD_KIND_PICTURE, 0x18) & !1,
+            );
+            assert_ne!(
+                machine.register(0),
+                u32::MAX,
+                "zero-height blank canvas registers instead of failing"
+            );
+            assert_eq!(
+                machine.memory.r16(library + 20),
+                1,
+                "the canvas counts as a loaded image"
+            );
+            let images = machine.memory.r32(library + 16);
+            let image = machine.memory.r32(images);
+            assert_eq!(
+                machine.memory.r32(image),
+                0,
+                "zero-height canvas carries no pixel data"
+            );
+            assert_eq!(machine.memory.r16(image + 4), 188, "width recorded");
+            assert_eq!(machine.memory.r16(image + 6), 0, "height recorded");
+        }
+    }
+
     /// Guest string encoding follows machine endianness: big-endian images
     /// use UCS2-BE (`00 XX` per ASCII char), little-endian images use plain
     /// single-byte strings.  The old heuristic keyed on `byte[1] != 0` and

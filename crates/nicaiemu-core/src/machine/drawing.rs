@@ -209,18 +209,24 @@ impl NicaiMachine {
                         .next_multiple_of(4)
                         .saturating_mul(height)
                         .saturating_mul(2);
-                    if width == 0 || height == 0 || size > HEAP_SIZE as u32 {
+                    // A zero height is legitimate: the reference still
+                    // registers the header-only image (data pointer null),
+                    // and rejecting it leaves the guest's canvas slot unset
+                    // so later scene draws silently target nothing.
+                    if width == 0 || size > HEAP_SIZE as u32 {
                         self.set_result(u32::MAX);
                         return;
                     }
                     let image = self.allocate(12);
-                    let pixels = self.allocate(size);
-                    if pixels == 0 {
+                    let pixels = if size > 0 { self.allocate(size) } else { 0 };
+                    if pixels == 0 && size > 0 {
                         self.deallocate(image);
                         self.set_result(u32::MAX);
                         return;
                     }
-                    self.memory.write_bytes(pixels, &vec![0; size as usize]);
+                    if size > 0 {
+                        self.memory.write_bytes(pixels, &vec![0; size as usize]);
+                    }
                     self.memory.w32(image, pixels);
                     self.memory.w16(image + 4, width as u16);
                     self.memory.w16(image + 6, height as u16);

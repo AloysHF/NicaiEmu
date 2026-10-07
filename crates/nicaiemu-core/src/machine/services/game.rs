@@ -938,6 +938,13 @@ impl NicaiMachine {
             (METHOD_KIND_MEMORY, 0xa0) => {
                 self.set_result(0);
             }
+            // SysManager slot 0x78 — GetCoolBarKernelCurrentVersion: a
+            // zero-argument version query.  Left unimplemented, the generic
+            // constructor heuristic misreads the stale r1 as a block size
+            // and its stack writeback clobbers a live return address.
+            (METHOD_KIND_MEMORY, 0x78) => {
+                self.set_result(42);
+            }
             // MEMORY_BLOCK bump allocator installed by initMemoryBlock.
             // MB_Malloc(blk, n): 4-byte-aligned carve-out from the backing
             // store, zero-filled like the firmware.
