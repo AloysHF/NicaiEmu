@@ -73,6 +73,19 @@ startup callback until the initiating call returns. This repairs the entry path
 used by Small Cool V10; that variant still faults while constructing its list
 control, so it is not yet counted as a successful startup.
 
+## Wulin new variant validation
+
+The new Wulin executable completes startup, including the first-run information
+panel and its confirmation callback. Keypad checks cover menu selection, help
+and return, character selection in both modes, the story map, dialogue, battle
+actions and the return to dialogue after defeat. Both local archive variants
+complete the idle startup check; the battle replay completes 5,000 frames without
+a guest fault. Intentional menu exit reaches the normal halted state.
+
+This validates the previously failing execution and rendering paths. It does not
+establish complete playthrough, audio, every character or every stage support.
+Billing and SMS responses are simulated locally and do not contact a carrier.
+
 ## Summary
 
 | Status | Count |

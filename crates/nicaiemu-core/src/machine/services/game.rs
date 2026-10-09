@@ -9,8 +9,9 @@ use super::super::{
     FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, METHOD_KIND_ACTOR,
     METHOD_KIND_AUTO, METHOD_KIND_GAMEOLD, METHOD_KIND_MEMBLOCK, METHOD_KIND_MEMORY,
     METHOD_KIND_PANEL, METHOD_KIND_PICTURE, METHOD_KIND_TEXTBOX, METHOD_STUB_BASE,
-    METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE,
-    OLDLIB_DRAW_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE, TABLE_STRIDE,
+    METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_BILLING_PAYNUM, NATIVE_BILLING_REMAIN_DAY,
+    NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, OLDLIB_DRAW_SERVICE, SCREEN_IS_IN_QUIT,
+    SERVICE_BASE, TABLE_STRIDE,
 };
 
 fn read_little_endian_short(memory: &mut impl Memory, address: u32) -> i16 {
@@ -131,6 +132,7 @@ impl NicaiMachine {
             self.set_result(result);
             return;
         }
+        let gameold_abi = self.uses_fixed_manager_abi() || self.native_app_parser != 0;
         match index {
             1..=3 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index),
             5 if self.uses_fixed_manager_abi() => self.draw_ui(),
@@ -181,7 +183,7 @@ impl NicaiMachine {
             }
             24 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(21),
             32 | 33 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index - 5),
-            28..=31 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index - 5),
+            28..=31 if gameold_abi => self.set_result(if index == 29 { 8 } else { 16 }),
             0 => {
                 let argument = self.register(0);
                 let source = if argument >= 0x10000 {
@@ -231,7 +233,7 @@ impl NicaiMachine {
                 };
                 self.set_result(height);
             }
-            16 if self.uses_fixed_manager_abi() => {
+            16 if gameold_abi => {
                 let image = self.register(0);
                 let width = if image == 0 {
                     0
@@ -240,7 +242,7 @@ impl NicaiMachine {
                 };
                 self.set_result(width);
             }
-            17 if self.uses_fixed_manager_abi() => {
+            17 if gameold_abi => {
                 let red = self.register(0) as u16;
                 let green = self.register(1) as u16;
                 let blue = self.register(2) as u16;
@@ -312,7 +314,7 @@ impl NicaiMachine {
                 }
                 self.set_result(scene);
             }
-            79 if self.uses_fixed_manager_abi() => {
+            79 if gameold_abi => {
                 self.initialize_fixed_gameold_region();
             }
             80 => {
@@ -412,6 +414,7 @@ impl NicaiMachine {
                     .w8(DREAM_FACTORY_FORMAT_BUFFER + length as u32, 0);
                 self.set_result(DREAM_FACTORY_FORMAT_BUFFER);
             }
+            109 if gameold_abi => self.handle_df_engine_service(9),
             110 => {
                 let package = self.register(0);
                 let capacity = self.register(1);
@@ -615,6 +618,7 @@ impl NicaiMachine {
                 }
                 self.set_result(object);
             }
+            3 => self.handle_panel_service(0x34)?,
             4 => {
                 self.repaint_fixed_gameold_windows(object)?;
                 self.set_result(0);
@@ -659,6 +663,11 @@ impl NicaiMachine {
                     self.memory
                         .w16(super::super::SCREEN_IMAGE_STRUCT + 12 + j * 2, value);
                 }
+                let x = self.memory.r16(rectangle) as i16 as i32;
+                let y = self.memory.r16(rectangle + 2) as i16 as i32;
+                let width = self.memory.r16(rectangle + 4) as i16 as i32;
+                let height = self.memory.r16(rectangle + 6) as i16 as i32;
+                self.oldlib_clip = [x, y, x + width, y + height];
                 // Guest painters run synchronously and must preserve the calling CPU context.
                 let cpu = self.cpu;
                 let result =
@@ -798,12 +807,10 @@ impl NicaiMachine {
                     }
                     // Billing slots the v3 table carries at +0x240/+0x244.
                     if self.memory.r32(buffer + 0x240) == 0 {
-                        self.memory
-                            .w32(buffer + 0x240, SERVICE_BASE + TABLE_STRIDE * 12);
+                        self.memory.w32(buffer + 0x240, NATIVE_BILLING_PAYNUM);
                     }
                     if self.memory.r32(buffer + 0x244) == 0 {
-                        self.memory
-                            .w32(buffer + 0x244, SERVICE_BASE + TABLE_STRIDE * 12 + 4);
+                        self.memory.w32(buffer + 0x244, NATIVE_BILLING_REMAIN_DAY);
                     }
                 }
                 self.set_result(0);
@@ -863,11 +870,12 @@ impl NicaiMachine {
                 self.set_result(self.gamelib_v3_table);
             }
             0x8e => {
-                // mF_GetGMemoryBlockPtr: the global property/block object.
+                // mF_GetGMemoryBlockPtr returns the shared memory-block descriptor.
                 if self.native_property_info == 0 {
-                    let info = self.allocate(0x100);
-                    self.memory.w32(info + 0x14, NATIVE_DISPATCH_SERVICE | 1);
-                    self.native_property_info = info;
+                    if self.memory.r32(MEMORY_BLOCK_PTR) == 0 {
+                        self.initialize_memory_block(MEMORY_BLOCK_PTR, 0x40_0000);
+                    }
+                    self.native_property_info = MEMORY_BLOCK_PTR;
                 }
                 self.set_result(self.native_property_info);
             }
@@ -1576,13 +1584,19 @@ impl NicaiMachine {
                     let info = self.build_native_system_info();
                     self.native_system_info = info;
                 }
+                self.gamelib_v3_table = self.native_system_info;
+                if !self.wide_images {
+                    self.wide_images = true;
+                    self.write_screen_header();
+                }
                 Some(self.native_system_info)
             }
             0x8e => {
                 if self.native_property_info == 0 {
-                    let info = self.allocate(0x100);
-                    self.memory.w32(info + 0x14, NATIVE_DISPATCH_SERVICE | 1);
-                    self.native_property_info = info;
+                    if self.memory.r32(MEMORY_BLOCK_PTR) == 0 {
+                        self.initialize_memory_block(MEMORY_BLOCK_PTR, 0x40_0000);
+                    }
+                    self.native_property_info = MEMORY_BLOCK_PTR;
                 }
                 Some(self.native_property_info)
             }
@@ -1639,10 +1653,21 @@ impl NicaiMachine {
                 Self::method_stub_address(METHOD_KIND_MEMORY, offset),
             );
         }
-        for (offset, index) in [(0x2c, 11), (0x30, 12), (0x38, 14)] {
+        for (offset, index) in [
+            (0, 0),
+            (0x2c, 11),
+            (0x30, 12),
+            (0x3c, 15),
+            (0x40, 16),
+            (0x44, 17),
+            (0x70, 28),
+            (0x74, 29),
+            (0x78, 30),
+        ] {
             self.memory
                 .w32(info + offset, SERVICE_BASE + TABLE_STRIDE * 3 + index * 4);
         }
+        self.memory.w32(info + 0x38, OLDLIB_DRAW_SERVICE + 0x38);
         for offset in [0xd4, 0xd8, 0xdc, 0xe0, 0xe4] {
             self.memory.w32(
                 info + offset,
@@ -1673,24 +1698,15 @@ impl NicaiMachine {
             .w32(info + 0x24, SERVICE_BASE + TABLE_STRIDE * 3 + 9 * 4);
         self.memory
             .w32(info + 0x58, SERVICE_BASE + TABLE_STRIDE * 4 + 19 * 4);
-        self.memory
-            .w32(info + 0x70, SERVICE_BASE + TABLE_STRIDE * 4 + 5 * 4);
-        self.memory
-            .w32(info + 0x74, SERVICE_BASE + TABLE_STRIDE * 4 + 5 * 4);
-        self.memory
-            .w32(info + 0x78, SERVICE_BASE + TABLE_STRIDE * 4 + 6 * 4);
         self.populate_table(info + 0x20c, SERVICE_BASE + TABLE_STRIDE * 6, 22);
-        for (offset, index) in [
-            (0xa4, 2),
-            (0xa8, 1),
-            (0xac, 0),
-            (0xb0, 3),
-            (0xb4, 4),
-            (0xb8, 5),
-        ] {
+        for (offset, index) in [(0xa4, 2), (0xa8, 1), (0xac, 0), (0xb4, 4), (0xb8, 5)] {
             self.memory
                 .w32(info + offset, NATIVE_SYSTEM_TIME_SERVICE + index * 4);
         }
+        self.memory
+            .w32(info + 0xb0, SERVICE_BASE + TABLE_STRIDE * 3 + 44 * 4);
+        self.memory.w32(info + 0x240, NATIVE_BILLING_PAYNUM);
+        self.memory.w32(info + 0x244, NATIVE_BILLING_REMAIN_DAY);
         // 0xf0 is the native-dispatch entry the guest routes
         // arbitrary ids through; it must stay the shared dispatch
         // stub rather than a per-slot method.

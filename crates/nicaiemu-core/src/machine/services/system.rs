@@ -290,6 +290,19 @@ impl NicaiMachine {
         self.set_result(0);
     }
 
+    pub(crate) fn handle_native_billing_service(&mut self, address: u32) {
+        if address == super::super::NATIVE_BILLING_SEND_SMS {
+            // Simulate the deferred firmware result without sending an SMS.
+            let callback = self.argument(5);
+            self.defer_callback(callback, vec![1], "smsResult");
+            self.set_result(1);
+        } else {
+            self.handle_billing_service(u32::from(
+                address == super::super::NATIVE_BILLING_REMAIN_DAY,
+            ));
+        }
+    }
+
     /// Group 12 — the billing manager (vmspec F_2).  Games gate their
     /// startup on these: without a successful SMS/pay handshake the flow
     /// ends on a blank screen.  Payments report success through a deferred

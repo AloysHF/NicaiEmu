@@ -70,12 +70,12 @@ impl NicaiMachine {
         }
         if x0 > destination_x {
             width -= x0 - destination_x;
-            source_x -= x0 - destination_x;
+            source_x += x0 - destination_x;
             destination_x = x0;
         }
         if y0 > destination_y {
             height -= y0 - destination_y;
-            source_y -= y0 - destination_y;
+            source_y += y0 - destination_y;
             destination_y = y0;
         }
         if destination_x + width > x1 {
@@ -111,9 +111,9 @@ impl NicaiMachine {
         let source_x = signed_coord(self.register(1));
         let source_y = signed_coord(self.register(2));
         let width = signed_coord(self.register(3));
-        let height = signed_coord(self.register(4));
-        let destination_x = signed_coord(self.register(5));
-        let destination_y = signed_coord(self.register(6));
+        let height = signed_coord(self.argument(4));
+        let destination_x = signed_coord(self.argument(5));
+        let destination_y = signed_coord(self.argument(6));
         self.oldlib_blit(
             source,
             source_x,
@@ -159,10 +159,10 @@ impl NicaiMachine {
         let number = self.register(1) as i32;
         let cell_width = signed_coord(self.register(2));
         let cell_height = signed_coord(self.register(3));
-        let gap = signed_coord(self.register(4));
-        let x = signed_coord(self.register(5));
-        let y = signed_coord(self.register(6));
-        let align = self.register(7);
+        let gap = signed_coord(self.argument(4));
+        let x = signed_coord(self.argument(5));
+        let y = signed_coord(self.argument(6));
+        let align = self.argument(7);
         if image == 0 || cell_width <= 0 || cell_height <= 0 {
             self.set_result(0);
             return;
@@ -732,11 +732,14 @@ impl NicaiMachine {
                 let color = self.memory.r32(stack + 4) as u16;
                 let pixels = self.memory.r32(target);
                 let (target_width, target_height) = self.image_dims(target);
+                let [left, top, right, bottom] = self.oldlib_clip;
+                let clipped_x = x.max(left);
+                let clipped_y = y.max(top);
                 self.paint_rect(
-                    x,
-                    y,
-                    width,
-                    height,
+                    clipped_x,
+                    clipped_y,
+                    (x + width).min(right) - clipped_x,
+                    (y + height).min(bottom) - clipped_y,
                     color,
                     false,
                     target_width,

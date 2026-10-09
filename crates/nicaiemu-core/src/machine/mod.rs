@@ -122,11 +122,13 @@ const FIXED_MANAGER_INIT: u32 = SERVICE_BASE + 0xe000;
 const FIXED_MANAGER_GET: u32 = FIXED_MANAGER_INIT + 18 * 4;
 const FIXED_MANAGER_DIRECTORY: u32 = MANAGER_BASE + 0xa000;
 const FIXED_GAMEOLD_OBJECT_SERVICE: u32 = SERVICE_BASE + 0xd000;
-/// Old-lib drawing API table (F_0 0x00..0x3c): only the gameold table copy
-/// (native dispatch sid 82) points here, so the plain group-3 service
-/// semantics stay intact for the native_system_info path.
+/// Dedicated old-lib drawing entries avoid collisions with shared manager slots.
 const OLDLIB_DRAW_SERVICE: u32 = SERVICE_BASE + 0xd200;
 const FIXED_GAMEOLD_REGION_SERVICE: u32 = SERVICE_BASE + 0xd100;
+// Legacy wrappers derive the SMS entry from the billing function addresses.
+const NATIVE_BILLING_PAYNUM: u32 = SERVICE_BASE + 0xd300;
+const NATIVE_BILLING_REMAIN_DAY: u32 = NATIVE_BILLING_PAYNUM + 3764;
+const NATIVE_BILLING_SEND_SMS: u32 = NATIVE_BILLING_REMAIN_DAY + 1376;
 const NATIVE_DISPATCH_SERVICE: u32 = SERVICE_BASE + 0xf000;
 const NATIVE_SYSTEM_TIME_SERVICE: u32 = SERVICE_BASE + 0xf100;
 /// Per-slot method stubs for guest object/method tables.  The address
@@ -3830,6 +3832,7 @@ mod tests {
         assert_eq!(machine.register(reg::LR), 0x12345679);
         assert_eq!(machine.memory.r16(SCREEN_IMAGE_STRUCT + 12), 10);
         assert_eq!(machine.memory.r16(SCREEN_IMAGE_STRUCT + 18), 40);
+        assert_eq!(machine.oldlib_clip, [10, 20, 40, 60]);
     }
 
     #[test]
@@ -3839,7 +3842,7 @@ mod tests {
         machine.executable.preferred_code_address = 0x0010_0000;
         machine.executable.code_image_size = 0x2000;
         machine.executable.code_size = 4;
-        for (index, expected) in [(28, 8), (29, 8), (30, 16), (31, 16)] {
+        for (index, expected) in [(28, 16), (29, 8), (30, 16), (31, 16)] {
             machine
                 .cpu
                 .reg_set(Mode::User, 0, SERVICE_BASE + TABLE_STRIDE * 3 + index * 4);
@@ -4593,7 +4596,7 @@ mod tests {
         );
         assert_eq!(
             machine.memory.r32(buffer + 0x240),
-            SERVICE_BASE + TABLE_STRIDE * 12,
+            NATIVE_BILLING_PAYNUM,
             "the billing slots ride at the v3 tail"
         );
     }
@@ -4621,14 +4624,19 @@ mod tests {
         let kind = machine.image_kind_offset();
         machine.memory.w8(image + kind, 1);
         machine.memory.w16(pixels, 0xf800);
-        let mut blit = |machine: &mut NicaiMachine, dx: u32, dy: u32| {
+        let blit = |machine: &mut NicaiMachine, dx: u32, dy: u32| {
             machine.cpu.reg_set(Mode::User, 0, image);
             machine.cpu.reg_set(Mode::User, 1, 0);
             machine.cpu.reg_set(Mode::User, 2, 0);
             machine.cpu.reg_set(Mode::User, 3, 4);
-            machine.cpu.reg_set(Mode::User, 4, 4);
-            machine.cpu.reg_set(Mode::User, 5, dx);
-            machine.cpu.reg_set(Mode::User, 6, dy);
+            let stack = STACK_BASE + STACK_SIZE as u32 - 16;
+            machine.cpu.reg_set(Mode::User, reg::SP, stack);
+            machine.memory.w32(stack, 4);
+            machine.memory.w32(stack + 4, dx);
+            machine.memory.w32(stack + 8, dy);
+            machine.cpu.reg_set(Mode::User, 4, 0xdeadbeef);
+            machine.cpu.reg_set(Mode::User, 5, 0xdeadbeef);
+            machine.cpu.reg_set(Mode::User, 6, 0xdeadbeef);
             machine.handle_oldlib_draw_service(1);
         };
         blit(&mut machine, 0, 0);
@@ -4643,6 +4651,235 @@ mod tests {
             0xf800,
             "a blit inside the clip lands on the framebuffer"
         );
+    }
+
+    #[test]
+    fn native_global_block_queries_share_live_allocation_state() {
+        let mut machine = machine_from_minimal_archive();
+        machine.cpu.reg_set(Mode::User, 0, 0x8e);
+        machine.handle_native_dispatch_service();
+        assert_eq!(machine.register(0), MEMORY_BLOCK_PTR);
+        assert_eq!(
+            machine.memory.r32(MEMORY_BLOCK_PTR + 12),
+            MEMORY_BLOCK_SERVICE
+        );
+        machine.cpu.reg_set(Mode::User, 0, MEMORY_BLOCK_PTR);
+        machine.cpu.reg_set(Mode::User, 1, 5);
+        machine.handle_memory_block_service(0);
+        assert_eq!(machine.register(0), MEMORY_BLOCK_POOL);
+        let request = machine.allocate(12);
+        let output = machine.allocate(4);
+        machine.memory.w32(request, output);
+        machine.memory.w32(request + 4, 0x8e);
+        machine.memory.w32(request + 8, 4);
+        machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+        machine.cpu.reg_set(Mode::User, 1, request);
+        machine.handle_native_dispatch_service();
+        assert_eq!(machine.memory.r32(output), MEMORY_BLOCK_PTR);
+        assert_eq!(machine.memory.r32(MEMORY_BLOCK_PTR + 4), 8);
+        machine.cpu.reg_set(Mode::User, 0, MEMORY_BLOCK_PTR);
+        machine.handle_memory_block_service(1);
+        assert_eq!(machine.memory.r32(MEMORY_BLOCK_PTR + 4), 0);
+    }
+
+    #[test]
+    fn fetched_native_gameold_table_uses_wide_images_and_advancing_tick() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.big_endian = true;
+        machine.executable.code_image_size = machine.executable.code_size as u32;
+        machine.native_app_parser = machine.executable.code_address() | 1;
+        let request = machine.allocate(12);
+        let output = machine.allocate(4);
+        machine.memory.w32(request, output);
+        machine.memory.w32(request + 4, 0x8f);
+        machine.memory.w32(request + 8, 4);
+        machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+        machine.cpu.reg_set(Mode::User, 1, request);
+        machine.handle_native_dispatch_service();
+        let table = machine.memory.r32(output);
+        assert!(machine.wide_images);
+        assert_eq!(machine.memory.r32(SCREEN_IMAGE_STRUCT + 4), 240);
+        assert_eq!(machine.memory.r32(table), SERVICE_BASE + TABLE_STRIDE * 3);
+        for (slot, expected) in [(28, 16), (29, 8), (30, 16)] {
+            let entry = machine.memory.r32(table + slot * 4);
+            machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+            machine.invoke_callback(entry | 1, 0, 0, 0, 100).unwrap();
+            assert_eq!(machine.register(0), expected);
+        }
+        let tick = machine.memory.r32(table + 0xb0);
+        machine.frame_count = 10;
+        machine.invoke_callback(tick | 1, 0, 0, 0, 100).unwrap();
+        let first = machine.register(0);
+        machine.frame_count += 1;
+        machine.invoke_callback(tick | 1, 0, 0, 0, 100).unwrap();
+        assert_eq!(machine.register(0) - first, 100);
+    }
+
+    #[test]
+    fn native_billing_function_spacing_reaches_deferred_sms_callback() {
+        let mut machine = machine_from_minimal_archive();
+        let table = machine.allocate(0x26c);
+        machine.cpu.reg_set(Mode::User, 0, 0x52);
+        machine.cpu.reg_set(Mode::User, 1, table);
+        machine.handle_native_dispatch_service();
+        let paynum = machine.memory.r32(table + 0x240);
+        let remain = machine.memory.r32(table + 0x244);
+        assert_eq!(remain.wrapping_sub(paynum), 3764);
+        let callback = machine.executable.code_address() | 1;
+        let stack = machine.allocate(16);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack + 4, callback);
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        machine
+            .invoke_callback((remain + 1376) | 1, 0, 0, 0, 100)
+            .unwrap();
+        assert_eq!(machine.register(0), 1);
+        assert_eq!(machine.pending_callbacks.len(), 1);
+        assert_eq!(
+            machine.pending_callbacks[0],
+            (callback, vec![1], "smsResult")
+        );
+        assert_ne!(machine.state, MachineState::Halted);
+    }
+
+    #[test]
+    fn native_region_constructor_and_update_preserve_guest_state() {
+        let mut machine = machine_from_minimal_archive();
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        machine.native_app_parser = machine.executable.code_address() | 1;
+        machine.executable.code_image_size = machine.executable.code_size as u32;
+        let window = machine.allocate(72 + 32);
+        machine.memory.write_bytes(window + 72, &[0xa5; 32]);
+        let context = machine.allocate(4);
+        let callback = machine.allocate(8);
+        for (i, word) in [0x6801, 0x3101, 0x6001, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(callback + i as u32 * 2, word);
+        }
+        let stack = machine.allocate(8);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack, context);
+        machine.memory.w32(stack + 4, 2);
+        for (index, value) in [window, 0, 0x0014_000a, context].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, index as u8, value);
+        }
+        machine.handle_game_service(79);
+        assert_eq!(machine.memory.r32(window + 8), 2);
+        for offset in 72..104 {
+            assert_eq!(machine.memory.r8(window + offset), 0xa5);
+        }
+        machine.memory.w32(window + 44, callback | 1);
+        machine.cpu.reg_set(Mode::User, 0, window);
+        machine.handle_fixed_gameold_region_service(3).unwrap();
+        assert_eq!(machine.memory.r32(context), 1);
+    }
+
+    #[test]
+    fn picture_fill_respects_the_dirty_window_clip() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        let library = machine.allocate(84);
+        let stack = machine.allocate(8);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack, 30);
+        machine.memory.w32(stack + 4, 0xf800);
+        for (index, value) in [library, 0, 0, 30].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, index as u8, value);
+        }
+        machine.oldlib_clip = [10, 20, 12, 22];
+        machine.handle_picture_library_method(0x28);
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 10) * 2),
+            0xf800
+        );
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + (19 * 240 + 10) * 2), 0);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 12) * 2), 0);
+    }
+
+    #[test]
+    fn native_actor_constructor_preserves_adjacent_guest_state() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.code_image_size = machine.executable.code_size as u32;
+        machine.native_app_parser = machine.executable.code_address() | 1;
+        let actor = machine.allocate(44 + 32);
+        machine.memory.write_bytes(actor + 44, &[0xa5; 32]);
+        machine.cpu.reg_set(Mode::User, 0, actor);
+        machine.cpu.reg_set(Mode::User, 1, 7);
+        machine.cpu.reg_set(Mode::User, 2, 9);
+        machine.handle_game_service(109);
+        assert_eq!(machine.memory.r16(actor), 7);
+        assert_eq!(machine.memory.r16(actor + 2), 9);
+        for offset in 44..76 {
+            assert_eq!(machine.memory.r8(actor + offset), 0xa5);
+        }
+    }
+
+    #[test]
+    fn oldlib_number_reads_stack_arguments() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        let image = machine.allocate(12);
+        let pixels = machine.allocate(24);
+        machine.memory.w32(image, pixels);
+        machine.write_image_dims(image, 10, 1);
+        machine.memory.w8(image + machine.image_kind_offset(), 1);
+        for digit in 0..10 {
+            machine
+                .memory
+                .w16(pixels + digit * 2, 0x1200 + digit as u16);
+        }
+        for (index, value) in [image, 56, 1, 1].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, index as u8, value);
+        }
+        let stack = machine.allocate(16);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        for (index, value) in [1, 20, 30, 0].into_iter().enumerate() {
+            machine.memory.w32(stack + index as u32 * 4, value);
+            machine.cpu.reg_set(Mode::User, index as u8 + 4, 0xdeadbeef);
+        }
+        machine.handle_oldlib_draw_service(4);
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (30 * 240 + 20) * 2),
+            0x1205
+        );
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (30 * 240 + 22) * 2),
+            0x1206
+        );
+    }
+
+    #[test]
+    fn oldlib_clipping_advances_the_source_crop() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        let image = machine.allocate(12);
+        let pixels = machine.allocate(32);
+        machine.memory.w32(image, pixels);
+        machine.write_image_dims(image, 4, 4);
+        machine.memory.w8(image + machine.image_kind_offset(), 1);
+        for pixel in 0..16 {
+            machine
+                .memory
+                .w16(pixels + pixel * 2, 0x1200 + pixel as u16);
+        }
+        machine.oldlib_clip = [12, 22, 14, 24];
+        for (index, value) in [image, 0, 0, 4].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, index as u8, value);
+        }
+        let stack = machine.allocate(12);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        for (index, value) in [4, 10, 20].into_iter().enumerate() {
+            machine.memory.w32(stack + index as u32 * 4, value);
+        }
+        machine.handle_oldlib_draw_service(1);
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (22 * 240 + 12) * 2),
+            0x120a
+        );
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (23 * 240 + 13) * 2),
+            0x120f
+        );
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + (21 * 240 + 11) * 2), 0);
     }
 
     /// The v3 games read image headers with u32 width/height at +4/+8; the

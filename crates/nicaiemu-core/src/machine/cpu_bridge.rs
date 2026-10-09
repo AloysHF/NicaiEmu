@@ -10,7 +10,8 @@ use super::{
     FIXED_GAMEOLD_OBJECT_SERVICE, FIXED_GAMEOLD_REGION_SERVICE, FIXED_MANAGER_GET,
     FIXED_MANAGER_INIT, IO_METHOD_BASE, IO_METHOD_STRIDE, IO_NV_READ_OFFSET, IO_NV_WRITE_OFFSET,
     LOG_NOOP_SERVICE, MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE, METHOD_STUB_BASE,
-    METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE,
+    METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_BILLING_PAYNUM, NATIVE_BILLING_REMAIN_DAY,
+    NATIVE_BILLING_SEND_SMS, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE,
     OLDLIB_DRAW_SERVICE, SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
 };
 
@@ -351,6 +352,17 @@ impl NicaiMachine {
             // Return the shared dense function table so bootstrap code can
             // treat the manager as an object with callable slots.
             self.set_result(MANAGER_BASE + TABLE_STRIDE * (group + 1));
+            self.return_from_service();
+            return Ok(());
+        }
+        if [
+            NATIVE_BILLING_PAYNUM,
+            NATIVE_BILLING_REMAIN_DAY,
+            NATIVE_BILLING_SEND_SMS,
+        ]
+        .contains(&address)
+        {
+            self.handle_native_billing_service(address);
             self.return_from_service();
             return Ok(());
         }

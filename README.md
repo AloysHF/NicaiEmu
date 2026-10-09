@@ -311,3 +311,9 @@ War Chess (战火军棋, new variant) now renders its title, menu, purchase prom
 and help panel, with keypad and pointer navigation. Paid gameplay remains
 unvalidated. See [Game Compatibility](docs/Game-Compatibility.md) for the
 validation scope.
+
+Wulin (武林外传, new variant) now completes startup and renders its menu,
+help, character selection, map, dialogue and battles. Headless input checks cover
+selection, attacks and the return to dialogue after defeat; a 5,000-frame run
+completes without a guest fault. Billing/SMS callbacks remain local offline
+simulations, and complete playthroughs and audio are not validated.

@@ -71,16 +71,21 @@ impl NicaiMachine {
         self.memory.w8(package, 1);
         let entries = self.allocate(capacity.saturating_mul(4).max(4));
         self.memory.w32(package + 28, entries);
-        self.memory.w32(package + 92, u32::MAX);
-        self.memory.w32(package + 100, 0);
+        // The v3 descriptor ends at +0x4c, before the extended file fields.
+        if !self.wide_images {
+            self.memory.w32(package + 92, u32::MAX);
+            self.memory.w32(package + 100, 0);
+        }
         for index in 0..=10 {
             self.memory.w32(
                 package + 32 + index * 4,
                 SERVICE_BASE + TABLE_STRIDE * 21 + index * 4,
             );
         }
-        self.memory
-            .w32(package + 80, SERVICE_BASE + TABLE_STRIDE * 21 + 11 * 4);
+        if !self.wide_images {
+            self.memory
+                .w32(package + 80, SERVICE_BASE + TABLE_STRIDE * 21 + 11 * 4);
+        }
         self.set_result(SERVICE_BASE + TABLE_STRIDE * 21 + 10 * 4);
     }
 
@@ -294,7 +299,7 @@ impl NicaiMachine {
             if self.memory.r16(ids + index * 2) as u32 == id {
                 // Extended file packages use the exact marker 1. Compact
                 // memory packages can have an adjacent pointer at this offset.
-                if self.memory.r8(package + 84) == 1 {
+                if !self.wide_images && self.memory.r8(package + 84) == 1 {
                     return self.read_file_backed_package_resource(package, data, count, index);
                 }
                 return self
@@ -532,6 +537,39 @@ fn resource_names_match(left: &str, right: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_package_constructor_preserves_adjacent_screen_callbacks() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = super::super::super::memory::MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.wide_images = true;
+            let package = machine.allocate(76 + 32);
+            machine.memory.write_bytes(package + 76, &[0xa5; 32]);
+            machine.initialize_data_package(package, 5);
+            assert_eq!(machine.memory.r16(package + 8), 0);
+            assert_ne!(machine.memory.r32(package + 28), 0);
+            assert_eq!(
+                machine.memory.r32(package + 72),
+                SERVICE_BASE + TABLE_STRIDE * 21 + 40
+            );
+            for offset in 76..108 {
+                assert_eq!(machine.memory.r8(package + offset), 0xa5);
+            }
+            let ids = machine.allocate(2);
+            let offsets = machine.allocate(4);
+            let payload = machine.allocate(4);
+            machine.memory.w16(package + 8, 1);
+            machine.memory.w32(package + 20, ids);
+            machine.memory.w32(package + 16, offsets);
+            machine.memory.w16(ids, 7);
+            machine.memory.w32(offsets, payload);
+            machine.memory.w8(package + 84, 1);
+            assert_eq!(machine.package_resource_by_id(package, 7), payload);
+        }
+    }
 
     #[test]
     fn package_lookup_distinguishes_file_marker_from_adjacent_pointer() {

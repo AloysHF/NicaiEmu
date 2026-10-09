@@ -13,6 +13,22 @@ Resource-package lookup recognizes the exact extended file-package marker
 storage at that offset; treating every nonzero byte as a file marker incorrectly
 routes resident resources through file I/O and prevents dynamic code loading.
 
+Native global-block requests (0x8e), including their marshalled fetch form,
+return the shared memory-block descriptor and its allocation/reset/release
+methods. Fetching the v3 GameManager also switches image headers to 32-bit
+dimensions. Its compact resource-package descriptor occupies 76 bytes; extended
+file fields and methods must not overwrite the following guest object.
+
+Old-lib blits and digit drawing read arguments beyond r3 from the guest stack.
+Window updates call registered guest logic, and repaint callbacks share the dirty
+rectangle with old-lib drawing. Left/top clipping advances source coordinates;
+picture-library fills also honor the dirty rectangle.
+
+The v3 billing entries retain the address differences used by guest wrappers:
+remaining-days is 3764 bytes after pay-count, and the SMS entry is another 1376
+bytes later. These entries use existing offline billing semantics and defer the
+local SMS result callback from the sixth argument. No external SMS is sent.
+
 The legacy GameManagerOld text-box constructor (index 71) uses the same bounded
 initializer as the direct text-box method path. Its methods end at offset
 0x34; applying the generic 0x100-byte constructor filler corrupts neighboring
