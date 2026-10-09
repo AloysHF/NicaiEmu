@@ -133,6 +133,7 @@ impl NicaiMachine {
         }
         match index {
             1..=3 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index),
+            5 if self.uses_fixed_manager_abi() => self.draw_ui(),
             9 => self.handle_game_lcd_service(9),
             14 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(12),
             // Old-lib drawing slots (F_0 0x00..0x3c).  The native games reach
@@ -290,6 +291,7 @@ impl NicaiMachine {
                     scanline != 0 && resource_ids != 0 && pictures != 0,
                 ));
             }
+            76 if self.uses_fixed_manager_abi() => self.initialize_record(),
             77 if self.uses_fixed_manager_abi() => {
                 // initDFScene: the scene object keeps a 24-byte state at
                 // +0x628 and a method table at +0x640; the native parser
@@ -754,7 +756,7 @@ impl NicaiMachine {
                 }
                 if argument != 0 {
                     self.native_app_parser = self.memory.r32(argument);
-                    self.native_app_init = self.memory.r32(argument + 4);
+                    self.native_app_exit = self.memory.r32(argument + 4);
                     self.memory.w32(argument + 8, NATIVE_DISPATCH_SERVICE | 1);
                 }
                 self.set_result(NATIVE_DISPATCH_SERVICE | 1);
@@ -817,6 +819,25 @@ impl NicaiMachine {
                         kind as i16,
                         rectangle,
                     );
+                }
+                self.set_result(0);
+            }
+            0xb9 => {
+                if argument != 0 {
+                    let output = self.memory.r32(argument);
+                    let size = self.memory.r32(argument + 4);
+                    let pointer = if size == 0 || size > HEAP_SIZE as u32 {
+                        0
+                    } else {
+                        self.allocate(size)
+                    };
+                    if pointer != 0 {
+                        self.memory.write_bytes(pointer, &vec![0; size as usize]);
+                    }
+                    if output != 0 {
+                        self.memory.w32(output, pointer);
+                    }
+                    self.memory.w8(argument + 8, u8::from(pointer != 0));
                 }
                 self.set_result(0);
             }

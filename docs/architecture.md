@@ -141,3 +141,12 @@ methods remain unsupported.
 These changes restore visible content in the Metal new startup path. Its
 continuation prompt and subsequent menus are still under investigation; rendering
 a title is not evidence of playable compatibility.
+
+Native registration stores startup and exit callbacks separately; boot invokes
+only startup. Registered screen logic polls key and pointer state once per
+frame. The fixed manager's record constructor initializes only the bounded
+record object, preserving neighboring resource packages. Its UI-skin helper
+reads height and slice size from the AAPCS stack. Native allocation requests
+(sid 0xb9) write a cleared heap pointer through the request's output address and
+return success in a single status byte. These paths restore the War Chess new
+variant's title, menu, purchase and help panels; paid gameplay is unvalidated.

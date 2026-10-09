@@ -34,6 +34,16 @@ pixels, 132 colours), and 疯狂斗地主 / 超级玛丽 / 绝密宝藏 / 喜羊
 (王牌伞兵 new variant) regressed from an early loading screen to a blank
 screen; it remains under investigation and is not claimed as fixed.
 
+The A-library 战火军棋(新品) variant now renders its title, four-item menu,
+purchase confirmation and help text. Keypad and pointer input can open these
+panels without an emulator fault. Its record constructor previously overwrote
+the adjacent resource package; startup also called the registered exit callback.
+The repair bounds record initialization, preserves the callback lifecycle and
+implements the allocation and UI-skin calls used by its panels. Registered
+native screens poll input once per frame, avoiding duplicate menu actions.
+Paid gameplay remains unvalidated; reaching the purchase prompt is startup
+coverage, not evidence of a playable battle.
+
 CBE applications in the local validation corpus were run by the standalone emulator with default or application-specific capture timing. Every screenshot below is the RGB565 framebuffer produced by guest execution. If an application stops, times out, or leaves a single-color framebuffer, the batch does not create a screenshot. A successful startup capture does not guarantee that every screen or gameplay path works correctly.
 
 The Network column in the application list flags applications that require

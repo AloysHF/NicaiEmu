@@ -217,8 +217,8 @@ impl NicaiMachine {
         let x = signed_coord(self.register(1));
         let y = signed_coord(self.register(2));
         let width = signed_coord(self.register(3));
-        let height = signed_coord(self.register(4));
-        let n = signed_coord(self.register(5));
+        let height = signed_coord(self.argument(4));
+        let n = signed_coord(self.argument(5));
         if image == 0 || n <= 0 {
             self.set_result(0);
             return;

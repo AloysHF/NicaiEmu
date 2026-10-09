@@ -306,3 +306,8 @@ methods remain unsupported.
 These changes restore visible content in the Metal new startup path. Its
 continuation prompt and subsequent menus are still under investigation; rendering
 a title is not evidence of playable compatibility.
+
+War Chess (战火军棋, new variant) now renders its title, menu, purchase prompt
+and help panel, with keypad and pointer navigation. Paid gameplay remains
+unvalidated. See [Game Compatibility](docs/Game-Compatibility.md) for the
+validation scope.

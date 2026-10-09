@@ -790,7 +790,7 @@ pub struct NicaiMachine {
     inner_image_package: u32,
     current_image_package: u32,
     native_app_parser: u32,
-    native_app_init: u32,
+    native_app_exit: u32,
     native_system_info: u32,
     native_property_info: u32,
     #[serde(skip, default)]
@@ -983,7 +983,7 @@ impl NicaiMachine {
             inner_image_package: 0,
             current_image_package: 0,
             native_app_parser: 0,
-            native_app_init: 0,
+            native_app_exit: 0,
             native_system_info: 0,
             native_property_info: 0,
             native_file_results: BTreeMap::new(),
@@ -1202,10 +1202,6 @@ impl NicaiMachine {
             }
             self.app_main = self.native_app_parser;
             self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit)?;
-            if self.state == MachineState::Halted {
-                return Ok(());
-            }
-            self.invoke_callback(self.native_app_init, 0, 0, 0, instruction_limit)?;
             if self.state == MachineState::Halted {
                 return Ok(());
             }
@@ -1470,7 +1466,9 @@ impl NicaiMachine {
         }
 
         let logic = self.memory.r32(screen + 8);
-        if let Some(event) = key_event {
+        // Registered native screens poll input once in the idle callback.
+        // Sending an extra edge callback makes event-agnostic logic act twice.
+        if let Some(event) = key_event.filter(|_| self.native_app_parser == 0) {
             self.memory.w32(KEY_EVENT_ARG, 1u32 << event.key);
             self.invoke_callback(
                 logic,
@@ -1482,16 +1480,13 @@ impl NicaiMachine {
             if self.finish_screen_callback_frame() {
                 return Ok(());
             }
-            // Native DF logic polls the press edge during its idle update.
-            if self.native_app_parser == 0 {
-                self.key_down = 0;
-            }
+            self.key_down = 0;
             if self.pending_screen != 0 && self.pending_screen != screen {
                 self.pointer.end_frame();
                 return Ok(());
             }
         }
-        if key_event.is_none() {
+        if key_event.is_none() && self.native_app_parser == 0 {
             // The firmware routes taps through the same screen logic callback:
             // event type 3 (down), 4 (up), or 5 (drag) with packed screen
             // coordinates at the payload pointer, one event per tick and
@@ -1894,7 +1889,7 @@ impl NicaiMachine {
             inner_image_package: 0,
             current_image_package: 0,
             native_app_parser: 0,
-            native_app_init: 0,
+            native_app_exit: 0,
             native_system_info: 0,
             native_property_info: 0,
             native_file_results: BTreeMap::new(),
@@ -3895,6 +3890,156 @@ mod tests {
         machine.handle_game_service(1);
         assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0x1234);
         assert_eq!(machine.memory.r16(SCREEN_IMAGE + 2), 0x07e0);
+    }
+
+    #[test]
+    fn native_boot_does_not_invoke_registered_exit_callback() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.code_size = 64;
+        let entry = machine.executable.code_address();
+        let marker = machine.allocate(4);
+        let descriptor = machine.allocate(12);
+        machine.memory.w16(entry, 0x4770); // bx lr
+        for (offset, value) in [(16, 1), (32, 2)] {
+            let callback = entry + offset;
+            for (i, word) in [0x4801, 0x2100 | value, 0x6001, 0x4770]
+                .into_iter()
+                .enumerate()
+            {
+                machine.memory.w16(callback + i as u32 * 2, word);
+            }
+            machine.memory.w32(callback + 8, marker);
+        }
+        machine.memory.w32(descriptor, entry + 16 | 1);
+        machine.memory.w32(descriptor + 4, entry + 32 | 1);
+        machine.cpu.reg_set(Mode::User, 0, 0x79e);
+        machine.cpu.reg_set(Mode::User, 1, descriptor);
+        machine.handle_native_dispatch_service();
+        machine.boot(100).unwrap();
+        assert_eq!(machine.memory.r32(marker), 1, "only startup ran");
+        assert_eq!(machine.native_app_exit, entry + 32 | 1);
+    }
+
+    #[test]
+    fn fixed_record_constructor_preserves_adjacent_resource_package() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.executable.big_endian = true;
+            let record = machine.allocate(256);
+            let package = record + 0xc4;
+            let path = machine.allocate(16);
+            machine.memory.write_bytes(path, b"record.dat\0");
+            machine.initialize_data_package(package, 1);
+            for (register, value) in [record, path, 256, 3].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, register as u8, value);
+            }
+            machine.handle_game_service(76);
+            assert_eq!(machine.memory.r32(package + 24), 0, "resident data base");
+            assert_eq!(machine.memory.r32(record), path);
+            assert_eq!(machine.memory.r32(record + 8), 256);
+            assert_eq!(machine.memory.r16(record + 14), 3);
+            assert_eq!(
+                machine.memory.r32(record + 0x24),
+                SERVICE_BASE + TABLE_STRIDE * 23 + 12
+            );
+            machine.cpu.reg_set(Mode::User, 0, record);
+            machine.cpu.reg_set(Mode::User, 1, 8);
+            machine.handle_record_service(3);
+            assert_eq!(machine.register(0), 1, "section append is functional");
+        }
+    }
+
+    #[test]
+    fn native_marshaled_allocation_writes_pointer_and_byte_status() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let output = machine.allocate(4);
+            let frame = machine.allocate(16);
+            let reused = machine.allocate(16);
+            machine.memory.write_bytes(reused, &[0xff; 16]);
+            machine.deallocate(reused);
+            machine.memory.w32(frame, output);
+            machine.memory.w32(frame + 4, 16);
+            machine.memory.write_bytes(frame + 8, &[0xaa; 4]);
+            machine.cpu.reg_set(Mode::User, 0, 0xb9);
+            machine.cpu.reg_set(Mode::User, 1, frame);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.register(0), 0);
+            assert_eq!(machine.memory.r32(output), reused);
+            assert_eq!(machine.memory.r8(frame + 8), 1);
+            assert_eq!(machine.memory.r8(frame + 9), 0xaa);
+            assert_eq!(machine.memory.r32(reused), 0, "reused storage is cleared");
+            for size in [0, u32::MAX] {
+                machine.memory.w32(frame + 4, size);
+                machine.cpu.reg_set(Mode::User, 0, 0xb9);
+                machine.handle_native_dispatch_service();
+                assert_eq!(machine.memory.r32(output), 0);
+                assert_eq!(machine.memory.r8(frame + 8), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_ui_skin_reads_stack_dimensions_and_preserves_image_header() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.big_endian = true;
+        machine.initialize_screen();
+        let image = machine.allocate(12);
+        let pixels = machine.allocate(24);
+        machine.memory.w32(image, pixels);
+        machine.write_image_dims(image, 3, 3);
+        for i in 0..12 {
+            machine.memory.w16(pixels + i * 2, 0xf800);
+        }
+        let stack = machine.allocate(8);
+        machine.memory.w32(stack, 5);
+        machine.memory.w32(stack + 4, 3);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.cpu.reg_set(Mode::User, 4, 0);
+        machine.cpu.reg_set(Mode::User, 5, 0);
+        for (register, value) in [image, 10, 20, 5].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, register as u8, value);
+        }
+        machine.handle_game_service(5);
+        assert_eq!(machine.image_dims(image), (3, 3));
+        assert_eq!(machine.memory.r32(image), pixels);
+        for y in 20..25 {
+            for x in 10..15 {
+                assert_eq!(machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2), 0xf800);
+            }
+        }
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + (25 * 240 + 10) * 2), 0);
+    }
+
+    #[test]
+    fn native_input_edges_do_not_duplicate_screen_logic() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.state = MachineState::Ready;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let object = machine.allocate(64);
+        let screen = object + 24;
+        let logic = machine.allocate(8);
+        for (i, word) in [0x6801, 0x3101, 0x6001, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(logic + i as u32 * 2, word);
+        }
+        machine.native_app_parser = logic | 1;
+        machine.memory.w32(screen + 8, logic | 1);
+        machine.pending_screen = screen;
+        machine.set_key(18, true);
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object), 1, "one key edge, one update");
+        machine.set_key(18, false);
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object), 2);
+        machine.set_pointer(100, 100, true);
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object), 3, "one touch edge, one update");
     }
 
     #[test]
