@@ -156,6 +156,7 @@ incomplete; normal process completion is recorded separately from compatibility.
 | 炸弹人(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 生化危机(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 贪吃鱼(经典) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 超级麻将(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 
 ## Summary
 
