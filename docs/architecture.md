@@ -182,3 +182,11 @@ reads height and slice size from the AAPCS stack. Native allocation requests
 (sid 0xb9) write a cleared heap pointer through the request's output address and
 return success in a single status byte. These paths restore the War Chess new
 variant's title, menu, purchase and help panels; paid gameplay is unvalidated.
+
+Native dirty-rectangle requests (0x6b/0x6d/0x6e) initialize an eight-byte pool,
+append signed rectangle coordinates through a bounded pointer array and bind an
+eight-byte listener. Pool storage comes from the supplied guest memory block.
+The guest consumes these rectangles to restore background regions on its next
+repaint. The listener callback uses a separate service address outside existing
+object-table banks. Fetched GameOld drawing slots use the dedicated old-lib
+service bank, preserving the other table bindings.

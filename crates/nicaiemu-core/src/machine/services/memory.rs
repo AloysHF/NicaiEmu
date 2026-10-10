@@ -114,7 +114,7 @@ impl NicaiMachine {
         }
     }
 
-    fn allocate_from_memory_block(&mut self, block: u32, requested: u32) -> u32 {
+    pub(crate) fn allocate_from_memory_block(&mut self, block: u32, requested: u32) -> u32 {
         let aligned = requested.saturating_add(3) & !3;
         let base = self.memory.r32(block);
         let offset = self.memory.r32(block + 4);

@@ -111,6 +111,19 @@ remains Ready; menu exit halts normally. This is one round of coverage, not a
 complete playthrough, all rules/rooms/characters or audio certification. Billing
 does not contact a carrier.
 
+## Westward Journey new variant startup validation
+
+The new variant previously faulted at an unbound dirty-rectangle registration
+callback. The native pool stores a bounded pointer array of signed rectangles;
+its eight-byte listener preserves adjacent guest strings. Fetched GameOld tables
+now bind image drawing exports to their actual implementations.
+
+Startup renders the background, and confirm enters the title menu. Menu input
+changes state without the original fault. Sprite animation and subsequent content
+panels remain incomplete; this closes the startup execution failure, not the full
+gameplay gap. Continued idle and scripted input are checked separately from visual
+completeness.
+
 ## Summary
 
 | Status | Count |

@@ -131,6 +131,7 @@ const NATIVE_BILLING_REMAIN_DAY: u32 = NATIVE_BILLING_PAYNUM + 3764;
 const NATIVE_BILLING_SEND_SMS: u32 = NATIVE_BILLING_REMAIN_DAY + 1376;
 const NATIVE_DISPATCH_SERVICE: u32 = SERVICE_BASE + 0xf000;
 const NATIVE_SYSTEM_TIME_SERVICE: u32 = SERVICE_BASE + 0xf100;
+const NATIVE_DIRTY_RECT_SERVICE: u32 = SERVICE_BASE + 0xf200;
 /// Per-slot method stubs for guest object/method tables.  The address
 /// encodes both the *table kind* and the *byte offset* of the slot so the
 /// dispatcher can bind real semantics (memset/alloc/free for the memory
@@ -4050,6 +4051,108 @@ mod tests {
         let pixels = machine.frame_pixels();
         assert!(pixels[..16 * 240].contains(&0xff0000));
         assert!(pixels[16 * 240..32 * 240].contains(&0xff0000));
+    }
+
+    #[test]
+    fn native_dirty_rectangles_preserve_adjacent_guest_objects() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_memory_block(MEMORY_BLOCK_PTR, 128);
+            let pool = machine.allocate(12);
+            let object = machine.allocate(12);
+            let frame = machine.allocate(16);
+            machine.memory.w32(pool + 8, 0x1234_5678);
+            machine.memory.w32(object + 8, 0x89ab_cdef);
+            machine.memory.w32(frame, pool);
+            machine.memory.w32(frame + 4, MEMORY_BLOCK_PTR);
+            machine.memory.w16(frame + 8, 2);
+            machine.set_user_register(0, 0x6b);
+            machine.set_user_register(1, frame);
+            machine.handle_native_dispatch_service();
+            let entries = machine.memory.r32(pool);
+            assert_eq!(machine.memory.r32(MEMORY_BLOCK_PTR + 4), 24);
+            assert_eq!(machine.memory.r16(pool + 4), 0);
+            assert_eq!(machine.memory.r16(pool + 6), 2);
+            assert_eq!(machine.memory.r32(pool + 8), 0x1234_5678);
+            machine.memory.w32(frame, object);
+            machine.memory.w32(frame + 4, pool);
+            machine.set_user_register(0, 0x6e);
+            machine.set_user_register(1, frame);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.memory.r32(object), pool);
+            assert_eq!(
+                machine.memory.r32(object + 4),
+                NATIVE_DIRTY_RECT_SERVICE | 1
+            );
+            assert_eq!(machine.memory.r32(object + 8), 0x89ab_cdef);
+            let stack = STACK_BASE + 128;
+            machine.set_user_register(reg::SP, stack);
+            machine.memory.w32(stack, 60);
+            for x in [43, 187, 999] {
+                machine.set_user_register(0, object);
+                machine.set_user_register(1, x);
+                machine.set_user_register(2, (-7i32) as u32);
+                machine.set_user_register(3, 10);
+                machine.handle_dirty_rectangle_service();
+            }
+            assert_eq!(machine.memory.r16(pool + 4), 2, "queue is bounded");
+            for (index, x) in [43u16, 187].into_iter().enumerate() {
+                let rectangle = machine.memory.r32(entries + index as u32 * 4);
+                for (field, value) in [x, (-7i16) as u16, 10, 60].into_iter().enumerate() {
+                    assert_eq!(machine.memory.r16(rectangle + field as u32 * 2), value);
+                }
+            }
+            machine.memory.w16(pool + 4, 0);
+            machine.memory.w32(frame, pool);
+            for (index, value) in [5, 6, 7, 8].into_iter().enumerate() {
+                machine.memory.w16(frame + 4 + index as u32 * 2, value);
+            }
+            machine.set_user_register(0, 0x6d);
+            machine.set_user_register(1, frame);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.memory.r16(pool + 4), 1);
+            let rectangle = machine.memory.r32(entries);
+            assert_eq!(machine.memory.r16(rectangle), 5);
+            assert_eq!(machine.memory.r16(rectangle + 6), 8);
+            machine.set_user_register(0, 0x6c);
+            machine.set_user_register(1, pool);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.memory.r32(pool), 0);
+            assert_eq!(machine.memory.r32(pool + 4), 0);
+            assert_eq!(machine.memory.r32(pool + 8), 0x1234_5678);
+        }
+    }
+
+    #[test]
+    fn fetched_gameold_table_binds_drawing_exports() {
+        let mut machine = machine_from_minimal_archive();
+        machine.initialize_screen();
+        machine.set_user_register(0, 0x8f);
+        machine.set_user_register(1, 0);
+        machine.handle_native_dispatch_service();
+        let table = machine.register(0);
+        for offset in (4..=0x20).step_by(4) {
+            assert_eq!(
+                machine.memory.r32(table + offset),
+                OLDLIB_DRAW_SERVICE + offset
+            );
+        }
+        assert_eq!(machine.memory.r32(table + 0x28), OLDLIB_DRAW_SERVICE + 0x28);
+        let pixels = machine.allocate(8);
+        for offset in (0..8).step_by(2) {
+            machine.memory.w16(pixels + offset, 0xf800);
+        }
+        let image = machine.allocate(12);
+        machine.memory.w32(image, pixels);
+        machine.memory.w32(image + 4, 2);
+        machine.memory.w32(image + 8, 2);
+        machine.set_user_register(0, image);
+        machine.handle_oldlib_draw_service(3);
+        assert_eq!(machine.frame_pixels()[0], 0xff0000);
+        assert_eq!(machine.frame_pixels()[241], 0xff0000);
     }
 
     #[test]

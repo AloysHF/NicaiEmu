@@ -10,8 +10,8 @@ use super::super::{
     METHOD_KIND_AUTO, METHOD_KIND_GAMEOLD, METHOD_KIND_MEMBLOCK, METHOD_KIND_MEMORY,
     METHOD_KIND_PANEL, METHOD_KIND_PICTURE, METHOD_KIND_TEXTBOX, METHOD_STUB_BASE,
     METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_BILLING_PAYNUM, NATIVE_BILLING_REMAIN_DAY,
-    NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, OLDLIB_DRAW_SERVICE, SCREEN_IS_IN_QUIT,
-    SERVICE_BASE, TABLE_STRIDE,
+    NATIVE_DIRTY_RECT_SERVICE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE,
+    OLDLIB_DRAW_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE, TABLE_STRIDE,
 };
 
 fn read_little_endian_short(memory: &mut impl Memory, address: u32) -> i16 {
@@ -932,7 +932,48 @@ impl NicaiMachine {
                 self.handle_native_interface_request(argument);
                 self.set_result(0);
             }
-            0xb7 | 0xb8 | 0x67 | 0x6b | 0x6e => self.set_result(0),
+            0x6b | 0x6d | 0x6e if argument == 0 => self.set_result(0),
+            0x6b => {
+                let pool = self.memory.r32(argument);
+                let capacity = u32::from(self.memory.r16(argument + 8));
+                if pool != 0 {
+                    let block = self.memory.r32(argument + 4);
+                    let entries = self.allocate_from_memory_block(block, capacity * 12);
+                    for index in 0..if entries == 0 { 0 } else { capacity } {
+                        self.memory
+                            .w32(entries + index * 4, entries + capacity * 4 + index * 8);
+                    }
+                    self.memory.w32(pool, entries);
+                    self.memory.w16(pool + 4, 0);
+                    self.memory
+                        .w16(pool + 6, if entries == 0 { 0 } else { capacity as u16 });
+                }
+                self.set_result(0);
+            }
+            0x6c => {
+                if argument != 0 {
+                    self.memory.w32(argument, 0);
+                    self.memory.w32(argument + 4, 0);
+                }
+                self.set_result(0);
+            }
+            0x6d => {
+                let pool = self.memory.r32(argument);
+                let rectangle =
+                    std::array::from_fn(|index| self.memory.r16(argument + 4 + index as u32 * 2));
+                self.append_dirty_rectangle(pool, rectangle);
+                self.set_result(0);
+            }
+            0x6e => {
+                let object = self.memory.r32(argument);
+                let pool = self.memory.r32(argument + 4);
+                if object != 0 {
+                    self.memory.w32(object, pool);
+                    self.memory.w32(object + 4, NATIVE_DIRTY_RECT_SERVICE | 1);
+                }
+                self.set_result(0);
+            }
+            0xb7 | 0xb8 | 0x67 => self.set_result(0),
             _ => {
                 if std::env::var_os("CBE_TRACE").is_some() {
                     eprintln!(
@@ -1050,6 +1091,36 @@ impl NicaiMachine {
         }
         self.native_objects.insert(sid, table);
         table
+    }
+
+    pub(crate) fn handle_dirty_rectangle_service(&mut self) {
+        let pool = self.memory.r32(self.register(0));
+        let rectangle = [
+            self.register(1) as u16,
+            self.register(2) as u16,
+            self.register(3) as u16,
+            self.argument(4) as u16,
+        ];
+        self.append_dirty_rectangle(pool, rectangle);
+        self.set_result(0);
+    }
+
+    fn append_dirty_rectangle(&mut self, pool: u32, rectangle: [u16; 4]) {
+        if pool == 0 {
+            return;
+        }
+        let entries = self.memory.r32(pool);
+        let count = self.memory.r16(pool + 4);
+        let capacity = self.memory.r16(pool + 6);
+        if entries == 0 || count >= capacity || rectangle[2] as i16 <= 0 || rectangle[3] as i16 <= 0
+        {
+            return;
+        }
+        let target = self.memory.r32(entries + u32::from(count) * 4);
+        for (index, value) in rectangle.into_iter().enumerate() {
+            self.memory.w16(target + index as u32 * 2, value);
+        }
+        self.memory.w16(pool + 4, count + 1);
     }
 
     /// Address of the per-slot method stub for `offset` bytes into a guest
@@ -1689,6 +1760,9 @@ impl NicaiMachine {
         ] {
             self.memory
                 .w32(info + offset, SERVICE_BASE + TABLE_STRIDE * 3 + index * 4);
+        }
+        for offset in (4..=0x28).step_by(4) {
+            self.memory.w32(info + offset, OLDLIB_DRAW_SERVICE + offset);
         }
         self.memory.w32(info + 0x38, OLDLIB_DRAW_SERVICE + 0x38);
         for offset in [0xd4, 0xd8, 0xdc, 0xe0, 0xe4] {

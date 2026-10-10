@@ -303,6 +303,11 @@ stack-passed contexts and paint queued dirty rectangles. Animation resources loa
 image references and cumulative frame timing; mirrored parts and collision
 methods remain unsupported.
 
+Westward Journey (大话西游, new variant) now completes startup without the null
+rectangle-registration callback fault. Its background and title menu render,
+and confirm/direction keys change menu state. Later animation and content panels
+remain incomplete; this startup repair does not establish playable compatibility.
+
 These changes restore visible content in the Metal new startup path. Its
 continuation prompt and subsequent menus are still under investigation; rendering
 a title is not evidence of playable compatibility.

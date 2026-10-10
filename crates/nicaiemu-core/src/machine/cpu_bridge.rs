@@ -11,8 +11,8 @@ use super::{
     FIXED_MANAGER_INIT, IO_METHOD_BASE, IO_METHOD_STRIDE, IO_NV_READ_OFFSET, IO_NV_WRITE_OFFSET,
     LOG_NOOP_SERVICE, MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE, METHOD_STUB_BASE,
     METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_BILLING_PAYNUM, NATIVE_BILLING_REMAIN_DAY,
-    NATIVE_BILLING_SEND_SMS, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE,
-    OLDLIB_DRAW_SERVICE, SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
+    NATIVE_BILLING_SEND_SMS, NATIVE_DIRTY_RECT_SERVICE, NATIVE_DISPATCH_SERVICE,
+    NATIVE_SYSTEM_TIME_SERVICE, OLDLIB_DRAW_SERVICE, SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
 };
 
 impl NicaiMachine {
@@ -303,6 +303,11 @@ impl NicaiMachine {
     }
 
     fn handle_service(&mut self, address: u32) -> Result<()> {
+        if address == NATIVE_DIRTY_RECT_SERVICE {
+            self.handle_dirty_rectangle_service();
+            self.return_from_service();
+            return Ok(());
+        }
         if address == LOG_NOOP_SERVICE {
             self.return_from_service();
             return Ok(());
