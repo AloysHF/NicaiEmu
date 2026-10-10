@@ -317,3 +317,8 @@ help, character selection, map, dialogue and battles. Headless input checks cove
 selection, attacks and the return to dialogue after defeat; a 5,000-frame run
 completes without a guest fault. Billing/SMS callbacks remain local offline
 simulations, and complete playthroughs and audio are not validated.
+
+QCIF Ebook now completes startup and continued frame execution instead of hanging
+in an oversized copy after a fabricated HTTP payload. Offline HTTP GET requests
+return a request handle and an error callback, allowing the application to keep
+its local page responsive. Remote book content is not provided.

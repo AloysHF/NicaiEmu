@@ -1953,23 +1953,33 @@ mod tests {
     }
 
     #[test]
-    fn network_http_get_queues_data_and_complete_events() {
-        let mut machine = NicaiMachine::new_blank_for_tests();
-        machine.set_user_register(1, 0x0100_2001);
-        machine.set_user_register(2, 0x1122_3344);
-        machine.handle_network_service(3);
-        assert_eq!(machine.register(0), 1);
-        assert_eq!(machine.net_events.len(), 2);
-        assert_eq!(
-            machine.net_events[0].event_type,
-            services::network::NET_EVENT_DATA
-        );
-        assert_eq!(
-            machine.net_events[1].event_type,
-            services::network::NET_EVENT_COMPLETE
-        );
-        assert_eq!(machine.net_events[0].callback, 0x0100_2001);
-        assert!(machine.net_downlink_bytes > 0);
+    fn network_http_get_returns_handle_and_offline_error_without_payload() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let out = HEAP_BASE + 0x100;
+            machine.memory.w32(out, 0xfeed_beef);
+            machine.set_user_register(1, 0x0100_2001);
+            machine.set_user_register(2, out);
+            machine.handle_network_service(3);
+            assert_eq!(machine.register(0), 1);
+            let first_handle = machine.memory.r32(out);
+            assert_ne!(first_handle, 0);
+            assert_ne!(first_handle, 0xfeed_beef);
+            assert_eq!(machine.net_events.len(), 1);
+            let event = &machine.net_events[0];
+            assert_eq!(event.event_type, 9);
+            assert_eq!((event.r0, event.r1, event.r2), (0, 0, 0));
+            assert_eq!(event.callback, 0x0100_2001);
+            assert!(!event.screenless_only);
+            assert_eq!(machine.net_downlink_bytes, 0);
+            machine.set_user_register(1, 0x0100_2001);
+            machine.set_user_register(2, out);
+            machine.handle_network_service(3);
+            assert_ne!(machine.memory.r32(out), first_handle);
+        }
     }
 
     #[test]
@@ -2001,18 +2011,12 @@ mod tests {
         machine.set_user_register(1, stub | 1);
         machine.set_user_register(2, 0);
         machine.handle_network_service(3);
-        assert_eq!(machine.net_events.len(), 2);
-        // First tick only decrements the delay.
-        machine.dispatch_network_events(10_000).unwrap();
-        assert_eq!(machine.net_events.len(), 2);
-        // Second tick fires the data event.
+        assert_eq!(machine.net_events.len(), 1);
+        // First tick only decrements the delay; the screen must not suppress GET errors.
+        machine.active_screen = HEAP_BASE;
         machine.dispatch_network_events(10_000).unwrap();
         assert_eq!(machine.net_events.len(), 1);
-        assert_eq!(
-            machine.net_events[0].event_type,
-            services::network::NET_EVENT_COMPLETE
-        );
-        // Third tick fires completion.
+        assert_eq!(machine.net_events[0].event_type, 9);
         machine.dispatch_network_events(10_000).unwrap();
         assert!(machine.net_events.is_empty());
     }
@@ -2565,7 +2569,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
-    fn real_content_login_title_reaches_menu_via_network_mock() {
+    fn real_content_login_title_reaches_menu_after_offline_http_error() {
         let game_dir = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
         let game_path = std::path::PathBuf::from(game_dir).join("恶魔城登录版.CBE");
         assert!(game_path.is_file(), "missing {}", game_path.display());
@@ -2585,17 +2589,14 @@ mod tests {
                 .any(|(group, index)| *group == 9 && *index == 3),
             "game never called the network HTTP service"
         );
-        assert!(
-            machine.network_downlink_bytes() > 0,
-            "network mock never delivered a response body"
-        );
+        assert_eq!(machine.network_downlink_bytes(), 0);
         let pixels = machine.frame_pixels();
         let mut colors = std::collections::HashSet::new();
         for pixel in &pixels {
             colors.insert(*pixel);
         }
         // The pre-mock login wait screen is a flat 6-color drawing. Reaching
-        // the title menu requires the network mock and a rich guest palette.
+        // the title menu uses the offline completion and a rich guest palette.
         assert!(
             colors.len() > 32,
             "frame still looks like the login wait screen ({} colors)",

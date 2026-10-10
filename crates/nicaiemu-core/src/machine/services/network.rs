@@ -145,26 +145,25 @@ impl NicaiMachine {
         self.set_result(0);
     }
 
-    /// Issue an HTTP-style GET and queue the mock body.
-    ///
-    /// ABI: r0 = URL pointer, r1 = guest callback, r2 = context.
+    /// Accept an offline HTTP GET: r2 receives the request handle.
     fn network_http_get(&mut self) {
         let url_ptr = self.register(0);
         let callback = self.register(1);
-        let context = self.register(2);
+        let out = self.register(2);
         if callback == 0 {
             self.set_result(0);
             return;
         }
-        let url = self.read_guest_cstring(url_ptr, 256);
-        self.net_last_http_url = url.clone();
-        let response = self.build_mock_http_response(&url);
-        self.queue_mock_response(callback, context, &response);
+        self.net_last_http_url = self.read_guest_cstring(url_ptr, 256);
+        self.next_net_connect_id = self.next_net_connect_id.wrapping_add(1).max(1);
+        if out != 0 {
+            self.memory.w32(out, self.next_net_connect_id);
+        }
+        // An unavailable server must not produce a fabricated application payload.
+        self.queue_net_event(NETREQUEST_ERROR, 0, 0, 0, callback, 0, 1, false);
         self.set_result(1);
     }
 
-    /// Issue an HTTP-style POST and queue the offline completion.
-    ///
     /// F_20 `PostHttpData(r0 url, r1 length, r2 body, r3 callback, [sp]
     /// out)`.  The firmware's offline path hands out a request handle and
     /// defers a single `(0, 0, 0, NETREQUEST_ERROR)` callback — not the
@@ -344,15 +343,6 @@ impl NicaiMachine {
             bytes.push(byte);
         }
         String::from_utf8_lossy(&bytes).into_owned()
-    }
-
-    /// Default mock body: a single success byte is enough for status probes.
-    fn build_mock_http_response(&self, url: &str) -> Vec<u8> {
-        if std::env::var("CBE_TRACE").is_ok() {
-            eprintln!("network mock http url={url}");
-        }
-        let _ = url;
-        vec![1]
     }
 
     /// Default mock body for raw uplink packets.

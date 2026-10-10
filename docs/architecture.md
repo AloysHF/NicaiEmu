@@ -1,5 +1,10 @@
 # Architecture
 
+Offline HTTP GET uses `(url, callback, handle_out)`: the third argument receives
+a unique request handle. The deferred callback receives `(0, 0, 0, 9)` rather than
+a fabricated application data packet. GET errors reach active screens as well as
+screenless callers; raw channel responses retain their existing mock behavior.
+
 Native dispatch file operations marshal a three-word argument record. Requests
 0x41a (open), 0x41b (write), 0x427 (read) and 0x42a (size) return a request identifier;
 the subsequent 0x7d1 request retrieves the most recent scalar for that identifier.

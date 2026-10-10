@@ -86,6 +86,16 @@ This validates the previously failing execution and rendering paths. It does not
 establish complete playthrough, audio, every character or every stage support.
 Billing and SMS responses are simulated locally and do not contact a carrier.
 
+## QCIF Ebook timeout repair
+
+QCIF Ebook previously parsed a fabricated one-byte HTTP response as a structured
+packet, underflowed a field length and requested a 0xffffffff-byte host copy.
+Correct offline GET completion avoids that invalid payload. Startup and 2,000
+idle frames now complete without a fault or timeout; the local bookshelf page
+renders and direction keys move its selection. Remote books and downloads are
+not validated. The frontend retains its existing 240x400 output canvas for this
+176x220 application; viewport sizing remains a separate limitation.
+
 ## Summary
 
 | Status | Count |
