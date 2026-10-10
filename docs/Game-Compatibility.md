@@ -124,6 +124,22 @@ panels remain incomplete; this closes the startup execution failure, not the ful
 gameplay gap. Continued idle and scripted input are checked separately from visual
 completeness.
 
+## Shared-template execution validation (2026-10-11)
+
+Native text measurements previously returned method-table addresses, corrupted
+request arguments and recursively entered assertion rendering until the guest
+stack was exhausted. Scalar GBK width and UCS2 length/width results now preserve
+the requests and allow the original guest assertion handler to halt normally.
+
+The entries below complete 2,000 frames and a confirm/direction/cancel replay
+without emulator faults. All end at a guest assertion halt with a black frame.
+They are **not usable or playable games**. Startup/package interfaces remain
+incomplete; normal process completion is recorded separately from compatibility.
+
+| Application | Execution result | Visual/gameplay status |
+| --- | --- | --- |
+| 三国大富翁 (new) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+
 ## Summary
 
 | Status | Count |

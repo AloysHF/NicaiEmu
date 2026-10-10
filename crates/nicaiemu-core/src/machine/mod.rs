@@ -3678,6 +3678,73 @@ mod tests {
         }
     }
 
+    #[test]
+    fn native_text_measurements_return_scalars_without_corrupting_requests() {
+        fn dispatch(machine: &mut NicaiMachine, id: u32, argument: u32) {
+            machine.cpu.reg_set(Mode::User, 0, id);
+            machine.cpu.reg_set(Mode::User, 1, argument);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.register(0), id);
+        }
+        fn fetch(machine: &mut NicaiMachine, id: u32) -> u16 {
+            let output = machine.allocate(4);
+            machine.memory.w16(output, 0xdead);
+            machine.memory.w16(output + 2, 0xbeef);
+            let record = machine.allocate(12);
+            machine.memory.w32(record, output);
+            machine.memory.w32(record + 4, id);
+            machine.memory.w32(record + 8, 2);
+            machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+            machine.cpu.reg_set(Mode::User, 1, record);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.memory.r16(output + 2), 0xbeef);
+            machine.memory.r16(output)
+        }
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let text = machine.allocate(16);
+            machine.memory.write_bytes(text, b"A\xd6\xd0B\0ignored");
+            let record = machine.allocate(16);
+            machine.memory.w32(record, 10);
+            machine.memory.w32(record + 4, text);
+            machine.memory.w16(record + 8, 3);
+            machine.memory.w16(record + 10, 0xa55a);
+            machine.memory.w32(record + 12, 0x1234_5678);
+            dispatch(&mut machine, 0x3f8, record);
+            assert_eq!(fetch(&mut machine, 0x3f8), 24);
+            assert_eq!(machine.memory.r16(record + 8), 3);
+            assert_eq!(machine.memory.r16(record + 10), 0xa55a);
+            assert_eq!(machine.memory.r32(record + 12), 0x1234_5678);
+            machine.memory.w16(record + 8, 16);
+            dispatch(&mut machine, 0x3f8, record);
+            assert_eq!(fetch(&mut machine, 0x3f8), 32);
+
+            for (index, unit) in [0x41, 0x4e2d, 0x42, 0, 0x43].into_iter().enumerate() {
+                machine.memory.w16(text + index as u32 * 2, unit);
+            }
+            dispatch(&mut machine, 0x418, text);
+            assert_eq!(fetch(&mut machine, 0x418), 3);
+            assert_eq!(machine.memory.r16(text + 4), 0x42);
+            machine.memory.w32(record, text);
+            machine.memory.w16(record + 4, 4);
+            machine.memory.w8(record + 6, 1);
+            machine.memory.w32(record + 8, 2);
+            dispatch(&mut machine, 0x453, record);
+            assert_eq!(fetch(&mut machine, 0x453), 24);
+            assert_eq!(machine.memory.r32(record + 8), 2);
+            machine.memory.w16(record + 4, 16);
+            dispatch(&mut machine, 0x453, record);
+            assert_eq!(fetch(&mut machine, 0x453), 32);
+            for id in [0x3f8, 0x418, 0x453] {
+                dispatch(&mut machine, id, 0);
+                assert_eq!(fetch(&mut machine, id), 0);
+            }
+        }
+    }
+
     /// The native interface request honours two-byte result slots: the
     /// shared template's measure-call marshals a u16 output and reads it
     /// back, which is what terminates the render loop instead of letting

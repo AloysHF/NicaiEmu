@@ -190,3 +190,11 @@ The guest consumes these rectangles to restore background regions on its next
 repaint. The listener callback uses a separate service address outside existing
 object-table banks. Fetched GameOld drawing slots use the dedicated old-lib
 service bank, preserving the other table bindings.
+
+Native text requests 0x3f8 (bounded GBK width), 0x418 (UCS2 length) and 0x453
+(bounded UCS2 width) cache scalar results for the following 0x7d1 fetch.
+Request fields remain unchanged; two-byte fetches preserve the adjacent word.
+Width uses the standard eight-pixel ASCII / sixteen-pixel full-width metrics.
+Unknown object requests retain separate method-table behavior. These scalar
+bindings prevent pointer values from reaching text-layout arithmetic; they do
+not bypass guest assertions or implement the missing startup interfaces.

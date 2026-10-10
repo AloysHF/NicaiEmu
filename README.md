@@ -308,6 +308,12 @@ rectangle-registration callback fault. Its background and title menu render,
 and confirm/direction keys change menu state. Later animation and content panels
 remain incomplete; this startup repair does not establish playable compatibility.
 
+Native bounded GBK width and UCS2 length/width requests now return scalar
+results without replacing their request fields with method-table pointers.
+This prevents recursive assertion rendering and stack exhaustion in shared
+startup templates. A clean assertion halt with a blank frame remains an
+incomplete startup, not playable compatibility.
+
 These changes restore visible content in the Metal new startup path. Its
 continuation prompt and subsequent menus are still under investigation; rendering
 a title is not evidence of playable compatibility.

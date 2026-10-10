@@ -866,6 +866,54 @@ impl NicaiMachine {
                 }
                 self.set_result(0);
             }
+            0x418 => {
+                let mut length = 0;
+                while argument != 0
+                    && length < 0x8000
+                    && self.memory.r16(argument + length * 2) != 0
+                {
+                    length += 1;
+                }
+                self.native_scalar_results.insert(id, length);
+                self.set_result(id);
+            }
+            0x453 => {
+                let mut width = 0u32;
+                if argument != 0 {
+                    let text = self.memory.r32(argument);
+                    let count = u32::from(self.memory.r16(argument + 4)) / 2;
+                    for index in 0..count {
+                        let unit = self.memory.r16(text + index * 2);
+                        if unit == 0 {
+                            break;
+                        }
+                        width += if unit < 0x80 { 8 } else { 16 };
+                    }
+                }
+                self.native_scalar_results
+                    .insert(id, width.min(u32::from(u16::MAX)));
+                self.set_result(id);
+            }
+            0x3f8 => {
+                // The request contains font, GBK text and a u16 byte count.
+                let width = if argument == 0 {
+                    0
+                } else {
+                    let text = self.memory.r32(argument + 4);
+                    let count = u32::from(self.memory.r16(argument + 8));
+                    let mut offset = 0;
+                    let mut width = 0u32;
+                    while offset < count && self.memory.r8(text + offset) != 0 {
+                        let double_byte =
+                            self.memory.r8(text + offset) >= 0x80 && offset + 1 < count;
+                        width += if double_byte { 16 } else { 8 };
+                        offset += if double_byte { 2 } else { 1 };
+                    }
+                    width.min(u32::from(u16::MAX))
+                };
+                self.native_scalar_results.insert(id, width);
+                self.set_result(id);
+            }
             0x41a | 0x41b | 0x41c | 0x427 | 0x42a => {
                 self.handle_native_file_request(id, argument);
             }
@@ -1694,6 +1742,12 @@ impl NicaiMachine {
                 }
                 Some(self.native_property_info)
             }
+            0x3f8 | 0x418 | 0x453 => Some(
+                self.native_scalar_results
+                    .get(&handle)
+                    .copied()
+                    .unwrap_or(0),
+            ),
             0xaf | 0x41a | 0x41b | 0x427 | 0x42a => Some(
                 self.native_scalar_results
                     .get(&handle)
