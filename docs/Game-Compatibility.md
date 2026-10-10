@@ -152,6 +152,7 @@ incomplete; normal process completion is recorded separately from compatibility.
 | 星际宝藏(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 法老祖玛(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 漂亮小护士(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 漫画大王(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 
 ## Summary
 
