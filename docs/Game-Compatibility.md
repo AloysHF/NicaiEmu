@@ -158,6 +158,7 @@ incomplete; normal process completion is recorded separately from compatibility.
 | 贪吃鱼(经典) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 超级麻将(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 金字塔传奇(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 雷霆战机(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 
 ## Summary
 
