@@ -154,6 +154,7 @@ incomplete; normal process completion is recorded separately from compatibility.
 | 漂亮小护士(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 漫画大王(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 炸弹人(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 生化危机(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 
 ## Summary
 
