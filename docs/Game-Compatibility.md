@@ -145,6 +145,7 @@ incomplete; normal process completion is recorded separately from compatibility.
 | 动感保龄球 | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 卧底风云(精品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 双截龙(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 在线书城(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 
 ## Summary
 
