@@ -473,6 +473,56 @@ impl NicaiMachine {
         self.set_result(0);
     }
 
+    /// OldLib_064: (owner, text, x, y, width, height, RGB565).
+    pub(crate) fn draw_oldlib_text_rectangle(&mut self) {
+        let text = self.read_c_bytes(self.register(1), 4096);
+        let x = signed_coord(self.register(2));
+        let y = signed_coord(self.register(3));
+        let width = (self.argument(4).wrapping_add(15) & 0xffff) as i32;
+        let height = (self.argument(5) & 0xffff) as i32;
+        let color = self.argument(6) as u16;
+        let mut lines = 0;
+        let mut start = 0;
+        let mut offset = 0;
+        let mut line_width = 0;
+        let mut full_width = 0;
+        while offset < text.len() {
+            let count = if text[offset] >= 0x80 && offset + 1 < text.len() {
+                2
+            } else {
+                1
+            };
+            let glyph_width = if count == 2 { 16 } else { 8 };
+            if width != 0 && line_width + glyph_width > width && offset > start {
+                if height != 0 && (lines + 1) * 16 > height {
+                    break;
+                }
+                self.draw_text_bytes(&text[start..offset], x, y + lines * 16, color);
+                lines += 1;
+                start = offset;
+                line_width = 0;
+            }
+            line_width += glyph_width;
+            full_width += glyph_width;
+            offset += count;
+        }
+        if offset > start && (height == 0 || (lines + 1) * 16 <= height) {
+            self.draw_text_bytes(&text[start..offset], x, y + lines * 16, color);
+            lines += 1;
+        }
+        while offset < text.len() {
+            let count = if text[offset] >= 0x80 && offset + 1 < text.len() {
+                2
+            } else {
+                1
+            };
+            full_width += if count == 2 { 16 } else { 8 };
+            offset += count;
+        }
+        let cap = if width == 0 { 0xffff } else { width };
+        self.set_result(((lines as u32) << 16) | full_width.min(cap) as u32);
+    }
+
     pub(crate) fn handle_textbox_method(&mut self, offset: u32) {
         let textbox = self.register(0);
         if textbox == 0 {

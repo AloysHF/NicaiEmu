@@ -322,3 +322,10 @@ QCIF Ebook now completes startup and continued frame execution instead of hangin
 in an oversized copy after a fabricated HTTP payload. Offline HTTP GET requests
 return a request handle and an error callback, allowing the application to keep
 its local page responsive. Remote book content is not provided.
+
+Crazy Landlord (疯狂斗地主, new variant) now reaches its menu and playable card
+table. Scripted checks cover help, scores, room/character selection, card actions
+and a round result over 5,000 frames. Native allocation requests preserve guest
+return addresses; bounded random values and advancing ticks unblock setup and
+dealing. Billing remains a local simulation; full playthrough and audio are not
+validated.

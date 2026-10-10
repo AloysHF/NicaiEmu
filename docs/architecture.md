@@ -5,6 +5,17 @@ a unique request handle. The deferred callback receives `(0, 0, 0, 9)` rather th
 a fabricated application data packet. GET errors reach active screens as well as
 screenless callers; raw channel responses retain their existing mock behavior.
 
+Native dispatch 0xaf consumes a pointer to one allocation-size word and returns
+a scalar request handle. Fetch 0x7d1 writes the allocated pointer to the supplied
+output slot. It must not apply the generic object frame+8 writeback to this
+one-word argument: that address can hold a guest return address. Scalar allocation
+and file results share a transient request-result cache.
+
+GameOld Random returns signed values in the inclusive requested range using the
+existing deterministic generator. Fixed-manager callers use the advancing guest
+clock. OldLib_064 rectangle text reads dimensions/color from the stack, wraps GBK
+glyphs and returns packed line count/text width without overwriting source text.
+
 Native dispatch file operations marshal a three-word argument record. Requests
 0x41a (open), 0x41b (write), 0x427 (read) and 0x42a (size) return a request identifier;
 the subsequent 0x7d1 request retrieves the most recent scalar for that identifier.

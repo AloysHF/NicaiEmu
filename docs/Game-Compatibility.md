@@ -96,6 +96,21 @@ renders and direction keys move its selection. Remote books and downloads are
 not validated. The frontend retains its existing 240x400 output canvas for this
 176x220 application; viewport sizing remains a separate limitation.
 
+## Crazy Landlord new variant validation
+
+The new variant previously jumped into heap data after its marshalled allocation
+request overwrote a stack return address. Allocation now returns a scalar handle
+whose fetch yields the actual buffer without modifying the argument frame.
+The GameOld inclusive random-range and fixed-manager clock bindings also prevent
+setup loops and frozen dealing. Rectangle text drawing restores help and HUD
+labels from guest strings and stacked dimensions/colors.
+
+Checks cover the menu, help, scores, locally simulated credits, room and character
+selection, card selection/play and the round result. A scripted 5,000-frame run
+remains Ready; menu exit halts normally. This is one round of coverage, not a
+complete playthrough, all rules/rooms/characters or audio certification. Billing
+does not contact a carrier.
+
 ## Summary
 
 | Status | Count |

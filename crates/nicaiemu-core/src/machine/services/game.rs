@@ -158,7 +158,7 @@ impl NicaiMachine {
             15 if self.uses_native_dispatch_abi() => self.oldlib_image_height(),
             37 | 39 if self.uses_native_dispatch_abi() => self.malloc_big_service(),
             38 | 40 if self.uses_native_dispatch_abi() => self.free_big_service(),
-            44 if self.uses_native_dispatch_abi() => {
+            44 if gameold_abi || self.uses_native_dispatch_abi() => {
                 // OldLib_0b0: get_tick — the guest's millisecond clock.
                 // The guest also polls it in wait loops, so the value has
                 // to keep moving within a frame (mirrors the reference's
@@ -181,6 +181,7 @@ impl NicaiMachine {
                 // RefresScreen: the framebuffer is committed at frame end.
                 self.set_result(0);
             }
+            25 if gameold_abi => self.draw_oldlib_text_rectangle(),
             24 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(21),
             32 | 33 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index - 5),
             28..=31 if gameold_abi => self.set_result(if index == 29 { 8 } else { 16 }),
@@ -209,6 +210,9 @@ impl NicaiMachine {
                     signed_coord(self.memory.r32(stack + 4)),
                 );
                 self.set_result(u32::from(result));
+            }
+            56 if gameold_abi => {
+                self.handle_method_stub(Self::method_stub_address(METHOD_KIND_GAMEOLD, 0xe0) & !1);
             }
             58 => {
                 let block = self.register(0);
@@ -829,6 +833,20 @@ impl NicaiMachine {
                 }
                 self.set_result(0);
             }
+            0xaf => {
+                let size = if argument == 0 {
+                    0
+                } else {
+                    self.memory.r32(argument)
+                };
+                let pointer = if size == 0 || size > HEAP_SIZE as u32 {
+                    0
+                } else {
+                    self.allocate(size)
+                };
+                self.native_scalar_results.insert(id, pointer);
+                self.set_result(id);
+            }
             0xb9 => {
                 if argument != 0 {
                     let output = self.memory.r32(argument);
@@ -1235,11 +1253,16 @@ impl NicaiMachine {
             (METHOD_KIND_GAMEOLD, 0x00d8) => self.set_result(r0.max(r1)),
             (METHOD_KIND_GAMEOLD, 0x00dc) => self.set_result(r0.min(r1)),
             (METHOD_KIND_GAMEOLD, 0x00e0) => {
+                let first = r0 as i16 as i32;
+                let second = r1 as i16 as i32;
+                let low = first.min(second);
+                let high = first.max(second);
                 self.rand_state = self
                     .rand_state
                     .wrapping_mul(1_103_515_245)
                     .wrapping_add(12_345);
-                self.set_result((self.rand_state >> 16) & 0x7fff);
+                let value = low + (self.rand_state & 0x7fff_ffff) as i32 % (high - low + 1);
+                self.set_result(value as u32);
             }
             (METHOD_KIND_GAMEOLD, 0x00e4) => self.set_result((r0 as f64).sqrt() as u32),
             (METHOD_KIND_GAMEOLD, 0x019c) => self.set_result(df_sin(r0) as u32),
@@ -1560,7 +1583,7 @@ impl NicaiMachine {
         if id == 0x41c {
             self.set_result(result);
         } else {
-            self.native_file_results.insert(id, result);
+            self.native_scalar_results.insert(id, result);
             self.set_result(id);
         }
     }
@@ -1600,8 +1623,8 @@ impl NicaiMachine {
                 }
                 Some(self.native_property_info)
             }
-            0x41a | 0x41b | 0x427 | 0x42a => Some(
-                self.native_file_results
+            0xaf | 0x41a | 0x41b | 0x427 | 0x42a => Some(
+                self.native_scalar_results
                     .get(&handle)
                     .copied()
                     .unwrap_or(u32::MAX),

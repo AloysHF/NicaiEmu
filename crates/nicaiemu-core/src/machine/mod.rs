@@ -796,7 +796,7 @@ pub struct NicaiMachine {
     native_system_info: u32,
     native_property_info: u32,
     #[serde(skip, default)]
-    native_file_results: BTreeMap<u32, u32>,
+    native_scalar_results: BTreeMap<u32, u32>,
     #[serde(skip, default)]
     virtual_fs: VirtualFileSystem,
     #[serde(skip, default)]
@@ -988,7 +988,7 @@ impl NicaiMachine {
             native_app_exit: 0,
             native_system_info: 0,
             native_property_info: 0,
-            native_file_results: BTreeMap::new(),
+            native_scalar_results: BTreeMap::new(),
             virtual_fs: VirtualFileSystem::default(),
             net_channels: vec![
                 services::network::NetChannel::default();
@@ -1894,7 +1894,7 @@ impl NicaiMachine {
             native_app_exit: 0,
             native_system_info: 0,
             native_property_info: 0,
-            native_file_results: BTreeMap::new(),
+            native_scalar_results: BTreeMap::new(),
             virtual_fs: VirtualFileSystem::default(),
             net_channels: vec![
                 services::network::NetChannel::default();
@@ -3954,6 +3954,102 @@ mod tests {
             machine.handle_record_service(3);
             assert_eq!(machine.register(0), 1, "section append is functional");
         }
+    }
+
+    #[test]
+    fn native_alloc_fetch_preserves_argument_frame_and_return_address() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        let frame = STACK_BASE + 0x100;
+        machine.memory.w32(frame, 800);
+        machine.memory.w32(frame + 8, 0x043e_3fc3);
+        machine.set_user_register(0, 0xaf);
+        machine.set_user_register(1, frame);
+        machine.handle_native_dispatch_service();
+        assert_eq!(machine.memory.r32(frame + 8), 0x043e_3fc3);
+        assert_eq!(machine.register(0), 0xaf);
+        let request = HEAP_BASE + 0x100;
+        let output = HEAP_BASE + 0x200;
+        machine.memory.w32(request, output);
+        machine.memory.w32(request + 4, 0xaf);
+        machine.memory.w32(request + 8, 4);
+        machine.set_user_register(0, 0x7d1);
+        machine.set_user_register(1, request);
+        machine.handle_native_dispatch_service();
+        let result = machine.memory.r32(output);
+        assert_ne!(result, 0);
+        assert!(machine.memory.region(result, 800).is_some());
+    }
+
+    #[test]
+    fn gameold_random_respects_signed_inclusive_range_and_varies() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.executable.preferred_code_address = 0x043e_3000;
+        machine.executable.big_endian = true;
+        machine.executable.code_image_size = machine.executable.code_size as u32 + 2;
+        let mut values = std::collections::BTreeSet::new();
+        for _ in 0..128 {
+            machine.set_user_register(0, 1);
+            machine.set_user_register(1, 9);
+            machine.handle_game_service(56);
+            let value = machine.register(0);
+            assert!((1..=9).contains(&value));
+            values.insert(value);
+        }
+        let mut signs = std::collections::BTreeSet::new();
+        for _ in 0..32 {
+            machine.set_user_register(0, i16::MIN as i32 as u32);
+            machine.set_user_register(1, i16::MAX as u32);
+            machine.handle_game_service(56);
+            let value = machine.register(0) as i32;
+            assert!((i16::MIN as i32..=i16::MAX as i32).contains(&value));
+            signs.insert(value >= 0);
+        }
+        assert_eq!(signs.len(), 2);
+        assert_eq!(values.len(), 9);
+        machine.set_user_register(0, (-7i32) as u32);
+        machine.set_user_register(1, (-7i32) as u32);
+        machine.handle_game_service(56);
+        assert_eq!(machine.register(0) as i32, -7);
+    }
+
+    #[test]
+    fn fixed_gameold_tick_advances_between_frames() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.executable.preferred_code_address = 0x043e_3000;
+        machine.executable.big_endian = true;
+        machine.executable.code_image_size = machine.executable.code_size as u32 + 2;
+        machine.frame_count = 3;
+        machine.handle_game_service(44);
+        assert_eq!(machine.register(0), 300);
+        machine.frame_count = 4;
+        machine.handle_game_service(44);
+        assert_eq!(machine.register(0), 400);
+    }
+
+    #[test]
+    fn fixed_gameold_text_rectangle_reads_stack_color_and_wraps() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.executable.preferred_code_address = 0x043e_3000;
+        machine.executable.big_endian = true;
+        machine.executable.code_image_size = machine.executable.code_size as u32 + 2;
+        machine.initialize_screen();
+        let text = HEAP_BASE + 0x100;
+        machine.memory.write_bytes(text, b"AB\0");
+        let stack = STACK_BASE + 0x100;
+        machine.set_user_register(reg::SP, stack);
+        machine.memory.w32(stack, 0xffff_fff9); // width + 15 = 8
+        machine.memory.w32(stack + 4, 32);
+        machine.memory.w32(stack + 8, 0xf800);
+        machine.set_user_register(0, 0);
+        machine.set_user_register(1, text);
+        machine.set_user_register(2, 0);
+        machine.set_user_register(3, 0);
+        machine.handle_game_service(25);
+        assert_eq!(machine.register(0), 0x0002_0008);
+        assert!(machine.frame_pixels().contains(&0xff0000));
+        let pixels = machine.frame_pixels();
+        assert!(pixels[..16 * 240].contains(&0xff0000));
+        assert!(pixels[16 * 240..32 * 240].contains(&0xff0000));
     }
 
     #[test]
