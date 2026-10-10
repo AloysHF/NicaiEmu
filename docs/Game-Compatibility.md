@@ -139,6 +139,7 @@ incomplete; normal process completion is recorded separately from compatibility.
 | Application | Execution result | Visual/gameplay status |
 | --- | --- | --- |
 | 三国大富翁 (new) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 三国志@火 | Guest assertion halt; no execution fault | Blank; incomplete startup |
 
 ## Summary
 
