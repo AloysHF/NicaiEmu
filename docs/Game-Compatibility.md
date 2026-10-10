@@ -149,6 +149,7 @@ incomplete; normal process completion is recorded separately from compatibility.
 | 坦克大战(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 士兵突袭(精品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 太空堡垒(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 星际宝藏(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 
 ## Summary
 
