@@ -142,6 +142,7 @@ incomplete; normal process completion is recorded separately from compatibility.
 | 三国志@火 | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 俄罗斯方块(免费) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 僵尸先生(强推) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 动感保龄球 | Guest assertion halt; no execution fault | Blank; incomplete startup |
 
 ## Summary
 
