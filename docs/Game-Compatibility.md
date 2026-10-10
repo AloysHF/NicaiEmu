@@ -161,6 +161,7 @@ incomplete; normal process completion is recorded separately from compatibility.
 | 雷霆战机(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 马戏团(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 魔力弹球(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 魔幻英雄(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 
 ## Summary
 
