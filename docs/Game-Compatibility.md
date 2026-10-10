@@ -1,11 +1,59 @@
 # Game Compatibility
 
+## PR 71 black-screen audit (2026-10-07)
+
+At 799b41f, the three-library scan reported 249 successful process exits out of
+250 files. That is not a compatibility result. A low-color/low-pixel filter
+identified 90 candidates for visual and input inspection; it does not classify
+all of them as black screens. Some show only an update prompt, and some have
+monochrome interfaces. A usable startup must render correctly and accept its
+expected input without an emulator fault, including network-dependent titles.
+
+The A-library Metal new variant now passes startup file and record setup and
+loads its title images and animation. Both native constructor tables must
+initialize the picture library when it is recreated after loading. Screen and
+window callbacks now execute rather than returning through inert methods.
+However, continuation input is not yet validated: the user reports no response
+to the confirm key at the prompt, and the native payment/property interface is
+still incomplete. It remains failing and is not marked compatible. Other former
+halt-only results can expose later missing interfaces after these repairs.
+
+The three commits after 0efb157 fill Scene method slots, allocate an inert list
+control and install inert Talker methods. Successful default scans after those
+changes do not prove rendering or gameplay. The historical tables below retain
+their original validation scope and are not a fresh all-variant certification.
+
+The gameold drawing API (table offset 0x00..0x3c) is now implemented —
+clipped image blits, full-screen draws, the number/UI-skin helpers, text and
+clip control — and native dispatch sid 82 hands out the v3 gameold table the
+native games call those slots through, with the v3 image-header layout (u32
+width/height, 16-byte headers) applied consistently. The A-library new-variant
+titles now render their real screens: 魔塔 shows its full main menu (76,800
+pixels, 132 colours), and 疯狂斗地主 / 超级玛丽 / 绝密宝藏 / 喜羊羊与灰太狼@新 /
+恶魔城 render menus or title screens instead of a blank framebuffer. One title
+(王牌伞兵 new variant) regressed from an early loading screen to a blank
+screen; it remains under investigation and is not claimed as fixed.
+
+The A-library 战火军棋(新品) variant now renders its title, four-item menu,
+purchase confirmation and help text. Keypad and pointer input can open these
+panels without an emulator fault. Its record constructor previously overwrote
+the adjacent resource package; startup also called the registered exit callback.
+The repair bounds record initialization, preserves the callback lifecycle and
+implements the allocation and UI-skin calls used by its panels. Registered
+native screens poll input once per frame, avoiding duplicate menu actions.
+Paid gameplay remains unvalidated; reaching the purchase prompt is startup
+coverage, not evidence of a playable battle.
+
 CBE applications in the local validation corpus were run by the standalone emulator with default or application-specific capture timing. Every screenshot below is the RGB565 framebuffer produced by guest execution. If an application stops, times out, or leaves a single-color framebuffer, the batch does not create a screenshot. A successful startup capture does not guarantee that every screen or gameplay path works correctly.
 
 The Network column in the application list flags applications that require
 the original phone's GPRS connection and cannot be used offline: their
 WAP/GPRS-era back-end servers were shut down years ago, so they no longer
 work even on original hardware.
+
+For startup compatibility, a network-dependent application passes once it
+starts without an emulator fault. Waiting for an unavailable external server
+does not constitute a startup failure.
 
 Games packaged for the original phone's rotated landscape display present the
 240×400 framebuffer rotated 90 degrees counterclockwise as 400×240. The
@@ -18,6 +66,102 @@ the titles appear on the original hardware.
 The current core recognizes little- and big-endian ARM/Thumb CBE executables designed for a 240×400 display, including variable segment headers and fixed-address manager-directory variants. It implements the firmware subsets needed for memory blocks, native and installed data packages, image and text drawing, screen changes, sandboxed guest files, timers, keypad input, and touch input.
 
 Validated behavior includes executable initialization, startup and narrative screens, archive extraction, file-backed resource-image decoding, Chinese text and HUD rendering, keypad input, screen-logic touch events (tap down/up/drag) with the LCD manager's point-in-rect hit test for tap-driven menus, fixed-point trigonometry, packed-rectangle collision detection, and continued frame execution. Guest-initiated exits through the ARM/Thumb semihosting interface are treated as normal halts, and headless capture preserves a valid guest-rendered framebuffer if a later callback stops.
+
+Network application entry methods use a separate service table from the manager
+initialization directory. They preserve the caller's descriptor and defer its
+startup callback until the initiating call returns. This repairs the entry path
+used by Small Cool V10; that variant still faults while constructing its list
+control, so it is not yet counted as a successful startup.
+
+## Wulin new variant validation
+
+The new Wulin executable completes startup, including the first-run information
+panel and its confirmation callback. Keypad checks cover menu selection, help
+and return, character selection in both modes, the story map, dialogue, battle
+actions and the return to dialogue after defeat. Both local archive variants
+complete the idle startup check; the battle replay completes 5,000 frames without
+a guest fault. Intentional menu exit reaches the normal halted state.
+
+This validates the previously failing execution and rendering paths. It does not
+establish complete playthrough, audio, every character or every stage support.
+Billing and SMS responses are simulated locally and do not contact a carrier.
+
+## QCIF Ebook timeout repair
+
+QCIF Ebook previously parsed a fabricated one-byte HTTP response as a structured
+packet, underflowed a field length and requested a 0xffffffff-byte host copy.
+Correct offline GET completion avoids that invalid payload. Startup and 2,000
+idle frames now complete without a fault or timeout; the local bookshelf page
+renders and direction keys move its selection. Remote books and downloads are
+not validated. The frontend retains its existing 240x400 output canvas for this
+176x220 application; viewport sizing remains a separate limitation.
+
+## Crazy Landlord new variant validation
+
+The new variant previously jumped into heap data after its marshalled allocation
+request overwrote a stack return address. Allocation now returns a scalar handle
+whose fetch yields the actual buffer without modifying the argument frame.
+The GameOld inclusive random-range and fixed-manager clock bindings also prevent
+setup loops and frozen dealing. Rectangle text drawing restores help and HUD
+labels from guest strings and stacked dimensions/colors.
+
+Checks cover the menu, help, scores, locally simulated credits, room and character
+selection, card selection/play and the round result. A scripted 5,000-frame run
+remains Ready; menu exit halts normally. This is one round of coverage, not a
+complete playthrough, all rules/rooms/characters or audio certification. Billing
+does not contact a carrier.
+
+## Westward Journey new variant startup validation
+
+The new variant previously faulted at an unbound dirty-rectangle registration
+callback. The native pool stores a bounded pointer array of signed rectangles;
+its eight-byte listener preserves adjacent guest strings. Fetched GameOld tables
+now bind image drawing exports to their actual implementations.
+
+Startup renders the background, and confirm enters the title menu. Menu input
+changes state without the original fault. Sprite animation and subsequent content
+panels remain incomplete; this closes the startup execution failure, not the full
+gameplay gap. Continued idle and scripted input are checked separately from visual
+completeness.
+
+## Shared-template execution validation (2026-10-11)
+
+Native text measurements previously returned method-table addresses, corrupted
+request arguments and recursively entered assertion rendering until the guest
+stack was exhausted. Scalar GBK width and UCS2 length/width results now preserve
+the requests and allow the original guest assertion handler to halt normally.
+
+The entries below complete 2,000 frames and a confirm/direction/cancel replay
+without emulator faults. All end at a guest assertion halt with a black frame.
+They are **not usable or playable games**. Startup/package interfaces remain
+incomplete; normal process completion is recorded separately from compatibility.
+
+| Application | Execution result | Visual/gameplay status |
+| --- | --- | --- |
+| 三国大富翁 (new) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 三国志@火 | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 俄罗斯方块(免费) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 僵尸先生(强推) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 动感保龄球 | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 卧底风云(精品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 双截龙(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 在线书城(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 坦克大战(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 士兵突袭(精品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 太空堡垒(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 星际宝藏(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 法老祖玛(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 漂亮小护士(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 漫画大王(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 炸弹人(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 生化危机(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 贪吃鱼(经典) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 超级麻将(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 金字塔传奇(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 雷霆战机(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 马戏团(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 魔力弹球(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 魔幻英雄(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 
 ## Summary
 
@@ -116,7 +260,51 @@ playable offline are not flagged.
 | 73 | AppStore | tmp/nicai_game/AppStore.CBE | <img src="images/AppStore.png" width="120"> | 🌐 Required | ✅ Pass |
 | 74 | Google地图 | tmp/nicai_game/Google地图.CBE | <img src="images/Google地图.png" width="120"> | 🌐 Required | ✅ Pass |
 
+## Requested V10 Variant Checks
+
+These checks are separate from the 74-application table above. Startup passes
+for SMS-dependent titles after reaching their usable title/purchase screens;
+this does not validate gameplay behind an unavailable purchase service.
+
+| Variant | Verified result | Remaining limitation |
+| --- | --- | --- |
+| Three Kingdoms new V10 | Menu, introduction, purchase, offline failure recovery | Battle not validated behind SMS purchase |
+| Undercover V10 | Full cover, purchase and payment-failure screen | Gameplay not validated behind SMS purchase |
+| Soldier Assault V10 | Cover, introduction, purchase screen | Gameplay not validated behind SMS purchase |
+| Double Dragon V10 | Title and introduction | Gameplay faults in an uninitialized DF Scene window; window-only experiment then faults in Actor methods |
+| Westward Journey V10 | Resource load precedes initialization; background draws | Startup still faults in the missing Talker repaint method |
+| Super Bubble V10 | Early loading screen | Startup faults in the uninitialized DF Scene window |
+| Super Mario V10 | Title | Entering gameplay faults in the uninitialized DF Scene window |
+
+The Scene window is embedded at offset 0x628 in all three affected titles.
+Available API descriptions identify the constructors but do not specify the
+complete Scene/Actor or Listener/Talker layouts. Their behavior is not replaced
+with generic successful stubs, and these four variants remain failing.
+
 ## Known Limitations
+
+- Westward Journey V10 now loads requested screen resources before initialization,
+  avoiding its first null object call. It still faults in an unimplemented
+  Talker repaint method and is not yet startup-compatible.
+  Fixed GameManager image and clip services now share GameLCD drawing, so its
+  background is drawn before that remaining failure.
+
+- Double Dragon V10 now renders its title and introduction after isolating
+  unknown object methods from global manager stubs. Entering gameplay still
+  faults in an unimplemented scene-object method; gameplay is not compatible.
+
+- Undercover V10 now shows its full title cover and continue prompt, and
+  confirms into the purchase screen after font, window and fixed picture-library
+  repairs. Startup is verified; actual gameplay still requires offline SMS
+  purchase and has not been validated.
+
+- The A-library Three Kingdoms new variant now loads its dynamic executable
+  after correcting resource-package classification. Its main menu renders after
+  bounded text-box initialization and picture-library support. Legacy GameLCD
+  drawing and text-box methods now show the introduction and purchase text.
+  The modal purchase flow can pause and restore callbacks without a runtime
+  fault. Startup/menu and purchase-failure recovery are verified; actual play
+  remains blocked by the offline SMS purchase flow and has not been validated.
 
 - Persistent guest file storage is not implemented.
 - The firmware network manager implements a minimal offline mock (connect/send/close/http-get plus deferred callbacks). Login-gated titles such as 恶魔城登录版 can leave their wait screen and render the title menu, but there is no live GPRS server, no persistent online session, and most 🌐 Required applications still stop after the mock handshake.

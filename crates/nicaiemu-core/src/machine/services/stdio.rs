@@ -3,7 +3,9 @@
 use armv4t_emu::Memory;
 use encoding_rs::GBK;
 
-use super::super::{variadic_argument_location, NicaiMachine, VariadicArgument};
+use super::super::{
+    variadic_argument_location, NicaiMachine, VariadicArgument, NV_BLOCK_PATH, NV_BLOCK_SIZE,
+};
 
 impl NicaiMachine {
     pub(crate) fn handle_file_service(&mut self, index: u32) {
@@ -27,7 +29,7 @@ impl NicaiMachine {
         match index {
             0 => {
                 let path = self.read_file_path(self.register(1));
-                let mode = self.read_c_string(self.register(2), 16);
+                let mode = self.resolve_open_mode();
                 let result = self.virtual_fs.open(&path, &mode, self.register(0));
                 self.set_result(result as u32);
             }
@@ -113,11 +115,52 @@ impl NicaiMachine {
         }
     }
 
+    /// Resolve the fopen-style mode for `vM_file_open`.  The firmware ABI
+    /// carries an open-mode *enum* in r0 and an optional mode *string* in r2
+    /// (`vm_file_select_mode`).  The string wins when it names r/w/a; a stale
+    /// r2 that points at code or garbage falls back to the r0 enum.
+    pub(crate) fn resolve_open_mode(&mut self) -> String {
+        let hint = self.read_c_string(self.register(2), 8);
+        let first = hint.chars().find(|c| matches!(c, 'r' | 'w' | 'a'));
+        if let Some(kind) = first {
+            let mut mode = String::new();
+            mode.push(kind);
+            for c in hint.chars() {
+                if (c == 'b' || c == '+') && !mode.contains(c) {
+                    mode.push(c);
+                }
+            }
+            if !mode.contains('b') {
+                mode.push('b');
+            }
+            return mode;
+        }
+        let open_mode = self.register(0);
+        let mode = if open_mode & 0x10 != 0 {
+            "ab+"
+        } else if open_mode & 0x08 != 0 {
+            "wb+"
+        } else if open_mode & 0x04 != 0 {
+            "rb+"
+        } else if open_mode == 1 {
+            "wb+"
+        } else if open_mode == 3 {
+            "rb+"
+        } else {
+            "rb"
+        };
+        mode.to_string()
+    }
+
     pub(crate) fn read_file_path(&mut self, address: u32) -> String {
         if address == 0 {
             return String::new();
         }
-        if self.memory.r8(address + 1) != 0 {
+        // Big-endian images store guest strings as UCS2-BE (`00 XX` per
+        // ASCII char); little-endian images store them as single-byte GBK.
+        // Keying on byte[1] alone misreads every UCS2-BE path as ASCII and
+        // yields an empty string, so the machine endianness decides.
+        if !self.memory.is_big_endian() {
             return self.read_gbk_string(address, 512);
         }
         let mut units = Vec::new();
@@ -357,5 +400,62 @@ impl NicaiMachine {
             bytes.push(byte);
         }
         bytes
+    }
+
+    /// `nv_read(off, buf, n, okp)` — copy `n` bytes out of the guest NV
+    /// block at `off`.  The block is a flat 0x100-byte record store that the
+    /// firmware keeps across runs; the virtual filesystem hosts it so
+    /// save data survives a reset within a session.
+    pub(crate) fn handle_nv_read(&mut self) {
+        let offset = self.register(0);
+        let destination = self.register(1);
+        let size = self.register(2);
+        let okp = self.register(3);
+        let mut ok = 0u8;
+        let blob = self.nv_blob();
+        if destination != 0 && size != 0 && offset.saturating_add(size) <= NV_BLOCK_SIZE {
+            self.memory.write_bytes(
+                destination,
+                &blob[offset as usize..(offset + size) as usize],
+            );
+            ok = 1;
+        }
+        if okp != 0 {
+            self.memory.w8(okp, ok);
+        }
+        self.set_result(ok as u32);
+    }
+
+    /// `nv_write(off, buf, n, okp)` — commit `n` bytes into the NV block.
+    pub(crate) fn handle_nv_write(&mut self) {
+        let offset = self.register(0);
+        let source = self.register(1);
+        let size = self.register(2);
+        let okp = self.register(3);
+        let mut ok = 0u8;
+        if source != 0 && size != 0 && offset.saturating_add(size) <= NV_BLOCK_SIZE {
+            let mut blob = self.nv_blob();
+            for index in 0..size {
+                let byte = self.memory.r8(source + index);
+                blob[(offset + index) as usize] = byte;
+            }
+            self.virtual_fs.write_file(NV_BLOCK_PATH, blob.clone());
+            ok = 1;
+        }
+        if okp != 0 {
+            self.memory.w8(okp, ok);
+        }
+        self.set_result(ok as u32);
+    }
+
+    /// Current NV block contents, materialised from the virtual filesystem
+    /// on first use and zero-filled to the firmware's block size.
+    fn nv_blob(&mut self) -> Vec<u8> {
+        let mut blob = self
+            .virtual_fs
+            .read_file(NV_BLOCK_PATH)
+            .unwrap_or_else(|| vec![0u8; NV_BLOCK_SIZE as usize]);
+        blob.resize(NV_BLOCK_SIZE as usize, 0);
+        blob
     }
 }

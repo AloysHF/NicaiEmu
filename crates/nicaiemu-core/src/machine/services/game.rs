@@ -6,12 +6,62 @@ use armv4t_emu::{reg, Memory};
 use super::super::{
     game_service_string_uses_wide_length, signed_coord, NicaiMachine, DREAM_FACTORY_FORMAT_BUFFER,
     DREAM_FACTORY_FORMAT_BUFFER_SIZE, DREAM_FACTORY_MEMORY_BLOCK_SLOT, DREAM_FACTORY_PACKAGE_SLOT,
-    FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, NATIVE_DISPATCH_SERVICE,
-    NATIVE_SYSTEM_TIME_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE, TABLE_STRIDE,
+    FIXED_GAMEOLD_OBJECT_SERVICE, HEAP_BASE, HEAP_SIZE, MEMORY_BLOCK_PTR, METHOD_KIND_ACTOR,
+    METHOD_KIND_AUTO, METHOD_KIND_GAMEOLD, METHOD_KIND_MEMBLOCK, METHOD_KIND_MEMORY,
+    METHOD_KIND_PANEL, METHOD_KIND_PICTURE, METHOD_KIND_TEXTBOX, METHOD_STUB_BASE,
+    METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_BILLING_PAYNUM, NATIVE_BILLING_REMAIN_DAY,
+    NATIVE_DIRTY_RECT_SERVICE, NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE,
+    OLDLIB_DRAW_SERVICE, SCREEN_IS_IN_QUIT, SERVICE_BASE, TABLE_STRIDE,
 };
+
+fn read_little_endian_short(memory: &mut impl Memory, address: u32) -> i16 {
+    i16::from_le_bytes([memory.r8(address), memory.r8(address.wrapping_add(1))])
+}
+
+fn read_little_endian_int(memory: &mut impl Memory, address: u32) -> u32 {
+    u32::from_le_bytes([
+        memory.r8(address),
+        memory.r8(address.wrapping_add(1)),
+        memory.r8(address.wrapping_add(2)),
+        memory.r8(address.wrapping_add(3)),
+    ])
+}
 
 fn rect_contains_point(left: i32, top: i32, right: i32, bottom: i32, x: i32, y: i32) -> bool {
     x >= left && x <= right && y >= top && y <= bottom
+}
+
+/// Leading-integer parse for the guest `atoi`/`atol` exports.
+fn parse_ascii_integer(text: &str) -> u32 {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    let negative = index < bytes.len() && bytes[index] == b'-';
+    if negative {
+        index += 1;
+    }
+    let mut value: i64 = 0;
+    let mut saw_digit = false;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        saw_digit = true;
+        value = value
+            .saturating_mul(10)
+            .saturating_add((bytes[index] - b'0') as i64);
+        if value > i32::MAX as i64 {
+            value = i32::MAX as i64;
+        }
+        index += 1;
+    }
+    if !saw_digit {
+        return 0;
+    }
+    if negative {
+        (-(value.min(0x8000_0000))) as i32 as u32
+    } else {
+        value as u32
+    }
 }
 
 fn packed_rectangles_overlap(
@@ -82,33 +132,68 @@ impl NicaiMachine {
             self.set_result(result);
             return;
         }
+        let gameold_abi = self.uses_fixed_manager_abi() || self.native_app_parser != 0;
         match index {
+            1..=3 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index),
+            5 if self.uses_fixed_manager_abi() => self.draw_ui(),
+            9 => self.handle_game_lcd_service(9),
+            14 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(12),
+            // Old-lib drawing slots (F_0 0x00..0x3c).  The native games reach
+            // them two ways: straight through the shared service table and
+            // through their gameold table copy (sid 82, whose drawing slots
+            // live in OLDLIB_DRAW_SERVICE).  Slot 14 is deliberately NOT
+            // mapped here: the shared table's 0x38 is a resource-name lookup
+            // for the native_system_info path, while the sid-82 table's
+            // 0x38 is SetClip.
+            1 if self.uses_native_dispatch_abi() => self.draw_image_with_clip(false),
+            2 if self.uses_native_dispatch_abi() => self.draw_image_with_clip(true),
+            3 if self.uses_native_dispatch_abi() => self.draw_full_screen(),
+            4 if self.uses_native_dispatch_abi() => self.draw_number_service(),
+            5 if self.uses_native_dispatch_abi() => self.draw_ui(),
+            6 if self.uses_native_dispatch_abi() => self.draw_ui_four_x_repeat(),
+            7 if self.uses_native_dispatch_abi() => self.draw_ui_single_repeat(),
+            8 if self.uses_native_dispatch_abi() => self.draw_ui_horizontal(),
+            10 if self.uses_native_dispatch_abi() => self.release_oldlib_image(),
+            13 if self.uses_native_dispatch_abi() => self.set_result(0),
+            15 if self.uses_native_dispatch_abi() => self.oldlib_image_height(),
+            37 | 39 if self.uses_native_dispatch_abi() => self.malloc_big_service(),
+            38 | 40 if self.uses_native_dispatch_abi() => self.free_big_service(),
+            44 if gameold_abi || self.uses_native_dispatch_abi() => {
+                // OldLib_0b0: get_tick — the guest's millisecond clock.
+                // The guest also polls it in wait loops, so the value has
+                // to keep moving within a frame (mirrors the reference's
+                // same-slot repeat acceleration).
+                let repeats = self.service_calls.get(&(3, 44)).copied().unwrap_or(0);
+                let mut tick = (self.frame_count as u32).wrapping_mul(100);
+                if repeats > 64 {
+                    tick = tick.wrapping_add(16 * (repeats - 64) as u32);
+                } else if repeats > 8 {
+                    tick = tick.wrapping_add((repeats - 8) as u32);
+                }
+                self.set_result(tick);
+            }
+            45 if self.uses_native_dispatch_abi() => {
+                // OldLib_0b4: sys_sleep(ms) — the firmware advances its
+                // clock; our clock follows the frame counter.
+                self.set_result(0);
+            }
+            46 if self.uses_native_dispatch_abi() => {
+                // RefresScreen: the framebuffer is committed at frame end.
+                self.set_result(0);
+            }
+            25 if gameold_abi => self.draw_oldlib_text_rectangle(),
+            24 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(21),
+            32 | 33 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index - 5),
+            28..=31 if gameold_abi => self.set_result(if index == 29 { 8 } else { 16 }),
             0 => {
-                let source = self.resource_by_id(self.register(0));
+                let argument = self.register(0);
+                let source = if argument >= 0x10000 {
+                    self.resource_by_name(argument)
+                } else {
+                    self.resource_by_id(argument)
+                };
                 let result = self.create_image_from_stream(source, 0);
                 self.set_result(result);
-            }
-            1 | 2 if self.uses_fixed_manager_abi() => {
-                let source = self.register(0);
-                let source_x = signed_coord(self.register(1));
-                let source_y = signed_coord(self.register(2));
-                let width = signed_coord(self.register(3));
-                let stack = self.register(reg::SP);
-                let height = signed_coord(self.memory.r32(stack));
-                let destination_x = signed_coord(self.memory.r32(stack + 4));
-                let destination_y = signed_coord(self.memory.r32(stack + 8));
-                self.blit_image(
-                    super::super::SCREEN_IMAGE_STRUCT,
-                    source,
-                    source_x,
-                    source_y,
-                    width,
-                    height,
-                    destination_x,
-                    destination_y,
-                    index == 2,
-                );
-                self.set_result(0);
             }
             23 => {
                 let result = self.decode_resource_stream(self.register(0));
@@ -126,6 +211,9 @@ impl NicaiMachine {
                 );
                 self.set_result(u32::from(result));
             }
+            56 if gameold_abi => {
+                self.handle_method_stub(Self::method_stub_address(METHOD_KIND_GAMEOLD, 0xe0) & !1);
+            }
             58 => {
                 let block = self.register(0);
                 let size = self.register(1);
@@ -140,28 +228,25 @@ impl NicaiMachine {
                 let mask = self.register(0);
                 self.set_result(u32::from(self.key_held & mask != 0));
             }
-            14 if self.uses_fixed_manager_abi() => {
-                self.set_result(self.register(1).wrapping_add(self.register(3)));
-            }
             15 if self.uses_fixed_manager_abi() => {
                 let image = self.register(0);
                 let height = if image == 0 {
                     0
                 } else {
-                    self.memory.r16(image + 6) as u32
+                    self.image_dims(image).1 as u32
                 };
                 self.set_result(height);
             }
-            16 if self.uses_fixed_manager_abi() => {
+            16 if gameold_abi => {
                 let image = self.register(0);
                 let width = if image == 0 {
                     0
                 } else {
-                    self.memory.r16(image + 4) as u32
+                    self.image_dims(image).0 as u32
                 };
                 self.set_result(width);
             }
-            17 if self.uses_fixed_manager_abi() => {
+            17 if gameold_abi => {
                 let red = self.register(0) as u16;
                 let green = self.register(1) as u16;
                 let blue = self.register(2) as u16;
@@ -186,6 +271,9 @@ impl NicaiMachine {
             66 => self.set_result(self.pointer.x as u32),
             67 => self.set_result(self.pointer.y as u32),
             68 => self.set_result(self.key_down),
+            71 => {
+                self.handle_method_stub(Self::method_stub_address(METHOD_KIND_GAMEOLD, 0x11c) & !1);
+            }
             75 if self.uses_fixed_manager_abi() => {
                 let object = self.register(0);
                 let capacity = self.register(1) & 0xffff;
@@ -193,6 +281,8 @@ impl NicaiMachine {
                 let resource_ids = self.allocate(capacity.saturating_mul(2).max(2));
                 let pictures = self.allocate(capacity.saturating_mul(4).max(4));
                 self.memory.w32(object, scanline);
+                self.memory.w32(object + 4, 0);
+                self.memory.w8(object + 22, 1);
                 self.memory.w16(object + 8, capacity as u16);
                 self.memory.w32(object + 12, resource_ids);
                 self.memory.w32(object + 16, pictures);
@@ -207,10 +297,32 @@ impl NicaiMachine {
                     scanline != 0 && resource_ids != 0 && pictures != 0,
                 ));
             }
-            79 if self.uses_fixed_manager_abi() => {
+            76 if self.uses_fixed_manager_abi() => self.initialize_record(),
+            77 if self.uses_fixed_manager_abi() => {
+                // initDFScene: the scene object keeps a 24-byte state at
+                // +0x628 and a method table at +0x640; the native parser
+                // invokes the table entry at +0x660 every tick after the
+                // app main returns.  The generic 0x100-byte fill never
+                // reaches it, so the slot stayed null and the parser
+                // branched to 0.
+                let scene = self.register(0);
+                if scene != 0 {
+                    for off in (0x640u32..=0x664).step_by(4) {
+                        if self.memory.r32(scene + off) == 0 {
+                            self.memory.w32(
+                                scene + off,
+                                Self::method_stub_address(METHOD_KIND_GAMEOLD, off),
+                            );
+                        }
+                    }
+                }
+                self.set_result(scene);
+            }
+            79 if gameold_abi => {
                 self.initialize_fixed_gameold_region();
             }
             80 => {
+                self.initialize_memory_block(MEMORY_BLOCK_PTR, 0x40_0000);
                 self.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, 0);
                 self.memory
                     .w32(DREAM_FACTORY_MEMORY_BLOCK_SLOT, MEMORY_BLOCK_PTR);
@@ -254,15 +366,15 @@ impl NicaiMachine {
                 let buffer = self.register(0);
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
-                let value = self.memory.r16(buffer.wrapping_add(offset));
+                let value = read_little_endian_short(&mut self.memory, buffer.wrapping_add(offset));
                 self.memory.w32(cursor, offset.wrapping_add(2));
-                self.set_result(value as u32);
+                self.set_result(value as i32 as u32);
             }
             92 => {
                 let buffer = self.register(0);
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
-                let value = self.memory.r32(buffer.wrapping_add(offset));
+                let value = read_little_endian_int(&mut self.memory, buffer.wrapping_add(offset));
                 self.memory.w32(cursor, offset.wrapping_add(4));
                 self.set_result(value);
             }
@@ -306,29 +418,201 @@ impl NicaiMachine {
                     .w8(DREAM_FACTORY_FORMAT_BUFFER + length as u32, 0);
                 self.set_result(DREAM_FACTORY_FORMAT_BUFFER);
             }
+            109 if gameold_abi => self.handle_df_engine_service(9),
             110 => {
                 let package = self.register(0);
                 let capacity = self.register(1);
                 self.initialize_data_package(package, capacity);
             }
-            _ => self.set_result(0),
+            136 => {
+                // sprintf(dst, fmt, ...)
+                let destination = self.register(0);
+                let format = self.read_c_bytes(self.register(1), 4096);
+                let output = self.format_c_string_from(&format, 2);
+                if destination != 0 {
+                    self.memory.write_bytes(destination, &output);
+                    self.memory.w8(destination + output.len() as u32, 0);
+                }
+                self.set_result(output.len() as u32);
+            }
+            // Firmware C-library routines exposed through the gameold
+            // manager. Games call these via directory thunks; returning a
+            // null or doing nothing leaves structure fields unfilled and the
+            // next indirect call jumps to zero.
+            133 => {
+                // memcpy(dst, src, n)
+                let dst = self.register(0);
+                let src = self.register(1);
+                let count = self.register(2) as usize;
+                if dst != 0 && src != 0 && count != 0 {
+                    let mut buffer = vec![0u8; count];
+                    for (offset, byte) in buffer.iter_mut().enumerate() {
+                        *byte = self.memory.r8(src + offset as u32);
+                    }
+                    self.memory.write_bytes(dst, &buffer);
+                }
+                self.set_result(dst);
+            }
+            134 => {
+                // strlen(s)
+                let pointer = self.register(0);
+                let mut length = 0u32;
+                while length < 0x1_0000 && self.memory.r8(pointer + length) != 0 {
+                    length += 1;
+                }
+                self.set_result(length);
+            }
+            135 => {
+                // memset(dst, value, n)
+                let dst = self.register(0);
+                let value = self.register(1) as u8;
+                let count = self.register(2) as usize;
+                if dst != 0 && count != 0 {
+                    let bytes = vec![value; count];
+                    self.memory.write_bytes(dst, &bytes);
+                }
+                self.set_result(dst);
+            }
+            140 => {
+                // strncpy(dst, src, n) — copy up to n bytes, zero-pad the rest
+                let dst = self.register(0);
+                let src = self.register(1);
+                let count = self.register(2) as usize;
+                if dst != 0 && count != 0 {
+                    let mut bytes = vec![0u8; count];
+                    if src != 0 {
+                        for (offset, byte) in bytes.iter_mut().enumerate() {
+                            let ch = self.memory.r8(src + offset as u32);
+                            *byte = ch;
+                            if ch == 0 {
+                                break;
+                            }
+                        }
+                    }
+                    self.memory.write_bytes(dst, &bytes);
+                }
+                self.set_result(dst);
+            }
+            141 => {
+                // strcpy(dst, src)
+                let dst = self.register(0);
+                let src = self.register(1);
+                if dst != 0 && src != 0 {
+                    let mut bytes = Vec::new();
+                    loop {
+                        let ch = self.memory.r8(src + bytes.len() as u32);
+                        bytes.push(ch);
+                        if ch == 0 || bytes.len() >= 0x1_0000 {
+                            break;
+                        }
+                    }
+                    self.memory.write_bytes(dst, &bytes);
+                }
+                self.set_result(dst);
+            }
+            138 => {
+                // rand() — deterministic LCG so guest code that seeds and
+                // samples the generator gets a stable stream.
+                self.rand_state = self
+                    .rand_state
+                    .wrapping_mul(1_103_515_245)
+                    .wrapping_add(12_345);
+                self.set_result((self.rand_state >> 16) & 0x7fff);
+            }
+            // Firmware exports at F_0 offsets 0x224..0x274 (indices 137..157).
+            // Falling through to the object-constructor default here corrupts
+            // memory (it treats scalar arguments like 0x3EB as object
+            // pointers) and returns the wrong value — 极品飞车 formats the
+            // GetPayNum result with an in-place sprintf, so a 4-digit return
+            // overruns the format string and walks the pointer table.
+            137 => self.set_result(0), // vm_log_trace
+            142 => {
+                // strcat(dst, src)
+                let destination = self.register(0);
+                let source = self.register(1);
+                if destination != 0 && source != 0 {
+                    let mut end = destination;
+                    while end.wrapping_sub(destination) < 0x1_0000 && self.memory.r8(end) != 0 {
+                        end = end.wrapping_add(1);
+                    }
+                    let mut offset = 0u32;
+                    loop {
+                        let byte = self.memory.r8(source.wrapping_add(offset));
+                        self.memory.w8(end.wrapping_add(offset), byte);
+                        if byte == 0 || offset >= 0x1_0000 {
+                            break;
+                        }
+                        offset += 1;
+                    }
+                }
+                self.set_result(destination);
+            }
+            143 | 145 => {
+                // atol / atoi
+                let text = self.read_c_string(self.register(0), 64);
+                self.set_result(parse_ascii_integer(&text));
+            }
+            144 => {
+                // memmove(dst, src, n) — copy through a temp buffer so
+                // overlapping ranges behave like memmove, not memcpy.
+                let destination = self.register(0);
+                let source = self.register(1);
+                let count = self.register(2).min(0x1_0000);
+                if destination != 0 && source != 0 && count != 0 {
+                    let bytes: Vec<u8> = (0..count)
+                        .map(|offset| self.memory.r8(source.wrapping_add(offset)))
+                        .collect();
+                    self.memory.write_bytes(destination, &bytes);
+                }
+                self.set_result(destination);
+            }
+            146..=156 => {
+                // BILLING_* family — same semantics as the dedicated billing
+                // group; offline answers keep in-place %d formatting short.
+                self.handle_billing_service(index - 146);
+            }
+            157 => {
+                // vMstricmp(a, b) — case-insensitive compare, 0 when equal.
+                let left = self.read_c_string(self.register(0), 256);
+                let right = self.read_c_string(self.register(1), 256);
+                let result = if left.eq_ignore_ascii_case(&right) {
+                    0
+                } else {
+                    let l = left.to_ascii_lowercase();
+                    let r = right.to_ascii_lowercase();
+                    match l.cmp(&r) {
+                        std::cmp::Ordering::Less => u32::MAX,
+                        std::cmp::Ordering::Greater => 1,
+                        std::cmp::Ordering::Equal => 0,
+                    }
+                };
+                self.set_result(result);
+            }
+            _ => {
+                if self.uses_native_dispatch_abi() {
+                    // The native games call the unhandled slots of their
+                    // gameold table copy directly (record, windows, actor
+                    // constructors live at these offsets in the v3 layout).
+                    // Route them to the per-slot method stubs so the table
+                    // path and the stub path share one implementation.
+                    let stub = Self::method_stub_address(METHOD_KIND_GAMEOLD, index * 4) & !1;
+                    self.handle_method_stub(stub);
+                } else {
+                    // Unknown constructors retain inert method slots. These must
+                    // not share global manager semantics or write caller stack slots.
+                    let obj = self.register(0);
+                    self.fill_zero_method_slots(obj, 0x100);
+                    self.set_result(obj);
+                }
+            }
         }
     }
 
     pub(crate) fn handle_fixed_gameold_object_service(&mut self, index: u32) {
-        if index == 4 {
-            let x = signed_coord(self.register(1));
-            let y = signed_coord(self.register(2));
-            let width = signed_coord(self.register(3));
-            let stack = self.register(reg::SP);
-            let height = signed_coord(self.memory.r32(stack));
-            let color = self.memory.r32(stack + 4) as u16;
-            self.fill_screen_rect(x, y, width, height, color);
-        }
-        self.set_result(0);
+        self.handle_picture_library_method(0x18 + index * 4);
     }
 
-    pub(crate) fn handle_fixed_gameold_region_service(&mut self, index: u32) {
+    pub(crate) fn handle_fixed_gameold_region_service(&mut self, index: u32) -> anyhow::Result<()> {
         let object = self.register(0);
         match index {
             0 => {
@@ -338,8 +622,9 @@ impl NicaiMachine {
                 }
                 self.set_result(object);
             }
+            3 => self.handle_panel_service(0x34)?,
             4 => {
-                self.memory.w32(object + 4, 0);
+                self.repaint_fixed_gameold_windows(object)?;
                 self.set_result(0);
             }
             5 => {
@@ -361,6 +646,47 @@ impl NicaiMachine {
             }
             _ => self.set_result(0),
         }
+        Ok(())
+    }
+
+    fn repaint_fixed_gameold_windows(&mut self, root: u32) -> anyhow::Result<()> {
+        let mut pending = vec![root];
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(object) = pending.pop() {
+            if object == 0 || !visited.insert(object) {
+                continue;
+            }
+            let count = self.memory.r32(object + 4).min(self.memory.r32(object + 8));
+            let entries = self.memory.r32(object + 12);
+            let callback = self.memory.r32(object + 48);
+            let context = self.memory.r32(object + 20);
+            for i in 0..count {
+                let rectangle = self.memory.r32(entries + i * 4);
+                for j in 0..4 {
+                    let value = self.memory.r16(rectangle + j * 2);
+                    self.memory
+                        .w16(super::super::SCREEN_IMAGE_STRUCT + 12 + j * 2, value);
+                }
+                let x = self.memory.r16(rectangle) as i16 as i32;
+                let y = self.memory.r16(rectangle + 2) as i16 as i32;
+                let width = self.memory.r16(rectangle + 4) as i16 as i32;
+                let height = self.memory.r16(rectangle + 6) as i16 as i32;
+                self.oldlib_clip = [x, y, x + width, y + height];
+                // Guest painters run synchronously and must preserve the calling CPU context.
+                let cpu = self.cpu;
+                let result =
+                    self.invoke_callback(callback, context, 0, 0, crate::DEFAULT_INSTRUCTION_LIMIT);
+                self.cpu = cpu;
+                result?;
+                if self.state == super::super::MachineState::Halted {
+                    return Ok(());
+                }
+            }
+            self.memory.w32(object + 4, 0);
+            pending.push(self.memory.r32(object + 32));
+            pending.push(self.memory.r32(object + 36));
+        }
+        Ok(())
     }
 
     pub(crate) fn initialize_fixed_gameold_region(&mut self) {
@@ -411,26 +737,225 @@ impl NicaiMachine {
             || (data_start..data_end).contains(&id)
             || (HEAP_BASE..HEAP_BASE + HEAP_SIZE as u32).contains(&id)
         {
-            self.set_result(0);
+            // When called as an object constructor (r1 = block size), allocate
+            // the block and hand the pointer back through the caller's stack
+            // slot the shared template uses for the result. Other calls with
+            // a pointer id simply echo zero.
+            let size = self.register(1);
+            if (16..=0x1000).contains(&size) {
+                let block = self.allocate(size);
+                let sp = self.register(reg::SP);
+                if block != 0 && sp != 0 {
+                    self.memory.w32(sp + 68, block);
+                }
+                self.set_result(block);
+            } else {
+                self.set_result(0);
+            }
             return;
         }
         match id {
+            4 => {
+                self.state = super::super::MachineState::Halted;
+                self.set_result(0);
+            }
             0x79e => {
+                if std::env::var_os("CBE_TRACE").is_some() {
+                    eprintln!(
+                        "[dispatch] id=0x79e arg=0x{argument:08X} r0=0x{:08X} lr=0x{:08X}",
+                        self.register(0),
+                        self.register(reg::LR)
+                    );
+                }
                 if argument != 0 {
                     self.native_app_parser = self.memory.r32(argument);
-                    self.native_app_init = self.memory.r32(argument + 4);
+                    self.native_app_exit = self.memory.r32(argument + 4);
                     self.memory.w32(argument + 8, NATIVE_DISPATCH_SERVICE | 1);
                 }
                 self.set_result(NATIVE_DISPATCH_SERVICE | 1);
             }
             0x52 => {
-                if argument != 0 {
-                    self.memory
-                        .w32(self.executable.data_address() + 0x1724, argument);
+                // sid 82: hand the caller a copy of the GameManagerOld
+                // table.  The native games keep it in their own buffer and
+                // call the slots straight out of it (drawing API, mallocs,
+                // key queries).  The table is the v3 layout: slots from
+                // 0x114 on are shifted down by the 8-byte gap the v3 SDK
+                // removed, so a v3 offset maps to the service entry of v2
+                // offset o (< 0x114) or o + 8.
+                let buffer = argument;
+                if buffer != 0 {
+                    const TABLE_BYTES: u32 = 0x26c;
+                    for offset in (0..TABLE_BYTES).step_by(4) {
+                        // The billing slots at the v3 tail are written below.
+                        if offset == 0x240 || offset == 0x244 {
+                            continue;
+                        }
+                        // Preserve slots the guest already filled: some games
+                        // pre-populate their table and only ask for the
+                        // missing entries (overwriting them breaks those
+                        // games' own callbacks).
+                        if self.memory.r32(buffer + offset) != 0 {
+                            continue;
+                        }
+                        // Slot 0x38 is SetClip in the gameold table but a
+                        // resource-name lookup in the shared group-3 table
+                        // (the native_system_info path); route it through
+                        // the dedicated old-lib table so both stay correct.
+                        let source = if offset < 0x114 { offset } else { offset + 8 };
+                        let entry = if offset == 0x38 {
+                            OLDLIB_DRAW_SERVICE + offset
+                        } else {
+                            SERVICE_BASE + TABLE_STRIDE * 3 + source
+                        };
+                        self.memory.w32(buffer + offset, entry);
+                    }
+                    // Billing slots the v3 table carries at +0x240/+0x244.
+                    if self.memory.r32(buffer + 0x240) == 0 {
+                        self.memory.w32(buffer + 0x240, NATIVE_BILLING_PAYNUM);
+                    }
+                    if self.memory.r32(buffer + 0x244) == 0 {
+                        self.memory.w32(buffer + 0x244, NATIVE_BILLING_REMAIN_DAY);
+                    }
                 }
                 self.set_result(0);
             }
-            0x8e | 0x8f | 0x97 | 0xac | 0x421 | 0x41a => self.set_result(id),
+            0x9c => {
+                if argument != 0 {
+                    let panel = self.memory.r32(argument);
+                    let kind = self.memory.r16(argument + 4) as u32;
+                    let rectangle = self.memory.r32(argument + 8);
+                    super::screen::invalidate_panel(
+                        &mut self.memory,
+                        panel,
+                        kind as i16,
+                        rectangle,
+                    );
+                }
+                self.set_result(0);
+            }
+            0xaf => {
+                let size = if argument == 0 {
+                    0
+                } else {
+                    self.memory.r32(argument)
+                };
+                let pointer = if size == 0 || size > HEAP_SIZE as u32 {
+                    0
+                } else {
+                    self.allocate(size)
+                };
+                self.native_scalar_results.insert(id, pointer);
+                self.set_result(id);
+            }
+            0xb9 => {
+                if argument != 0 {
+                    let output = self.memory.r32(argument);
+                    let size = self.memory.r32(argument + 4);
+                    let pointer = if size == 0 || size > HEAP_SIZE as u32 {
+                        0
+                    } else {
+                        self.allocate(size)
+                    };
+                    if pointer != 0 {
+                        self.memory.write_bytes(pointer, &vec![0; size as usize]);
+                    }
+                    if output != 0 {
+                        self.memory.w32(output, pointer);
+                    }
+                    self.memory.w8(argument + 8, u8::from(pointer != 0));
+                }
+                self.set_result(0);
+            }
+            0x418 => {
+                let mut length = 0;
+                while argument != 0
+                    && length < 0x8000
+                    && self.memory.r16(argument + length * 2) != 0
+                {
+                    length += 1;
+                }
+                self.native_scalar_results.insert(id, length);
+                self.set_result(id);
+            }
+            0x453 => {
+                let mut width = 0u32;
+                if argument != 0 {
+                    let text = self.memory.r32(argument);
+                    let count = u32::from(self.memory.r16(argument + 4)) / 2;
+                    for index in 0..count {
+                        let unit = self.memory.r16(text + index * 2);
+                        if unit == 0 {
+                            break;
+                        }
+                        width += if unit < 0x80 { 8 } else { 16 };
+                    }
+                }
+                self.native_scalar_results
+                    .insert(id, width.min(u32::from(u16::MAX)));
+                self.set_result(id);
+            }
+            0x3f8 => {
+                // The request contains font, GBK text and a u16 byte count.
+                let width = if argument == 0 {
+                    0
+                } else {
+                    let text = self.memory.r32(argument + 4);
+                    let count = u32::from(self.memory.r16(argument + 8));
+                    let mut offset = 0;
+                    let mut width = 0u32;
+                    while offset < count && self.memory.r8(text + offset) != 0 {
+                        let double_byte =
+                            self.memory.r8(text + offset) >= 0x80 && offset + 1 < count;
+                        width += if double_byte { 16 } else { 8 };
+                        offset += if double_byte { 2 } else { 1 };
+                    }
+                    width.min(u32::from(u16::MAX))
+                };
+                self.native_scalar_results.insert(id, width);
+                self.set_result(id);
+            }
+            0x41a | 0x41b | 0x41c | 0x427 | 0x42a => {
+                self.handle_native_file_request(id, argument);
+            }
+            0x8f => {
+                // GameManagerOld@v3 request: hand out the v3-ordered API
+                // table and switch image headers to the wide layout these
+                // guests read (u32 width/height at +4/+8), mirroring the
+                // reference's gfx.wide flip when the v3 library is built.
+                if self.gamelib_v3_table == 0 {
+                    if self.native_system_info == 0 {
+                        let info = self.build_native_system_info();
+                        self.native_system_info = info;
+                    }
+                    self.gamelib_v3_table = self.native_system_info;
+                    if !self.wide_images {
+                        self.wide_images = true;
+                        self.write_screen_header();
+                    }
+                }
+                self.set_result(self.gamelib_v3_table);
+            }
+            0x8e => {
+                // mF_GetGMemoryBlockPtr returns the shared memory-block descriptor.
+                if self.native_property_info == 0 {
+                    if self.memory.r32(MEMORY_BLOCK_PTR) == 0 {
+                        self.initialize_memory_block(MEMORY_BLOCK_PTR, 0x40_0000);
+                    }
+                    self.native_property_info = MEMORY_BLOCK_PTR;
+                }
+                self.set_result(self.native_property_info);
+            }
+            0x421 => {
+                if std::env::var_os("CBE_TRACE").is_some() {
+                    eprintln!(
+                        "[dispatch] id=0x{id:x} r1=0x{:08X} lr=0x{:08X}",
+                        self.register(1),
+                        self.register(reg::LR)
+                    );
+                }
+                // Network probe: the offline firmware reports failure.
+                self.set_result(0);
+            }
             0x3ed => {
                 if argument != 0 {
                     self.memory.w8(argument, 0);
@@ -446,10 +971,739 @@ impl NicaiMachine {
                 self.set_result(0);
             }
             0x7d1 => {
+                if std::env::var_os("CBE_TRACE").is_some() {
+                    eprintln!(
+                        "[dispatch] id=0x7d1 arg=0x{argument:08X} lr=0x{:08X}",
+                        self.register(reg::LR)
+                    );
+                }
                 self.handle_native_interface_request(argument);
                 self.set_result(0);
             }
+            0x6b | 0x6d | 0x6e if argument == 0 => self.set_result(0),
+            0x6b => {
+                let pool = self.memory.r32(argument);
+                let capacity = u32::from(self.memory.r16(argument + 8));
+                if pool != 0 {
+                    let block = self.memory.r32(argument + 4);
+                    let entries = self.allocate_from_memory_block(block, capacity * 12);
+                    for index in 0..if entries == 0 { 0 } else { capacity } {
+                        self.memory
+                            .w32(entries + index * 4, entries + capacity * 4 + index * 8);
+                    }
+                    self.memory.w32(pool, entries);
+                    self.memory.w16(pool + 4, 0);
+                    self.memory
+                        .w16(pool + 6, if entries == 0 { 0 } else { capacity as u16 });
+                }
+                self.set_result(0);
+            }
+            0x6c => {
+                if argument != 0 {
+                    self.memory.w32(argument, 0);
+                    self.memory.w32(argument + 4, 0);
+                }
+                self.set_result(0);
+            }
+            0x6d => {
+                let pool = self.memory.r32(argument);
+                let rectangle =
+                    std::array::from_fn(|index| self.memory.r16(argument + 4 + index as u32 * 2));
+                self.append_dirty_rectangle(pool, rectangle);
+                self.set_result(0);
+            }
+            0x6e => {
+                let object = self.memory.r32(argument);
+                let pool = self.memory.r32(argument + 4);
+                if object != 0 {
+                    self.memory.w32(object, pool);
+                    self.memory.w32(object + 4, NATIVE_DIRTY_RECT_SERVICE | 1);
+                }
+                self.set_result(0);
+            }
+            0xb7 | 0xb8 | 0x67 => self.set_result(0),
+            _ => {
+                if std::env::var_os("CBE_TRACE").is_some() {
+                    eprintln!(
+                        "[dispatch] id=0x{id:x} r1=0x{:08X} r2=0x{:08X} lr=0x{:08X}",
+                        self.register(1),
+                        self.register(2),
+                        self.register(reg::LR)
+                    );
+                }
+                // The shared template calls a method slot that the firmware
+                // leaves sparse. When invoked as a method (r1 = 1), hand back
+                // a callable stub address so the caller's `ptr - 52` arithmetic
+                // still lands on executable code instead of zero-filled heap.
+                if self.register(1) == 1 {
+                    let sp = self.register(reg::SP);
+                    // The caller subtracts 52 from the +68 slot to recover a
+                    // method pointer, so seed it 52 bytes past the stub.  The
+                    // +36 slot is used directly as a callable target.
+                    let stub = NATIVE_DISPATCH_SERVICE | 1;
+                    if sp != 0 {
+                        self.memory.w32(sp + 68, stub.wrapping_add(52));
+                        self.memory.w32(sp + 36, stub);
+                    }
+                    self.set_result(stub);
+                } else {
+                    // Unknown sid: hand out a cached per-sid object (a
+                    // table of zero-returning stubs) and publish it through
+                    // the caller's frame, mirroring the reference's
+                    // `old_obj` plus its frame writeback.  Guests that pass
+                    // a frame read the result from frame + 8.
+                    let table = self.native_object(id);
+                    if argument != 0 {
+                        self.memory.w32(argument + 8, table);
+                    }
+                    self.set_result(table);
+                }
+            }
+        }
+    }
+
+    /// Old-lib drawing API slots (F_0 0x00..0x3c), reached only through the
+    /// gameold table copy the native games request with sid 82.
+    pub(crate) fn handle_oldlib_draw_service(&mut self, index: u32) {
+        match index {
+            0 => {
+                let argument = self.register(0);
+                let source = if argument >= 0x10000 {
+                    self.resource_by_name(argument)
+                } else {
+                    self.resource_by_id(argument)
+                };
+                let result = self.create_image_from_stream(source, 0);
+                self.set_result(result);
+            }
+            1 => self.draw_image_with_clip(false),
+            2 => self.draw_image_with_clip(true),
+            3 => self.draw_full_screen(),
+            4 => self.draw_number_service(),
+            5 => self.draw_ui(),
+            6 => self.draw_ui_four_x_repeat(),
+            7 => self.draw_ui_single_repeat(),
+            8 => self.draw_ui_horizontal(),
+            9 => self.draw_string_oldlib(),
+            10 => self.release_oldlib_image(),
+            11 => {
+                let mask = self.register(0);
+                self.set_result(u32::from(self.key_down & mask != 0));
+            }
+            12 => {
+                let mask = self.register(0);
+                self.set_result(u32::from(self.key_held & mask != 0));
+            }
+            14 => self.set_oldlib_clip(),
+            15 => self.oldlib_image_height(),
             _ => self.set_result(0),
+        }
+    }
+
+    /// OldLib_09c / OldLib_094: malloc_big(size) — a zeroed heap block.
+    fn malloc_big_service(&mut self) {
+        let size = self.register(0);
+        if size == 0 || size > HEAP_SIZE as u32 {
+            self.set_result(0);
+            return;
+        }
+        let block = self.allocate(size);
+        if block != 0 {
+            self.memory.write_bytes(block, &vec![0; size as usize]);
+        }
+        self.set_result(block);
+    }
+
+    /// OldLib_0a0 / OldLib_098: free_big(ptr).
+    fn free_big_service(&mut self) {
+        let pointer = self.register(0);
+        if pointer != 0 {
+            self.deallocate(pointer);
+        }
+        self.set_result(0);
+    }
+
+    /// Cached per-sid object for an unknown native dispatch id: a table of
+    /// callable zero-returning stubs so the guest can both read it back and
+    /// call through it without landing on NULL.
+    fn native_object(&mut self, sid: u32) -> u32 {
+        if let Some(&table) = self.native_objects.get(&sid) {
+            return table;
+        }
+        let table = self.allocate(0x100);
+        for offset in (0..0x100u32).step_by(4) {
+            self.memory.w32(
+                table + offset,
+                Self::method_stub_address(METHOD_KIND_AUTO, offset),
+            );
+        }
+        self.native_objects.insert(sid, table);
+        table
+    }
+
+    pub(crate) fn handle_dirty_rectangle_service(&mut self) {
+        let pool = self.memory.r32(self.register(0));
+        let rectangle = [
+            self.register(1) as u16,
+            self.register(2) as u16,
+            self.register(3) as u16,
+            self.argument(4) as u16,
+        ];
+        self.append_dirty_rectangle(pool, rectangle);
+        self.set_result(0);
+    }
+
+    fn append_dirty_rectangle(&mut self, pool: u32, rectangle: [u16; 4]) {
+        if pool == 0 {
+            return;
+        }
+        let entries = self.memory.r32(pool);
+        let count = self.memory.r16(pool + 4);
+        let capacity = self.memory.r16(pool + 6);
+        if entries == 0 || count >= capacity || rectangle[2] as i16 <= 0 || rectangle[3] as i16 <= 0
+        {
+            return;
+        }
+        let target = self.memory.r32(entries + u32::from(count) * 4);
+        for (index, value) in rectangle.into_iter().enumerate() {
+            self.memory.w16(target + index as u32 * 2, value);
+        }
+        self.memory.w16(pool + 4, count + 1);
+    }
+
+    /// Address of the per-slot method stub for `offset` bytes into a guest
+    /// object of the given table kind.  The low bit is set so a `bx` stays
+    /// in Thumb mode.
+    pub(crate) fn method_stub_address(kind: u32, offset: u32) -> u32 {
+        (METHOD_STUB_BASE
+            + (kind % METHOD_STUB_KINDS) * METHOD_STUB_STRIDE
+            + (offset % METHOD_STUB_STRIDE))
+            | 1
+    }
+
+    /// Firmware-style auto result object for an unimplemented manager
+    /// method: a fresh block whose every slot is a callable stub that
+    /// returns zero.  The guest chains calls through the result, so a bare
+    /// zero return would turn the next indirect call into a jump to NULL.
+    /// One object is cached per (kind, offset) so repeated calls keep the
+    /// same identity, matching the firmware's `auto_result` cache.
+    fn auto_result_object(&mut self, kind: u32, offset: u32) -> u32 {
+        if let Some(&obj) = self.auto_objects.get(&(kind, offset)) {
+            return obj;
+        }
+        const AUTO_SLOTS: u32 = 24;
+        let obj = self.allocate(AUTO_SLOTS * 4);
+        if obj == 0 {
+            return 0;
+        }
+        for slot in (0..AUTO_SLOTS * 4).step_by(4) {
+            self.memory.w32(
+                obj + slot,
+                Self::method_stub_address(METHOD_KIND_AUTO, slot),
+            );
+        }
+        self.auto_objects.insert((kind, offset), obj);
+        obj
+    }
+
+    /// Fill the null word-slots of a guest object with callable per-slot
+    /// method stubs so later indirect calls through it land on executable
+    /// code with known semantics instead of zero.  Already-populated slots
+    /// are left alone.
+    fn fill_zero_method_slots(&mut self, obj: u32, size: u32) {
+        if obj == 0 {
+            return;
+        }
+        for offset in (0..size).step_by(4) {
+            if self.memory.r32(obj + offset) == 0 {
+                self.memory.w32(
+                    obj + offset,
+                    Self::method_stub_address(METHOD_KIND_AUTO, offset),
+                );
+            }
+        }
+    }
+
+    /// Dispatch a per-slot object method.  `stub` is the aligned stub address;
+    /// the table kind and the byte offset of the slot are encoded in it.  The
+    /// memory-manager table (id 143) documents alloc/free/memset at
+    /// 0x9c/0xa0/0x214; everything else behaves like the reference's
+    /// `h_unimpl` and returns zero.
+    pub(crate) fn handle_method_stub(&mut self, stub: u32) {
+        let rel = stub.wrapping_sub(METHOD_STUB_BASE);
+        let kind = rel / METHOD_STUB_STRIDE;
+        let offset = rel % METHOD_STUB_STRIDE;
+        let r0 = self.register(0);
+        let r1 = self.register(1);
+        let r2 = self.register(2);
+        let r3 = self.register(3);
+        let r4 = self.register(4);
+        let r5 = self.register(5);
+        if std::env::var_os("CBE_TRACE").is_some() {
+            eprintln!(
+                "[mstub] kind={kind} off=0x{offset:X} r0=0x{r0:08X} r1=0x{r1:08X} r2=0x{r2:08X}"
+            );
+        }
+        match (kind, offset) {
+            (METHOD_KIND_GAMEOLD, 0x130) => self.initialize_record(),
+            (METHOD_KIND_PICTURE, _) => self.handle_picture_library_method(offset),
+            (METHOD_KIND_ACTOR, _) => self.handle_actor_method(offset),
+            (METHOD_KIND_TEXTBOX, _) => self.handle_textbox_method(offset),
+            // memset(ptr, val, len) — mirrors h_old_memset, including its
+            // 4 MiB length clamp.  Only the memory-manager table owns this
+            // slot; a generic table with the same offset is left alone.
+            (METHOD_KIND_MEMORY, 0x214) => {
+                if r0 != 0 && (1..=0x40_0000).contains(&r2) {
+                    let bytes = vec![r1 as u8; r2 as usize];
+                    self.memory.write_bytes(r0, &bytes);
+                }
+                self.set_result(r0);
+            }
+            // alloc(size)
+            (METHOD_KIND_MEMORY, 0x9c) => {
+                let block = if r0 == 0 { 0 } else { self.allocate(r0) };
+                self.set_result(block);
+            }
+            // free(ptr)
+            (METHOD_KIND_MEMORY, 0xa0) => {
+                self.set_result(0);
+            }
+            // SysManager slot 0x78 — GetCoolBarKernelCurrentVersion: a
+            // zero-argument version query.  Left unimplemented, the generic
+            // constructor heuristic misreads the stale r1 as a block size
+            // and its stack writeback clobbers a live return address.
+            (METHOD_KIND_MEMORY, 0x78) => {
+                self.set_result(42);
+            }
+            // MEMORY_BLOCK bump allocator installed by initMemoryBlock.
+            // MB_Malloc(blk, n): 4-byte-aligned carve-out from the backing
+            // store, zero-filled like the firmware.
+            (METHOD_KIND_MEMBLOCK, 0x0c) => {
+                let blk = r0;
+                if blk == 0 {
+                    self.set_result(0);
+                    return;
+                }
+                let base = self.memory.r32(blk);
+                let cursor = self.memory.r32(blk + 4);
+                let total = self.memory.r32(blk + 8);
+                let size = r1.wrapping_add(3) & !3;
+                if cursor.saturating_add(size) > total {
+                    self.set_result(0);
+                    return;
+                }
+                self.memory.w32(blk + 4, cursor.saturating_add(size));
+                let start = base.saturating_add(cursor);
+                if size != 0 {
+                    let zeros = vec![0u8; size as usize];
+                    self.memory.write_bytes(start, &zeros);
+                }
+                self.set_result(start);
+            }
+            // MB_Reset(blk): rewind the bump cursor.
+            (METHOD_KIND_MEMBLOCK, 0x10) => {
+                if r0 != 0 {
+                    self.memory.w32(r0 + 4, 0);
+                }
+                self.set_result(0);
+            }
+            // MB_Release(blk): the firmware keeps the backing store; no-op.
+            (METHOD_KIND_MEMBLOCK, 0x14) => {
+                self.set_result(0);
+            }
+            // GameManagerOld C-library slots (vmspec F_0).  These mirror the
+            // gameold func-list implementations so the table and the dispatch
+            // path agree.
+            (METHOD_KIND_GAMEOLD, 0x214) => {
+                // memcpy(dst, src, n)
+                let dst = r0;
+                let src = r1;
+                let count = r2 as usize;
+                if dst != 0 && src != 0 && count != 0 {
+                    let mut buf = vec![0u8; count];
+                    for (i, b) in buf.iter_mut().enumerate() {
+                        *b = self.memory.r8(src + i as u32);
+                    }
+                    self.memory.write_bytes(dst, &buf);
+                }
+                self.set_result(dst);
+            }
+            // The shared template calls slot 0x218 as
+            // `fn(dst, src, n)` — a bounded string copy, matching the
+            // reference's strncpy(d, s, n) rather than the vmspec name.
+            (METHOD_KIND_GAMEOLD, 0x218) => {
+                let dst = r0;
+                let src = r1;
+                let n = r2 as usize;
+                if dst != 0 && n != 0 {
+                    let mut bytes = vec![0u8; n.min(0x1000)];
+                    if src != 0 {
+                        for (i, b) in bytes.iter_mut().enumerate() {
+                            let ch = self.memory.r8(src + i as u32);
+                            *b = ch;
+                            if ch == 0 {
+                                break;
+                            }
+                        }
+                    }
+                    self.memory.write_bytes(dst, &bytes);
+                }
+                self.set_result(dst);
+            }
+            (METHOD_KIND_GAMEOLD, 0x21c) => {
+                // memset(dst, val, n)
+                if r0 != 0 && (1..=0x40_0000).contains(&r2) {
+                    let bytes = vec![r1 as u8; r2 as usize];
+                    self.memory.write_bytes(r0, &bytes);
+                }
+                self.set_result(r0);
+            }
+            // XS_GetParamAsString — XSE script-VM parameter getter.  The
+            // firmware exposes no standalone implementation, but the guest
+            // passes an output buffer in r0 with a capacity in r2; writing an
+            // empty string there and returning the buffer keeps the caller
+            // from treating a null as a string pointer.
+            // initDFPictureLibrary(lib, n) — builds the DF_PictureLibrary
+            // object: an id array, an image-pointer array, and the method
+            // table at 0x18..0x50 the guest calls through.  Mirrors the
+            // reference's init_picture_library.
+            // --- math (vmspec F_0) ---
+            (METHOD_KIND_GAMEOLD, 0x00d4) => self.set_result((r0 as i32).unsigned_abs()),
+            (METHOD_KIND_GAMEOLD, 0x00d8) => self.set_result(r0.max(r1)),
+            (METHOD_KIND_GAMEOLD, 0x00dc) => self.set_result(r0.min(r1)),
+            (METHOD_KIND_GAMEOLD, 0x00e0) => {
+                let first = r0 as i16 as i32;
+                let second = r1 as i16 as i32;
+                let low = first.min(second);
+                let high = first.max(second);
+                self.rand_state = self
+                    .rand_state
+                    .wrapping_mul(1_103_515_245)
+                    .wrapping_add(12_345);
+                let value = low + (self.rand_state & 0x7fff_ffff) as i32 % (high - low + 1);
+                self.set_result(value as u32);
+            }
+            (METHOD_KIND_GAMEOLD, 0x00e4) => self.set_result((r0 as f64).sqrt() as u32),
+            (METHOD_KIND_GAMEOLD, 0x019c) => self.set_result(df_sin(r0) as u32),
+            (METHOD_KIND_GAMEOLD, 0x01a0) => self.set_result(df_sin(r0.wrapping_add(90)) as u32),
+            (METHOD_KIND_GAMEOLD, 0x01a4) => self.set_result(df_degree(r0, r1)),
+            (METHOD_KIND_GAMEOLD, 0x01a8) => {
+                self.set_result(u32::from(packed_rectangles_overlap(r0, r1, r2, r3)))
+            }
+            // --- input ---
+            (METHOD_KIND_GAMEOLD, 0x002c) | (METHOD_KIND_GAMEOLD, 0x0110) => {
+                self.set_result(self.key_down)
+            }
+            (METHOD_KIND_GAMEOLD, 0x0030) => self.set_result(u32::from(self.key_held & 1 != 0)),
+            (METHOD_KIND_GAMEOLD, 0x00f8) => self.set_result(u32::from(self.pointer.held)),
+            (METHOD_KIND_GAMEOLD, 0x00fc) => self.set_result(u32::from(self.pointer.down)),
+            (METHOD_KIND_GAMEOLD, 0x0100) => self.set_result(u32::from(self.pointer.up)),
+            (METHOD_KIND_GAMEOLD, 0x0104) => self.set_result(u32::from(self.pointer.dragging())),
+            (METHOD_KIND_GAMEOLD, 0x0108) => self.set_result(self.pointer.x as u32),
+            (METHOD_KIND_GAMEOLD, 0x010c) => self.set_result(self.pointer.y as u32),
+            // --- drawing (vmspec F_0) ---
+            // FillRect(x, y, w, h, color) — args in r1..r5.
+            (METHOD_KIND_GAMEOLD, 0x0058) => {
+                let x = r1 as i16 as i32;
+                let y = r2 as i16 as i32;
+                let w = r3 as i16 as i32;
+                let h = r4 as i16 as i32;
+                self.fill_screen_rect(x, y, w, h, r5 as u16);
+                self.set_result(0);
+            }
+            // DrawRect(x, y, w, h, color) — outline only.
+            (METHOD_KIND_GAMEOLD, 0x0054) => {
+                let x = r1 as i16 as i32;
+                let y = r2 as i16 as i32;
+                let w = r3 as i16 as i32;
+                let h = r4 as i16 as i32;
+                let c = r5 as u16;
+                if w > 0 && h > 0 {
+                    self.fill_screen_rect(x, y, w, 1, c);
+                    self.fill_screen_rect(x, y + h - 1, w, 1, c);
+                    self.fill_screen_rect(x, y, 1, h, c);
+                    self.fill_screen_rect(x + w - 1, y, 1, h, c);
+                }
+                self.set_result(0);
+            }
+            // --- DF resource accessors ---
+            (METHOD_KIND_GAMEOLD, 0x014c) => {
+                let v = self.resource_by_id(r0);
+                self.set_result(v);
+            }
+            (METHOD_KIND_GAMEOLD, 0x0150) | (METHOD_KIND_GAMEOLD, 0x015c) => {
+                let v = self.resource_by_name(r0);
+                self.set_result(v);
+            }
+            (METHOD_KIND_GAMEOLD, 0x0154) => {
+                let v = self.resource_name_by_id(r0);
+                self.set_result(v);
+            }
+            (METHOD_KIND_GAMEOLD, 0x0158) => {
+                let v = self.resource_id_by_name(r0).unwrap_or(u32::MAX);
+                self.set_result(v);
+            }
+            (METHOD_KIND_GAMEOLD, 0x0198) => self.set_result(MEMORY_BLOCK_PTR),
+            // --- DreamFactory object-graph initialisers ---
+            // initDFActor(a, x, y) — actor object with method table at
+            // 0x10..0x28 and per-slot state.
+            (METHOD_KIND_GAMEOLD, 0x01b4) => {
+                let a = r0;
+                if a != 0 {
+                    self.memory.w16(a, r1 as u16);
+                    self.memory.w16(a + 2, r2 as u16);
+                    for off in (0x10u32..=0x28).step_by(4) {
+                        self.memory
+                            .w32(a + off, Self::method_stub_address(METHOD_KIND_ACTOR, off));
+                    }
+                    for off in [4u32, 6, 8, 10] {
+                        self.memory.w16(a + off, 0);
+                    }
+                    self.memory.w32(a + 12, 0);
+                }
+                self.set_result(a);
+            }
+            // initDFWindows (init_repaint_panel) — panel with dirty-rect
+            // table and method table at 0x28..0x44.
+            (METHOD_KIND_GAMEOLD, 0x013c) => {
+                let p = r0;
+                let stack = self.register(reg::SP);
+                let context = self.memory.r32(stack);
+                let n = self.memory.r32(stack + 4);
+                if p != 0 {
+                    let table = if n != 0 { self.allocate(4 * n) } else { 0 };
+                    self.memory.w32(p + 12, table);
+                    if table != 0 {
+                        for i in 0..n {
+                            let e = self.allocate(8);
+                            self.memory.w32(table + 4 * i, e);
+                        }
+                    }
+                    self.memory.w32(p + 4, 0);
+                    self.memory.w32(p + 8, n);
+                    self.memory.w32(p + 24, r1);
+                    self.memory.w32(p + 28, r2);
+                    if n != 0 {
+                        let first = self.memory.r32(table);
+                        self.memory.w32(first, r1);
+                        self.memory.w32(first + 4, r2);
+                        self.memory.w32(p + 4, 1);
+                    }
+                    self.memory.w32(p + 16, r3);
+                    self.memory.w32(p + 20, context);
+                    for off in (0x28u32..=0x44).step_by(4) {
+                        self.memory
+                            .w32(p + off, Self::method_stub_address(METHOD_KIND_PANEL, off));
+                    }
+                    self.memory.w32(p + 32, 0);
+                    self.memory.w32(p + 36, 0);
+                }
+                self.set_result(0);
+            }
+            // initMemoryBlock(blk, size) — firmware MEMORY_BLOCK descriptor:
+            //   +0x00 base, +0x04 cursor, +0x08 total, +0x0c MB_Malloc,
+            //   +0x10 MB_Reset, +0x14 MB_Release.  The three trailing slots
+            //   must be callable stubs; the guest invokes them directly and
+            //   a zero there becomes a jump to NULL.
+            (METHOD_KIND_GAMEOLD, 0x00e8) => {
+                let mut blk = r0;
+                if blk == 0 {
+                    blk = self.allocate(0x18);
+                    if blk == 0 {
+                        self.set_result(0);
+                        return;
+                    }
+                }
+                let base = if r1 != 0 { self.allocate(r1) } else { 0 };
+                if base != 0 {
+                    let zeros = vec![0u8; r1 as usize];
+                    self.memory.write_bytes(base, &zeros);
+                }
+                self.memory.w32(blk, base);
+                self.memory.w32(blk + 4, 0);
+                self.memory.w32(blk + 8, r1);
+                self.memory.w32(
+                    blk + 0x0c,
+                    Self::method_stub_address(METHOD_KIND_MEMBLOCK, 0x0c),
+                );
+                self.memory.w32(
+                    blk + 0x10,
+                    Self::method_stub_address(METHOD_KIND_MEMBLOCK, 0x10),
+                );
+                self.memory.w32(
+                    blk + 0x14,
+                    Self::method_stub_address(METHOD_KIND_MEMBLOCK, 0x14),
+                );
+                self.set_result(blk);
+            }
+            // InitTextBox(tb, ...) — text box with method table at 0x1c..0x34.
+            (METHOD_KIND_GAMEOLD, 0x011c) => {
+                let tb = r0;
+                if tb != 0 {
+                    for (i, off) in [20u32, 22, 24, 26].into_iter().enumerate() {
+                        let v = if i < 2 {
+                            self.register(2 + i as u8) as u16
+                        } else {
+                            self.memory.r32(self.register(reg::SP) + (i as u32 - 2) * 4) as u16
+                        };
+                        self.memory.w16(tb + off, v);
+                    }
+                    self.memory.w32(tb, 0);
+                    for off in (0x1cu32..=0x34).step_by(4) {
+                        self.memory.w32(
+                            tb + off,
+                            Self::method_stub_address(METHOD_KIND_TEXTBOX, off),
+                        );
+                    }
+                    self.memory.w16(tb + 4, 0);
+                    self.memory.w16(tb + 6, 14);
+                    self.memory.w32(tb + 8, 0);
+                    self.memory.w32(tb + 12, 0);
+                }
+                self.set_result(14);
+            }
+            (METHOD_KIND_GAMEOLD, 0x012c) => {
+                let lib = r0;
+                let n = r1 & 0xffff;
+                if lib != 0 {
+                    let ids = self.allocate((2 * n).max(2));
+                    self.memory.w32(lib + 12, ids);
+                    let imgs = self.allocate((4 * n).max(4));
+                    self.memory.w32(lib + 16, imgs);
+                    self.memory.w16(lib + 20, 0);
+                    self.memory.w16(lib + 8, n as u16);
+                    for method in (0x18..=0x50u32).step_by(4) {
+                        self.memory.w32(
+                            lib + method,
+                            Self::method_stub_address(METHOD_KIND_PICTURE, method),
+                        );
+                    }
+                    let line = self.allocate(480);
+                    self.memory.w32(lib, line);
+                    self.memory.w32(lib + 4, 0);
+                    self.memory.w8(lib + 22, 1);
+                }
+                self.set_result(lib);
+            }
+            (METHOD_KIND_GAMEOLD, 0x210) => {
+                if r0 != 0 {
+                    self.memory.w8(r0, 0);
+                    self.set_result(r0);
+                } else {
+                    self.set_result(0);
+                }
+            }
+            (METHOD_KIND_GAMEOLD, 0x228) => {
+                // VmGetRand()
+                self.rand_state = self
+                    .rand_state
+                    .wrapping_mul(1_103_515_245)
+                    .wrapping_add(12_345);
+                self.set_result((self.rand_state >> 16) & 0x7fff);
+            }
+            // Slots of an auto-created result object always return zero:
+            // the point of the object is that the call lands on a stub
+            // instead of NULL, not that it invents another object.
+            (METHOD_KIND_AUTO, _) => {
+                self.set_result(0);
+            }
+            _ => {
+                // Unlisted slots keep the calling convention the shared stub
+                // used to infer: a pointer-shaped first argument is an object
+                // method and returns zero (the reference's `h_unimpl`), while
+                // a plain id echoes itself and an r1 block size marks an
+                // object constructor whose block comes back through the
+                // caller's stack slots.
+                let code_start = self.executable.code_address();
+                let code_end = code_start.saturating_add(self.executable.code_image_size);
+                let data_start = self.executable.data_address();
+                let data_end = data_start.saturating_add(self.executable.data_image_size);
+                let pointer_shaped = (code_start..code_end).contains(&r0)
+                    || (data_start..data_end).contains(&r0)
+                    || (HEAP_BASE..HEAP_BASE + HEAP_SIZE as u32).contains(&r0);
+                if (16..=0x1000).contains(&r1) {
+                    let block = self.allocate(r1);
+                    let sp = self.register(reg::SP);
+                    if block != 0 && sp != 0 {
+                        self.memory.w32(sp + 68, block);
+                    }
+                    self.set_result(block);
+                } else if pointer_shaped {
+                    // An unimplemented object method still has to hand back
+                    // something the guest can chain through: a fresh block of
+                    // callable zero-returning stubs.  A bare zero would turn
+                    // the next `ldr r1, [obj, #off]; bx r1` into a jump to
+                    // NULL.  This mirrors the firmware's `auto_result`.
+                    let obj = self.auto_result_object(kind, offset);
+                    self.set_result(obj);
+                } else if r1 == 1 {
+                    // Constructor-shaped call through an id: hand back a
+                    // callable stub via the caller's `ptr - 52` slot.
+                    let stub = NATIVE_DISPATCH_SERVICE | 1;
+                    let sp = self.register(reg::SP);
+                    if sp != 0 {
+                        self.memory.w32(sp + 68, stub.wrapping_add(52));
+                        self.memory.w32(sp + 36, stub);
+                    }
+                    self.set_result(stub);
+                } else {
+                    self.set_result(r0);
+                }
+            }
+        }
+    }
+
+    /// Native file operations marshal arguments into a three-word record and
+    /// retrieve their scalar result through the subsequent interface request.
+    fn handle_native_file_request(&mut self, id: u32, argument: u32) {
+        let result = if argument == 0 {
+            u32::MAX
+        } else {
+            let first = self.memory.r32(argument);
+            match id {
+                0x41a => {
+                    let path_ptr = self.memory.r32(argument + 4);
+                    let mode_ptr = self.memory.r32(argument + 8);
+                    let path = self.read_file_path(path_ptr);
+                    let mode = self.read_c_string(mode_ptr, 8);
+                    self.virtual_fs.open(&path, &mode, first) as u32
+                }
+                0x41c => self.virtual_fs.close(first) as u32,
+                0x42a => self
+                    .virtual_fs
+                    .size(first)
+                    .map_or(u32::MAX, |size| size as u32),
+                0x41b | 0x427 => {
+                    let count = self.memory.r32(argument + 4);
+                    let handle = self.memory.r32(argument + 8);
+                    if count == 0 {
+                        0
+                    } else if first == 0 || count > HEAP_SIZE as u32 {
+                        u32::MAX
+                    } else if id == 0x427 {
+                        match self.virtual_fs.read(handle, count as usize) {
+                            Some(bytes) if self.memory.write_bytes(first, &bytes) => {
+                                bytes.len() as u32
+                            }
+                            _ => u32::MAX,
+                        }
+                    } else {
+                        let bytes: Vec<_> = (0..count)
+                            .map(|offset| self.memory.r8(first.wrapping_add(offset)))
+                            .collect();
+                        self.virtual_fs
+                            .write(handle, &bytes)
+                            .map_or(u32::MAX, |size| size as u32)
+                    }
+                }
+                _ => u32::MAX,
+            }
+        };
+        if id == 0x41c {
+            self.set_result(result);
+        } else {
+            self.native_scalar_results.insert(id, result);
+            self.set_result(id);
         }
     }
 
@@ -460,58 +1714,164 @@ impl NicaiMachine {
         let output = self.memory.r32(argument);
         let handle = self.memory.r32(argument + 4);
         let size = self.memory.r32(argument + 8);
-        if output == 0 || size < 4 {
+        // Results are written as u32 for size >= 4 and u16 for size 2..3: the
+        // shared template's measure-call marshals a 2-byte result slot and
+        // reads it back after the request returns.
+        if output == 0 || size == 0 {
             return;
         }
-        self.memory.w32(output, 0);
-        match handle {
+        let value = match handle {
             0x8f => {
                 if self.native_system_info == 0 {
-                    self.native_system_info = self.allocate(0x400);
-                    let info = self.native_system_info;
-                    self.memory
-                        .w32(info + 0x9c, SERVICE_BASE + TABLE_STRIDE * 2 + 13 * 4);
-                    self.memory
-                        .w32(info + 0xa0, SERVICE_BASE + TABLE_STRIDE * 2 + 14 * 4);
-                    self.memory
-                        .w32(info + 0x24, SERVICE_BASE + TABLE_STRIDE * 4 + 9 * 4);
-                    self.memory
-                        .w32(info + 0x58, SERVICE_BASE + TABLE_STRIDE * 4 + 19 * 4);
-                    self.memory
-                        .w32(info + 0x70, SERVICE_BASE + TABLE_STRIDE * 4 + 5 * 4);
-                    self.memory
-                        .w32(info + 0x74, SERVICE_BASE + TABLE_STRIDE * 4 + 5 * 4);
-                    self.memory
-                        .w32(info + 0x78, SERVICE_BASE + TABLE_STRIDE * 4 + 6 * 4);
-                    self.populate_table(info + 0x20c, SERVICE_BASE + TABLE_STRIDE * 6, 22);
-                    for (offset, index) in [
-                        (0xa4, 2),
-                        (0xa8, 1),
-                        (0xac, 0),
-                        (0xb0, 3),
-                        (0xb4, 4),
-                        (0xb8, 5),
-                    ] {
-                        self.memory
-                            .w32(info + offset, NATIVE_SYSTEM_TIME_SERVICE + index * 4);
-                    }
-                    self.memory.w32(info + 0xf0, NATIVE_DISPATCH_SERVICE | 1);
+                    let info = self.build_native_system_info();
+                    self.native_system_info = info;
                 }
-                self.memory.w32(output, self.native_system_info);
+                self.gamelib_v3_table = self.native_system_info;
+                if !self.wide_images {
+                    self.wide_images = true;
+                    self.write_screen_header();
+                }
+                Some(self.native_system_info)
             }
             0x8e => {
                 if self.native_property_info == 0 {
-                    self.native_property_info = self.allocate(0x100);
-                    self.memory.w32(
-                        self.native_property_info + 0x14,
-                        NATIVE_DISPATCH_SERVICE | 1,
-                    );
+                    if self.memory.r32(MEMORY_BLOCK_PTR) == 0 {
+                        self.initialize_memory_block(MEMORY_BLOCK_PTR, 0x40_0000);
+                    }
+                    self.native_property_info = MEMORY_BLOCK_PTR;
                 }
-                self.memory.w32(output, self.native_property_info);
+                Some(self.native_property_info)
             }
-            0x41a => self.memory.w32(output, u32::MAX),
-            _ => {}
+            0x3f8 | 0x418 | 0x453 => Some(
+                self.native_scalar_results
+                    .get(&handle)
+                    .copied()
+                    .unwrap_or(0),
+            ),
+            0xaf | 0x41a | 0x41b | 0x427 | 0x42a => Some(
+                self.native_scalar_results
+                    .get(&handle)
+                    .copied()
+                    .unwrap_or(u32::MAX),
+            ),
+            // Tables handed out by the dispatch path are opaque handles:
+            // the fetch writes them back verbatim, matching the reference's
+            // fetch, which never interprets the handle.
+            _ if self.is_native_table(handle) => Some(handle),
+            // Shared-template measurement request (id computed as 0x7f << 3):
+            // its result feeds the render loop's terminate check.  A stable
+            // zero ends the loop instead of the stack being eaten by the
+            // stale stack-slot value; unknown handles keep the firmware's
+            // zero result.
+            _ => Some(0),
+        };
+        let Some(value) = value else {
+            return;
+        };
+        if size >= 4 {
+            self.memory.w32(output, value);
+        } else if size >= 2 {
+            self.memory.w16(output, value as u16);
+        } else {
+            self.memory.w8(output, value as u8);
         }
+    }
+
+    /// True when `handle` is one of the table pointers the native dispatch
+    /// path hands out (the fetch writes it back to the caller untouched).
+    fn is_native_table(&self, handle: u32) -> bool {
+        handle != 0
+            && (handle == self.native_system_info
+                || handle == self.native_property_info
+                || handle == self.gamelib_v3_table
+                || self.native_objects.values().any(|table| *table == handle))
+    }
+
+    /// One-time native system-info object: every slot is a callable stub so
+    /// sparse guest indexing stays off NULL, with the known firmware slots
+    /// rebound to their real services.
+    fn build_native_system_info(&mut self) -> u32 {
+        let info = self.allocate(0x400);
+        // Fill every slot with a per-slot callable stub so guest
+        // code that indexes unlisted offsets still gets a valid
+        // function pointer with known semantics.
+        for offset in (0..0x400u32).step_by(4) {
+            self.memory.w32(
+                info + offset,
+                Self::method_stub_address(METHOD_KIND_MEMORY, offset),
+            );
+        }
+        for (offset, index) in [
+            (0, 0),
+            (0x2c, 11),
+            (0x30, 12),
+            (0x3c, 15),
+            (0x40, 16),
+            (0x44, 17),
+            (0x70, 28),
+            (0x74, 29),
+            (0x78, 30),
+        ] {
+            self.memory
+                .w32(info + offset, SERVICE_BASE + TABLE_STRIDE * 3 + index * 4);
+        }
+        for offset in (4..=0x28).step_by(4) {
+            self.memory.w32(info + offset, OLDLIB_DRAW_SERVICE + offset);
+        }
+        self.memory.w32(info + 0x38, OLDLIB_DRAW_SERVICE + 0x38);
+        for offset in [0xd4, 0xd8, 0xdc, 0xe0, 0xe4] {
+            self.memory.w32(
+                info + offset,
+                Self::method_stub_address(METHOD_KIND_GAMEOLD, offset),
+            );
+        }
+        for (offset, group, index) in [
+            (0x114, 3, 71),
+            (0x124, 3, 75),
+            (0x128, 11, 4),
+            (0x134, 11, 7),
+            (0x138, 3, 80),
+            (0x13c, 3, 81),
+            (0x190, 3, 102),
+            (0x1ac, 11, 9),
+            (0x1b0, 3, 110),
+        ] {
+            self.memory.w32(
+                info + offset,
+                SERVICE_BASE + TABLE_STRIDE * group + index * 4,
+            );
+        }
+        self.memory
+            .w32(info + 0x9c, SERVICE_BASE + TABLE_STRIDE * 2 + 13 * 4);
+        self.memory
+            .w32(info + 0xa0, SERVICE_BASE + TABLE_STRIDE * 2 + 14 * 4);
+        self.memory
+            .w32(info + 0x24, SERVICE_BASE + TABLE_STRIDE * 3 + 9 * 4);
+        self.memory
+            .w32(info + 0x58, SERVICE_BASE + TABLE_STRIDE * 4 + 19 * 4);
+        self.populate_table(info + 0x20c, SERVICE_BASE + TABLE_STRIDE * 6, 22);
+        for (offset, index) in [(0xa4, 2), (0xa8, 1), (0xac, 0), (0xb4, 4), (0xb8, 5)] {
+            self.memory
+                .w32(info + offset, NATIVE_SYSTEM_TIME_SERVICE + index * 4);
+        }
+        self.memory
+            .w32(info + 0xb0, SERVICE_BASE + TABLE_STRIDE * 3 + 44 * 4);
+        self.memory.w32(info + 0x240, NATIVE_BILLING_PAYNUM);
+        self.memory.w32(info + 0x244, NATIVE_BILLING_REMAIN_DAY);
+        // 0xf0 is the native-dispatch entry the guest routes
+        // arbitrary ids through; it must stay the shared dispatch
+        // stub rather than a per-slot method.
+        self.memory.w32(info + 0xf0, NATIVE_DISPATCH_SERVICE | 1);
+        // 0xC0 is read by the shared big-endian template as a
+        // dispatch-style entry point.
+        self.memory.w32(info + 0xC0, NATIVE_DISPATCH_SERVICE | 1);
+        // The shared template indexes a BSS method table through
+        // a pointer at 0x043F98DC; fill its null slots too.
+        let table = self.memory.r32(0x043F98DC);
+        if table != 0 {
+            self.fill_zero_method_slots(table, 0x400);
+        }
+        info
     }
 
     pub(crate) fn handle_game_util_service(&mut self, index: u32) {
@@ -550,15 +1910,15 @@ impl NicaiMachine {
                 let buffer = self.register(0);
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
-                let value = self.memory.r16(buffer.wrapping_add(offset));
+                let value = read_little_endian_short(&mut self.memory, buffer.wrapping_add(offset));
                 self.memory.w32(cursor, offset.wrapping_add(2));
-                self.set_result(value as u32);
+                self.set_result(value as i32 as u32);
             }
             20 => {
                 let buffer = self.register(0);
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
-                let value = self.memory.r32(buffer.wrapping_add(offset));
+                let value = read_little_endian_int(&mut self.memory, buffer.wrapping_add(offset));
                 self.memory.w32(cursor, offset.wrapping_add(4));
                 self.set_result(value);
             }
@@ -607,10 +1967,36 @@ impl NicaiMachine {
 
 #[cfg(test)]
 mod tests {
-    use super::{df_degree, df_sin, packed_rectangles_overlap, rect_contains_point};
+    use super::{
+        df_degree, df_sin, packed_rectangles_overlap, read_little_endian_int,
+        read_little_endian_short, rect_contains_point,
+    };
+    use crate::machine::memory::MachineMemory;
 
     fn pack(high: i16, low: i16) -> u32 {
         u32::from(low as u16) | (u32::from(high as u16) << 16)
+    }
+
+    #[test]
+    fn game_short_reads_are_little_endian_and_signed() {
+        for big_endian in [false, true] {
+            let mut memory = MachineMemory::new(big_endian);
+            memory.map(0x1000, 2, false);
+            memory.load(0x1000, &[0x19, 0x00]).unwrap();
+            assert_eq!(read_little_endian_short(&mut memory, 0x1000), 0x19);
+            memory.load(0x1000, &[0x00, 0x80]).unwrap();
+            assert_eq!(read_little_endian_short(&mut memory, 0x1000), i16::MIN);
+        }
+    }
+
+    #[test]
+    fn game_int_reads_are_little_endian_independent_of_guest_endianness() {
+        for big_endian in [false, true] {
+            let mut memory = MachineMemory::new(big_endian);
+            memory.map(0x1000, 4, false);
+            memory.load(0x1000, &[0x78, 0x56, 0x34, 0x12]).unwrap();
+            assert_eq!(read_little_endian_int(&mut memory, 0x1000), 0x1234_5678);
+        }
     }
 
     #[test]

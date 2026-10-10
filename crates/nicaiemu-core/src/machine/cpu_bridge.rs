@@ -6,9 +6,13 @@ use log::info;
 
 use super::{
     arm_blx_immediate_target, fixed_manager_specs, service_trace_enabled, thumb_add_pc_target,
-    NicaiMachine, APP_STORE_MANAGER, EXIT_ADDRESS, FIXED_GAMEOLD_OBJECT_SERVICE,
-    FIXED_GAMEOLD_REGION_SERVICE, FIXED_MANAGER_INIT, LOG_NOOP_SERVICE, MEMORY_BLOCK_SERVICE,
-    NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
+    NicaiMachine, APP_STORE_MANAGER, DATA_PACKAGE_FULL_PATH_SERVICE, EXIT_ADDRESS,
+    FIXED_GAMEOLD_OBJECT_SERVICE, FIXED_GAMEOLD_REGION_SERVICE, FIXED_MANAGER_GET,
+    FIXED_MANAGER_INIT, IO_METHOD_BASE, IO_METHOD_STRIDE, IO_NV_READ_OFFSET, IO_NV_WRITE_OFFSET,
+    LOG_NOOP_SERVICE, MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE, METHOD_STUB_BASE,
+    METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_BILLING_PAYNUM, NATIVE_BILLING_REMAIN_DAY,
+    NATIVE_BILLING_SEND_SMS, NATIVE_DIRTY_RECT_SERVICE, NATIVE_DISPATCH_SERVICE,
+    NATIVE_SYSTEM_TIME_SERVICE, OLDLIB_DRAW_SERVICE, SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
 };
 
 impl NicaiMachine {
@@ -23,6 +27,24 @@ impl NicaiMachine {
             if aligned_pc != pc {
                 pc = aligned_pc;
                 self.cpu.reg_set(Mode::User, reg::PC, pc);
+            }
+            // Record non-fallthrough transfers (2/4-byte adjacency assumed to
+            // be sequential execution) so fault diagnostics can show where a
+            // bad jump came from.
+            if self.instruction_count > 0
+                && pc != self.last_pc.wrapping_add(2)
+                && pc != self.last_pc.wrapping_add(4)
+            {
+                if self.recent_branches.len() == 16 {
+                    self.recent_branches.pop_front();
+                }
+                self.recent_branches.push_back((self.last_pc, pc));
+                // Snapshot registers at transfer time: a bad jump into a
+                // zero-filled region executes junk before faulting, which
+                // would otherwise clobber the dispatch-time state.
+                self.branch_regs = Some(std::array::from_fn(|index| {
+                    self.cpu.reg_get(Mode::User, index as u8)
+                }));
             }
             self.last_pc = pc;
             if self.recent_pcs.len() == 32 {
@@ -43,18 +65,39 @@ impl NicaiMachine {
             }
             if (SERVICE_BASE..SERVICE_BASE + SERVICE_SIZE).contains(&pc) {
                 self.handle_service(pc)?;
+            } else if (MANAGER_BASE..MANAGER_BASE + MANAGER_SIZE as u32).contains(&pc) {
+                // The manager region holds only data (tables and slots), so a
+                // fetch here means the game is calling the application
+                // interface as code — the native-dispatch convention: the id
+                // travels in r0 and the argument in r1, and the call returns
+                // through LR. Intercepting the fetch keeps the region usable
+                // as both a writable structure (entry-point registration) and
+                // a callable stub, whichever protocol the game follows.
+                self.handle_native_dispatch_service();
+                self.return_from_service();
             } else if self.is_semihosting_call(pc) {
                 if self.handle_semihosting(pc)? {
                     return Ok(());
                 }
             } else if self.handle_thumb_add_pc(pc) || self.handle_interworking_branch(pc) {
+            } else if self.pc_in_unloaded_rom(pc) {
+                // The guest branched into the zero-filled BSS/data tail of
+                // the ROM mapping — a bad function pointer, not real code.
+                self.state = super::MachineState::Faulted;
+                bail!(
+                    "instruction fetch from unloaded ROM address 0x{pc:08X}{}",
+                    self.unmapped_fetch_context()
+                );
             } else if self
                 .memory
                 .region(pc, if self.cpu.thumb_mode() { 2 } else { 4 })
                 .is_none()
             {
                 self.state = super::MachineState::Faulted;
-                bail!("instruction fetch from unmapped address 0x{pc:08X}");
+                bail!(
+                    "instruction fetch from unmapped address 0x{pc:08X}{}",
+                    self.unmapped_fetch_context()
+                );
             } else if !self.cpu.step(&mut self.memory) {
                 self.state = super::MachineState::Faulted;
                 bail!("unsupported ARM instruction at 0x{pc:08X}");
@@ -65,6 +108,69 @@ impl NicaiMachine {
         bail!(
             "CBE execution exceeded {instruction_limit} instructions at 0x{:08X}",
             self.last_pc
+        )
+    }
+
+    /// Diagnostic context appended to unmapped-fetch faults: the recent PC
+    /// history and the last service calls, so a fault can be traced back to
+    /// the guest code path that computed the bad address.
+    /// True when `pc` falls inside the mapped ROM region but past the end of
+    /// the loaded code image — the zero-filled BSS/data tail where a guest
+    /// should never fetch instructions.
+    fn pc_in_unloaded_rom(&self, pc: u32) -> bool {
+        let code_start = self.executable.code_address();
+        let code_end = code_start + self.executable.code_size as u32;
+        if (code_start..code_end).contains(&pc) {
+            return false;
+        }
+        // Only flag addresses that share the ROM mapping — other regions
+        // (manager, service, heap) are legitimate.
+        self.memory.region(pc, 2).is_some() && self.memory.region(code_start, 1).is_some() && {
+            let rom = self.memory.region(code_start, 1).unwrap();
+            (rom.base..rom.base + rom.data.len() as u32).contains(&pc)
+        }
+    }
+
+    fn unmapped_fetch_context(&self) -> String {
+        let pcs: Vec<String> = self
+            .recent_pcs
+            .iter()
+            .map(|pc| format!("0x{pc:08X}"))
+            .collect();
+        let services: Vec<String> = self
+            .recent_services
+            .iter()
+            .map(|(group, index, lr, r0)| format!("{group}:{index}(lr=0x{lr:08X},r0=0x{r0:08X})"))
+            .collect();
+        let bad: Vec<String> = self
+            .memory
+            .unmapped_accesses()
+            .iter()
+            .take(8)
+            .map(|address| format!("0x{address:08X}"))
+            .collect();
+        let regs: Vec<String> = (0..16)
+            .map(|index| format!("r{index}={:08X}", self.register(index)))
+            .collect();
+        let branches: Vec<String> = self
+            .recent_branches
+            .iter()
+            .map(|(from, to)| format!("0x{from:08X}->0x{to:08X}"))
+            .collect();
+        let branch_regs = self.branch_regs.map(|regs| {
+            let parts: Vec<String> = (0..16)
+                .map(|index| format!("r{index}={:08X}", regs[index]))
+                .collect();
+            format!("\n  registers at last branch: [{}]", parts.join(", "))
+        });
+        format!(
+            "\n  recent pcs: [{}]\n  recent branches: [{}]\n  recent services: [{}]\n  unmapped data accesses: [{}]\n  registers: [{}]{}",
+            pcs.join(", "),
+            branches.join(", "),
+            services.join(", "),
+            bad.join(", "),
+            regs.join(", "),
+            branch_regs.unwrap_or_default()
         )
     }
 
@@ -197,7 +303,36 @@ impl NicaiMachine {
     }
 
     fn handle_service(&mut self, address: u32) -> Result<()> {
+        if address == NATIVE_DIRTY_RECT_SERVICE {
+            self.handle_dirty_rectangle_service();
+            self.return_from_service();
+            return Ok(());
+        }
         if address == LOG_NOOP_SERVICE {
+            self.return_from_service();
+            return Ok(());
+        }
+        if (METHOD_STUB_BASE..METHOD_STUB_BASE + METHOD_STUB_KINDS * METHOD_STUB_STRIDE)
+            .contains(&address)
+        {
+            let relative = address - METHOD_STUB_BASE;
+            if relative / METHOD_STUB_STRIDE == super::METHOD_KIND_PANEL {
+                self.handle_panel_service(relative % METHOD_STUB_STRIDE)?;
+            } else {
+                self.handle_method_stub(address);
+            }
+            self.return_from_service();
+            return Ok(());
+        }
+        if (IO_METHOD_BASE..IO_METHOD_BASE + 0x2000).contains(&address) {
+            let rel = address - IO_METHOD_BASE;
+            if rel == IO_NV_READ_OFFSET {
+                self.handle_nv_read();
+            } else if rel == IO_NV_WRITE_OFFSET {
+                self.handle_nv_write();
+            } else {
+                self.handle_file_service(rel / IO_METHOD_STRIDE);
+            }
             self.return_from_service();
             return Ok(());
         }
@@ -214,6 +349,34 @@ impl NicaiMachine {
             self.return_from_service();
             return Ok(());
         }
+        if (FIXED_MANAGER_GET..FIXED_MANAGER_GET + fixed_manager_specs().len() as u32 * 4)
+            .contains(&address)
+        {
+            let index = ((address - FIXED_MANAGER_GET) / 4) as usize;
+            let (_, group, _) = fixed_manager_specs()[index];
+            // Return the shared dense function table so bootstrap code can
+            // treat the manager as an object with callable slots.
+            self.set_result(MANAGER_BASE + TABLE_STRIDE * (group + 1));
+            self.return_from_service();
+            return Ok(());
+        }
+        if [
+            NATIVE_BILLING_PAYNUM,
+            NATIVE_BILLING_REMAIN_DAY,
+            NATIVE_BILLING_SEND_SMS,
+        ]
+        .contains(&address)
+        {
+            self.handle_native_billing_service(address);
+            self.return_from_service();
+            return Ok(());
+        }
+        if (OLDLIB_DRAW_SERVICE..OLDLIB_DRAW_SERVICE + 0x40).contains(&address) {
+            let index = (address - OLDLIB_DRAW_SERVICE) / 4;
+            self.handle_oldlib_draw_service(index);
+            self.return_from_service();
+            return Ok(());
+        }
         if (FIXED_GAMEOLD_OBJECT_SERVICE..FIXED_GAMEOLD_OBJECT_SERVICE + 15 * 4).contains(&address)
         {
             let index = (address - FIXED_GAMEOLD_OBJECT_SERVICE) / 4;
@@ -223,7 +386,7 @@ impl NicaiMachine {
         }
         if (FIXED_GAMEOLD_REGION_SERVICE..FIXED_GAMEOLD_REGION_SERVICE + 8 * 4).contains(&address) {
             let index = (address - FIXED_GAMEOLD_REGION_SERVICE) / 4;
-            self.handle_fixed_gameold_region_service(index);
+            self.handle_fixed_gameold_region_service(index)?;
             self.return_from_service();
             return Ok(());
         }
@@ -282,13 +445,17 @@ impl NicaiMachine {
             5 => self.handle_file_service(index),
             6 => self.handle_stdio_service(index),
             7 => self.handle_timer_service(index),
+            8 => self.handle_ctrl_service(index),
             9 => self.handle_network_service(index),
             10 => self.handle_game_util_service(index),
             11 => self.handle_df_engine_service(index),
+            12 => self.handle_billing_service(index),
             13 => self.handle_ucs2_service(index),
             14 => self.handle_screen_service(index),
             16 => self.handle_game_lcd_service(index),
+            17 => self.handle_manager_service(index),
             18 => self.handle_audio_service(index),
+            29 => self.handle_net_app_service(index),
             20 => {
                 if index == 6 {
                     let descriptor = self.register(0);
@@ -302,13 +469,21 @@ impl NicaiMachine {
                         );
                     }
                     self.set_result(APP_STORE_MANAGER);
+                } else if address == DATA_PACKAGE_FULL_PATH_SERVICE {
+                    // DF_DataPackage_GetFullPaths, reached by the boot
+                    // loader's `ptr - 52` arithmetic on the data package's
+                    // DP_GetFileID slot.  Must hand back a buffer that
+                    // starts with the UCS2 path of the container the loader
+                    // reopens; returning zero left it opening a NULL name.
+                    let buf = self.data_package_full_path();
+                    self.set_result(buf);
                 } else {
                     self.set_result(0);
                 }
             }
             21 => self.handle_data_package_service(index),
             22 => self.handle_download_service(index),
-            23 => self.set_result(0),
+            23 => self.handle_record_service(index),
             24 => self.handle_payment_service(index),
             25 => self.handle_download_resource_service(index),
             26 => self.handle_download_image_service(index),
@@ -324,6 +499,16 @@ impl NicaiMachine {
 
     pub(super) fn register(&self, register: armv4t_emu::reg::Reg) -> u32 {
         self.cpu.reg_get(Mode::User, register)
+    }
+
+    /// Firmware argument `n` in the AAPCS sense: the first four arrive in
+    /// r0..r3 and the rest are on the caller's stack.
+    pub(super) fn argument(&mut self, n: u32) -> u32 {
+        if n < 4 {
+            return self.register(n as u8);
+        }
+        let sp = self.register(reg::SP);
+        self.memory.r32(sp.wrapping_add((n - 4) * 4))
     }
 
     pub(super) fn set_result(&mut self, value: u32) {

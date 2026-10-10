@@ -6,11 +6,875 @@ use log::warn;
 
 use super::{
     clip_axis, image_payload, service_trace_enabled, signed_coord, NicaiMachine,
-    DREAM_FACTORY_PACKAGE_SLOT, HEAP_SIZE, SCREEN_IMAGE, SCREEN_IMAGE_STRUCT,
+    DREAM_FACTORY_PACKAGE_SLOT, HEAP_SIZE, METHOD_KIND_AUTO, METHOD_KIND_GAMEOLD, SCREEN_IMAGE,
+    SCREEN_IMAGE_STRUCT,
 };
 use crate::image_decoder;
 
 impl NicaiMachine {
+    // ---- old-lib drawing API (F_0 0x00..0x3c) ----
+    //
+    // The native (big-endian, preferred-address) games ask native dispatch
+    // sid 82 for a copy of the gameold table, keep it in their own buffer,
+    // and call the drawing slots straight out of it.  These slots were
+    // previously unimplemented: calls landed on generic stubs that allocated
+    // memory instead of drawing, which is why those games stayed on a blank
+    // framebuffer while the reference rendered their menus.
+
+    /// Intersect the old-lib clip rectangle with the given rectangle; an
+    /// empty intersection collapses the clip like the reference.
+    fn oldlib_and_clip(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        let [x0, y0, x1, y1] = self.oldlib_clip;
+        if x + w >= x0 && y + h >= y0 && x1 >= x && y1 >= y {
+            let (mut nx, mut ny, mut nw, mut nh) = (x, y, w, h);
+            if x0 > nx {
+                nw -= x0 - nx;
+                nx = x0;
+            }
+            if y0 > ny {
+                nh -= y0 - ny;
+                ny = y0;
+            }
+            if nx + nw > x1 {
+                nw = x1 - nx;
+            }
+            if ny + nh > y1 {
+                nh = y1 - ny;
+            }
+            let (nw, nh) = (nw.max(0), nh.max(0));
+            self.oldlib_clip = [nx, ny, nx + nw, ny + nh];
+        } else {
+            self.oldlib_clip = [0, 0, 0, 0];
+        }
+    }
+
+    /// Clipped blit onto the framebuffer through the old-lib clip rectangle.
+    #[allow(clippy::too_many_arguments)]
+    fn oldlib_blit(
+        &mut self,
+        source: u32,
+        mut source_x: i32,
+        mut source_y: i32,
+        mut width: i32,
+        mut height: i32,
+        mut destination_x: i32,
+        mut destination_y: i32,
+        transparent: bool,
+    ) {
+        if source == 0 {
+            return;
+        }
+        let [x0, y0, x1, y1] = self.oldlib_clip;
+        if !(destination_x + width > x0 && destination_y + height > y0) {
+            return;
+        }
+        if x0 > destination_x {
+            width -= x0 - destination_x;
+            source_x += x0 - destination_x;
+            destination_x = x0;
+        }
+        if y0 > destination_y {
+            height -= y0 - destination_y;
+            source_y += y0 - destination_y;
+            destination_y = y0;
+        }
+        if destination_x + width > x1 {
+            width = x1 - destination_x;
+        }
+        if width <= 0 {
+            return;
+        }
+        if destination_y + height > y1 {
+            height = y1 - destination_y;
+        }
+        if height <= 0 {
+            return;
+        }
+        self.blit_image(
+            SCREEN_IMAGE_STRUCT,
+            source,
+            source_x,
+            source_y,
+            width,
+            height,
+            destination_x,
+            destination_y,
+            transparent,
+        );
+    }
+
+    /// DrawImageWithClip / DrawImageClipAndAlpha (F_0 0x04 / 0x08):
+    /// (image, sx, sy, w, h, dx, dy) with the halves packed in the low 16
+    /// bits of each register.
+    pub(crate) fn draw_image_with_clip(&mut self, transparent: bool) {
+        let source = self.register(0);
+        let source_x = signed_coord(self.register(1));
+        let source_y = signed_coord(self.register(2));
+        let width = signed_coord(self.register(3));
+        let height = signed_coord(self.argument(4));
+        let destination_x = signed_coord(self.argument(5));
+        let destination_y = signed_coord(self.argument(6));
+        self.oldlib_blit(
+            source,
+            source_x,
+            source_y,
+            width,
+            height,
+            destination_x,
+            destination_y,
+            transparent,
+        );
+        self.set_result(0);
+    }
+
+    /// DrawFullScreen (F_0 0x0c): copy the image straight into the
+    /// framebuffer and adopt it as the new clip rectangle.
+    pub(crate) fn draw_full_screen(&mut self) {
+        let image = self.register(0);
+        if image == 0 {
+            self.set_result(0);
+            return;
+        }
+        let (width, height) = self.image_dims(image);
+        let width = width.clamp(0, 240);
+        let height = height.clamp(0, 400);
+        self.oldlib_clip = [0, 0, width, height];
+        let pixels = self.memory.r32(image);
+        if pixels != 0 {
+            for y in 0..height {
+                for x in 0..width {
+                    let value = self.memory.r16(pixels + ((y * width + x) * 2) as u32);
+                    self.memory
+                        .w16(SCREEN_IMAGE + ((y * 240 + x) * 2) as u32, value);
+                }
+            }
+        }
+        self.set_result(0);
+    }
+
+    /// DrawNumber (F_0 0x10): draw a signed decimal number from a glyph
+    /// strip; each digit is a cw x ch cell starting at the strip origin.
+    pub(crate) fn draw_number_service(&mut self) {
+        let image = self.register(0);
+        let number = self.register(1) as i32;
+        let cell_width = signed_coord(self.register(2));
+        let cell_height = signed_coord(self.register(3));
+        let gap = signed_coord(self.argument(4));
+        let x = signed_coord(self.argument(5));
+        let y = signed_coord(self.argument(6));
+        let align = self.argument(7);
+        if image == 0 || cell_width <= 0 || cell_height <= 0 {
+            self.set_result(0);
+            return;
+        }
+        let value = number.unsigned_abs();
+        let mut digits = 1i32;
+        let mut probe = value;
+        while probe / 10 != 0 {
+            probe /= 10;
+            digits += 1;
+        }
+        if number < 0 {
+            digits += 1;
+        }
+        let total = digits * cell_width + (digits - 1) * gap;
+        let mut position = match align {
+            0 => x + total - cell_width,
+            1 => total / 2 + x - cell_width,
+            2 => x - cell_width,
+            _ => 0,
+        };
+        if value == 0 {
+            self.oldlib_blit(image, 0, 0, cell_width, cell_height, position, y, true);
+            self.set_result(0);
+            return;
+        }
+        let mut remaining = value;
+        loop {
+            let digit = remaining % 10;
+            remaining /= 10;
+            self.oldlib_blit(
+                image,
+                (digit as i32) * cell_width,
+                0,
+                cell_width,
+                cell_height,
+                position,
+                y,
+                true,
+            );
+            position -= cell_width + gap;
+            if remaining == 0 {
+                break;
+            }
+        }
+        self.set_result(0);
+    }
+
+    /// DrawUI (F_0 0x14): nine-slice stretch of a 3x3 (or n x n) UI skin.
+    pub(crate) fn draw_ui(&mut self) {
+        let image = self.register(0);
+        let x = signed_coord(self.register(1));
+        let y = signed_coord(self.register(2));
+        let width = signed_coord(self.register(3));
+        let height = signed_coord(self.argument(4));
+        let n = signed_coord(self.argument(5));
+        if image == 0 || n <= 0 {
+            self.set_result(0);
+            return;
+        }
+        let (image_width, image_height) = self.image_dims(image);
+        let cell_width = image_width / n;
+        let cell_height = image_height / n;
+        if cell_width <= 0 || cell_height <= 0 {
+            self.set_result(0);
+            return;
+        }
+        let columns = (width + cell_width - 1) / cell_width;
+        let rows = (height + cell_height - 1) / cell_height;
+        let saved = self.oldlib_clip;
+        self.oldlib_and_clip(x, y, width, height);
+        let middle = n - 2;
+        let right = x + width - cell_width;
+        let last = cell_width * (middle + 1);
+        let modulo = |value: i32| -> i32 {
+            if middle <= 0 {
+                0
+            } else {
+                value % middle
+            }
+        };
+        for row in 0..=rows {
+            let (source_y, destination_y) = if row == 0 {
+                (0, y)
+            } else if row == rows {
+                (cell_height * (middle + 1), y + height - cell_height)
+            } else {
+                ((modulo(row - 1) + 1) * cell_height, row * cell_height + y)
+            };
+            self.oldlib_blit(
+                image,
+                0,
+                source_y,
+                cell_width,
+                cell_height,
+                x,
+                destination_y,
+                false,
+            );
+            for column in 1..columns {
+                self.oldlib_blit(
+                    image,
+                    (modulo(column - 1) + 1) * cell_width,
+                    source_y,
+                    cell_width,
+                    cell_height,
+                    column * cell_width + x,
+                    destination_y,
+                    false,
+                );
+            }
+            self.oldlib_blit(
+                image,
+                last,
+                source_y,
+                cell_width,
+                cell_height,
+                right,
+                destination_y,
+                false,
+            );
+        }
+        self.oldlib_clip = saved;
+        self.set_result(0);
+    }
+
+    /// DrawUIFourXRepeat (F_0 0x18): tile a two-cell (checker) strip.
+    pub(crate) fn draw_ui_four_x_repeat(&mut self) {
+        let image = self.register(0);
+        let x = signed_coord(self.register(1));
+        let y = signed_coord(self.register(2));
+        let width = signed_coord(self.register(3));
+        let height = signed_coord(self.register(4));
+        if image == 0 {
+            self.set_result(0);
+            return;
+        }
+        let (image_width, image_height) = self.image_dims(image);
+        let cell_width = image_width >> 1;
+        let cell_height = image_height;
+        let saved = self.oldlib_clip;
+        self.oldlib_and_clip(x, y, width, height);
+        let mut row = 0i32;
+        let mut destination_y = y;
+        while cell_height > 0 && cell_width > 0 && destination_y < y + height {
+            let mut column = 0i32;
+            let mut destination_x = x;
+            while destination_x < x + width {
+                let source_x = if (column + row) & 1 != 0 {
+                    cell_width
+                } else {
+                    0
+                };
+                self.oldlib_blit(
+                    image,
+                    source_x,
+                    0,
+                    cell_width,
+                    cell_height,
+                    destination_x,
+                    destination_y,
+                    false,
+                );
+                destination_x += cell_width;
+                column += 1;
+            }
+            destination_y += cell_height;
+            row += 1;
+        }
+        self.oldlib_clip = saved;
+        self.set_result(0);
+    }
+
+    /// DrawUISingleRepeat (F_0 0x1c): tile a single cell across the rect.
+    pub(crate) fn draw_ui_single_repeat(&mut self) {
+        let image = self.register(0);
+        let x = signed_coord(self.register(1));
+        let y = signed_coord(self.register(2));
+        let width = signed_coord(self.register(3));
+        let height = signed_coord(self.register(4));
+        if image == 0 {
+            self.set_result(0);
+            return;
+        }
+        let (cell_width, cell_height) = self.image_dims(image);
+        let saved = self.oldlib_clip;
+        self.oldlib_and_clip(x, y, width, height);
+        let right = x + width;
+        let bottom = y + height;
+        let mut destination_y = y;
+        while cell_height > 0 && cell_width > 0 && bottom >= destination_y {
+            let mut destination_x = x;
+            while right >= destination_x {
+                self.oldlib_blit(
+                    image,
+                    0,
+                    0,
+                    cell_width,
+                    cell_height,
+                    destination_x,
+                    destination_y,
+                    false,
+                );
+                destination_x += cell_width;
+            }
+            destination_y += cell_height;
+        }
+        self.oldlib_clip = saved;
+        self.set_result(0);
+    }
+
+    /// DrawUIHorizontal (F_0 0x20): three-slice horizontal stretch.
+    pub(crate) fn draw_ui_horizontal(&mut self) {
+        let image = self.register(0);
+        let x = signed_coord(self.register(1));
+        let y = signed_coord(self.register(2));
+        let width = signed_coord(self.register(3));
+        if image == 0 {
+            self.set_result(0);
+            return;
+        }
+        let (image_width, cell_height) = self.image_dims(image);
+        let cell_width = image_width / 3;
+        if cell_width <= 0 {
+            self.set_result(0);
+            return;
+        }
+        let columns = (width + cell_width - 1) / cell_width;
+        let saved = self.oldlib_clip;
+        self.oldlib_and_clip(x, y, width, cell_height);
+        self.oldlib_blit(image, 0, 0, cell_width, cell_height, x, y, false);
+        for column in 1..columns {
+            self.oldlib_blit(
+                image,
+                cell_width,
+                0,
+                cell_width,
+                cell_height,
+                column * cell_width + x,
+                y,
+                false,
+            );
+        }
+        self.oldlib_blit(
+            image,
+            2 * cell_width,
+            0,
+            cell_width,
+            cell_height,
+            x + width - cell_width,
+            y,
+            false,
+        );
+        self.oldlib_clip = saved;
+        self.set_result(0);
+    }
+
+    /// IMG_Destory (F_0 0x28): free the image's pixel data (the header may
+    /// be a guest-owned static object, so it is only cleared, like the
+    /// reference).
+    pub(crate) fn release_oldlib_image(&mut self) {
+        let image = self.register(0);
+        if image != 0 && image != SCREEN_IMAGE_STRUCT {
+            let pixels = self.memory.r32(image);
+            if pixels != 0 {
+                self.deallocate(pixels);
+                self.memory.w32(image, 0);
+            }
+        }
+        self.set_result(0);
+    }
+
+    /// SetClip (F_0 0x38): (x, y, w, h); returns the bottom edge.
+    pub(crate) fn set_oldlib_clip(&mut self) {
+        let x = signed_coord(self.register(0));
+        let y = signed_coord(self.register(1));
+        let width = signed_coord(self.register(2));
+        let height = signed_coord(self.register(3));
+        self.oldlib_clip = [x, y, x + width, y + height];
+        self.set_result(((y + height) as u32) & 0xffff);
+    }
+
+    /// IMG_GetHeight (F_0 0x3c).
+    pub(crate) fn oldlib_image_height(&mut self) {
+        let image = self.register(0);
+        let height = if image == 0 {
+            0
+        } else {
+            self.image_dims(image).1 as u32 & 0xffff
+        };
+        self.set_result(height);
+    }
+
+    /// DrawString (F_0 0x24): (string, len16, x, y, color888).
+    pub(crate) fn draw_string_oldlib(&mut self) {
+        let string = self.register(0);
+        let length = signed_coord(self.register(1));
+        let x = signed_coord(self.register(2));
+        let y = signed_coord(self.register(3));
+        let rgb = self.register(4);
+        let color =
+            ((((rgb >> 19) & 31) << 11) | (((rgb >> 10) & 63) << 5) | ((rgb >> 3) & 31)) as u16;
+        let mut bytes = self.read_c_bytes(string, 4096);
+        if length >= 0 {
+            bytes.truncate(length as usize);
+        }
+        self.draw_text_bytes(&bytes, x, y, color);
+        self.set_result(0);
+    }
+
+    /// OldLib_064: (owner, text, x, y, width, height, RGB565).
+    pub(crate) fn draw_oldlib_text_rectangle(&mut self) {
+        let text = self.read_c_bytes(self.register(1), 4096);
+        let x = signed_coord(self.register(2));
+        let y = signed_coord(self.register(3));
+        let width = (self.argument(4).wrapping_add(15) & 0xffff) as i32;
+        let height = (self.argument(5) & 0xffff) as i32;
+        let color = self.argument(6) as u16;
+        let mut lines = 0;
+        let mut start = 0;
+        let mut offset = 0;
+        let mut line_width = 0;
+        let mut full_width = 0;
+        while offset < text.len() {
+            let count = if text[offset] >= 0x80 && offset + 1 < text.len() {
+                2
+            } else {
+                1
+            };
+            let glyph_width = if count == 2 { 16 } else { 8 };
+            if width != 0 && line_width + glyph_width > width && offset > start {
+                if height != 0 && (lines + 1) * 16 > height {
+                    break;
+                }
+                self.draw_text_bytes(&text[start..offset], x, y + lines * 16, color);
+                lines += 1;
+                start = offset;
+                line_width = 0;
+            }
+            line_width += glyph_width;
+            full_width += glyph_width;
+            offset += count;
+        }
+        if offset > start && (height == 0 || (lines + 1) * 16 <= height) {
+            self.draw_text_bytes(&text[start..offset], x, y + lines * 16, color);
+            lines += 1;
+        }
+        while offset < text.len() {
+            let count = if text[offset] >= 0x80 && offset + 1 < text.len() {
+                2
+            } else {
+                1
+            };
+            full_width += if count == 2 { 16 } else { 8 };
+            offset += count;
+        }
+        let cap = if width == 0 { 0xffff } else { width };
+        self.set_result(((lines as u32) << 16) | full_width.min(cap) as u32);
+    }
+
+    pub(crate) fn handle_textbox_method(&mut self, offset: u32) {
+        let textbox = self.register(0);
+        if textbox == 0 {
+            self.set_result(0);
+            return;
+        }
+        match offset {
+            0x1c => {
+                for i in 0..4u32 {
+                    let value = if i < 3 {
+                        self.register(i as u8 + 1)
+                    } else {
+                        self.memory.r32(self.register(reg::SP))
+                    };
+                    self.memory.w16(textbox + 20 + i * 2, value as u16);
+                }
+            }
+            0x20 | 0x34 => {
+                self.memory.w16(
+                    textbox + if offset == 0x20 { 6 } else { 4 },
+                    self.register(1) as u16,
+                );
+            }
+            0x24 => {
+                let text = self.register(1);
+                let width = self.memory.r16(textbox + 24) as i16 as i32;
+                let height = self.memory.r16(textbox + 26) as i16 as i32;
+                let line_height = self.memory.r16(textbox + 6).max(1) as i32;
+                let bytes = self.read_c_bytes(text, 65535);
+                let mut lines = Vec::new();
+                let (mut start, mut position, mut pixels) = (0usize, 0usize, 0i32);
+                while position < bytes.len() && lines.len() < 127 {
+                    if bytes[position] == b'\n' {
+                        lines.push((start, position - start));
+                        position += 1;
+                        start = position;
+                        pixels = 0;
+                        continue;
+                    }
+                    let count = if bytes[position] & 0x80 != 0 && position + 1 < bytes.len() {
+                        2
+                    } else {
+                        1
+                    };
+                    let glyph_width = if count == 2 { 16 } else { 8 };
+                    if position > start
+                        && (pixels + glyph_width > width || position + count - start > 255)
+                    {
+                        lines.push((start, position - start));
+                        start = position;
+                        pixels = 0;
+                        if lines.len() == 127 {
+                            break;
+                        }
+                    }
+                    pixels += glyph_width;
+                    position += count;
+                }
+                if position > start && lines.len() < 127 {
+                    lines.push((start, position - start));
+                }
+                if width <= 0 || height <= 0 || text == 0 {
+                    lines.clear();
+                }
+                for field in [8, 12] {
+                    let allocation = self.memory.r32(textbox + field);
+                    self.deallocate(allocation);
+                    self.memory.w32(textbox + field, 0);
+                }
+                let starts = self.allocate((lines.len() as u32 * 2).max(2));
+                let lengths = self.allocate((lines.len() as u32).max(1));
+                self.memory.w32(textbox, text);
+                self.memory.w32(textbox + 8, starts);
+                self.memory.w32(textbox + 12, lengths);
+                for (i, (start, length)) in lines.iter().enumerate() {
+                    self.memory.w16(starts + i as u32 * 2, *start as u16);
+                    self.memory.w8(lengths + i as u32, *length as u8);
+                }
+                let per_page = (height / line_height).clamp(1, 127) as usize;
+                self.memory.w8(textbox + 16, lines.len() as u8);
+                self.memory.w8(textbox + 17, per_page as u8);
+                self.memory
+                    .w8(textbox + 18, lines.len().div_ceil(per_page) as u8);
+                self.memory.w8(textbox + 19, 0);
+            }
+            0x28 | 0x2c => {
+                let image = if offset == 0x2c {
+                    self.register(1)
+                } else {
+                    SCREEN_IMAGE_STRUCT
+                };
+                let rgb = self.register(if offset == 0x2c { 2 } else { 1 });
+                let color = ((((rgb >> 19) & 31) << 11)
+                    | (((rgb >> 10) & 63) << 5)
+                    | ((rgb >> 3) & 31)) as u16;
+                let text = self.memory.r32(textbox);
+                let starts = self.memory.r32(textbox + 8);
+                let lengths = self.memory.r32(textbox + 12);
+                let lines = self.memory.r8(textbox + 16) as u32;
+                let per_page = self.memory.r8(textbox + 17) as u32;
+                let first = self.memory.r8(textbox + 19) as u32 * per_page;
+                let style = self.memory.r16(textbox + 4);
+                let width = self.memory.r16(textbox + 24) as i16 as i32;
+                let height = self.memory.r16(textbox + 26) as i16 as i32;
+                let x = self.memory.r16(textbox + 20) as i16 as i32;
+                let mut y = self.memory.r16(textbox + 22) as i16 as i32;
+                let step = self.memory.r16(textbox + 6) as i32;
+                let count = lines.saturating_sub(first).min(per_page);
+                if style & 4 != 0 {
+                    y += (height - step * count as i32).max(0) / 2;
+                }
+                for line in first..first + count {
+                    let start = self.memory.r16(starts + line * 2) as u32;
+                    let length = self.memory.r8(lengths + line) as usize;
+                    let mut bytes = self.read_c_bytes(text + start, length as u32);
+                    bytes.truncate(length);
+                    let (decoded, _, _) = GBK.decode(&bytes);
+                    let text_width: i32 = decoded
+                        .chars()
+                        .map(|c| unifont::get_glyph(c).map_or(16, |g| g.get_width() as i32))
+                        .sum();
+                    let dx = if style & 2 != 0 {
+                        (width - text_width).max(0) / 2
+                    } else {
+                        0
+                    };
+                    self.draw_text_bytes_with_height(
+                        image,
+                        &bytes,
+                        x + dx,
+                        y,
+                        color,
+                        (step - 2).clamp(1, 16),
+                    );
+                    y += step;
+                }
+            }
+            0x30 => {
+                for field in [8, 12] {
+                    let pointer = self.memory.r32(textbox + field);
+                    self.deallocate(pointer);
+                    self.memory.w32(textbox + field, 0);
+                }
+                self.memory.w32(textbox, 0);
+                self.memory.w32(textbox + 16, 0);
+            }
+            _ => {}
+        }
+        self.set_result(0);
+    }
+
+    pub(crate) fn handle_picture_library_method(&mut self, offset: u32) {
+        let library = self.register(0);
+        let argument = self.register(1);
+        if library == 0 {
+            self.set_result(u32::MAX);
+            return;
+        }
+        let count = self.memory.r16(library + 20) as u32;
+        let capacity = self.memory.r16(library + 8) as u32;
+        let images = self.memory.r32(library + 16);
+        let ids = self.memory.r32(library + 12);
+        let mut target = self.memory.r32(library + 4);
+        if target == 0 {
+            target = SCREEN_IMAGE_STRUCT;
+        }
+        match offset {
+            0x18 | 0x1c => {
+                let resource_id = if offset == 0x1c {
+                    let Some(id) = self.resource_id_by_name(argument) else {
+                        self.set_result(u32::MAX);
+                        return;
+                    };
+                    for index in 0..count {
+                        if self.memory.r16(ids + index * 2) as u32 == id {
+                            self.set_result(index);
+                            return;
+                        }
+                    }
+                    id
+                } else {
+                    u32::MAX
+                };
+                if count >= capacity || ids == 0 || images == 0 {
+                    self.set_result(u32::MAX);
+                    return;
+                }
+                let image = if offset == 0x1c {
+                    let source = self.resource_by_id(resource_id);
+                    self.create_image_from_stream(source, 0)
+                } else {
+                    let width = argument & 0xffff;
+                    let height = self.register(2) & 0xffff;
+                    let size = width
+                        .next_multiple_of(4)
+                        .saturating_mul(height)
+                        .saturating_mul(2);
+                    // A zero height is legitimate: the reference still
+                    // registers the header-only image (data pointer null),
+                    // and rejecting it leaves the guest's canvas slot unset
+                    // so later scene draws silently target nothing.
+                    if width == 0 || size > HEAP_SIZE as u32 {
+                        self.set_result(u32::MAX);
+                        return;
+                    }
+                    let header = self.image_header_len();
+                    let image = self.allocate(header);
+                    let pixels = if size > 0 { self.allocate(size) } else { 0 };
+                    if pixels == 0 && size > 0 {
+                        self.deallocate(image);
+                        self.set_result(u32::MAX);
+                        return;
+                    }
+                    if size > 0 {
+                        self.memory.write_bytes(pixels, &vec![0; size as usize]);
+                    }
+                    self.memory.w32(image, pixels);
+                    self.write_image_dims(image, width, height);
+                    let kind = self.image_kind_offset();
+                    self.memory.w8(image + kind, 1);
+                    image
+                };
+                if image == 0 {
+                    self.set_result(u32::MAX);
+                    return;
+                }
+                self.memory.w32(images + count * 4, image);
+                self.memory.w16(ids + count * 2, resource_id as u16);
+                self.memory.w16(library + 20, (count + 1) as u16);
+                self.set_result(count);
+            }
+            0x20 | 0x24 => {
+                let index = argument & 0xffff;
+                let image = if index < count {
+                    self.memory.r32(images + index * 4)
+                } else {
+                    0
+                };
+                let size = if image == 0 {
+                    0
+                } else {
+                    let (width, height) = self.image_dims(image);
+                    if offset == 0x20 {
+                        width as u32
+                    } else {
+                        height as u32
+                    }
+                };
+                self.set_result(size);
+            }
+            0x28 => {
+                let x = signed_coord(argument);
+                let y = signed_coord(self.register(2));
+                let width = signed_coord(self.register(3));
+                let stack = self.register(reg::SP);
+                let height = signed_coord(self.memory.r32(stack));
+                let color = self.memory.r32(stack + 4) as u16;
+                let pixels = self.memory.r32(target);
+                let (target_width, target_height) = self.image_dims(target);
+                let [left, top, right, bottom] = self.oldlib_clip;
+                let clipped_x = x.max(left);
+                let clipped_y = y.max(top);
+                self.paint_rect(
+                    clipped_x,
+                    clipped_y,
+                    (x + width).min(right) - clipped_x,
+                    (y + height).min(bottom) - clipped_y,
+                    color,
+                    false,
+                    target_width,
+                    target_height,
+                    pixels,
+                );
+                self.set_result(0);
+            }
+            0x30 | 0x34 | 0x38 | 0x3c | 0x40 => {
+                let index = argument & 0xffff;
+                if index < count {
+                    let image = self.memory.r32(images + index * 4);
+                    let (image_width, image_height) = self.image_dims(image);
+                    let (dx, dy, sx, sy, width, height) = if offset == 0x30 {
+                        (0, 0, 0, 0, image_width, image_height)
+                    } else if offset == 0x34 || offset == 0x38 {
+                        (
+                            signed_coord(self.register(2)),
+                            signed_coord(self.register(3)),
+                            0,
+                            0,
+                            image_width,
+                            image_height,
+                        )
+                    } else {
+                        let stack = self.register(reg::SP);
+                        (
+                            signed_coord(self.register(2)),
+                            signed_coord(self.register(3)),
+                            signed_coord(self.memory.r32(stack)),
+                            signed_coord(self.memory.r32(stack + 4)),
+                            signed_coord(self.memory.r32(stack + 8)),
+                            signed_coord(self.memory.r32(stack + 12)),
+                        )
+                    };
+                    self.blit_image(
+                        target,
+                        image,
+                        sx,
+                        sy,
+                        width,
+                        height,
+                        dx,
+                        dy,
+                        offset == 0x38 || offset == 0x40,
+                    );
+                }
+                self.set_result(0);
+            }
+            0x4c => {
+                self.memory.w32(library + 4, argument);
+                let width = if argument == 0 {
+                    240
+                } else {
+                    self.image_dims(argument).0 as u32
+                };
+                self.set_result(width);
+            }
+            0x50 => {
+                if self.memory.r8(library + 22) == 1 {
+                    for index in 0..count {
+                        let image = self.memory.r32(images + index * 4);
+                        if image != 0 {
+                            let pixels = self.memory.r32(image);
+                            self.deallocate(pixels);
+                            self.deallocate(image);
+                        }
+                    }
+                    self.deallocate(ids);
+                    self.deallocate(images);
+                    let line = self.memory.r32(library);
+                    self.deallocate(line);
+                    self.memory.w32(library, 0);
+                    self.memory.w32(library + 4, 0);
+                    self.memory.w32(library + 12, 0);
+                    self.memory.w32(library + 16, 0);
+                    self.memory.w16(library + 20, 0);
+                    self.memory.w8(library + 22, 0);
+                }
+                self.set_result(0);
+            }
+            _ => self.set_result(0),
+        }
+    }
+
     pub(crate) fn fill_screen_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: u16) {
         let left = x.clamp(0, 240);
         let top = y.clamp(0, 400);
@@ -385,15 +1249,17 @@ impl NicaiMachine {
                 self.memory.w16(pixels + (y * pitch + x) * 2, color);
             }
         }
+        let header = self.image_header_len();
         let image = if output == 0 {
-            self.allocate(12)
+            self.allocate(header)
         } else {
             output
         };
         self.memory.w32(image, pixels);
-        self.memory.w16(image + 4, decoded.width as u16);
-        self.memory.w16(image + 6, decoded.height as u16);
-        self.memory.w8(image + 8, 1);
+        let (width, height) = (decoded.width, decoded.height);
+        self.write_image_dims(image, width, height);
+        let kind = self.image_kind_offset();
+        self.memory.w8(image + kind, 1);
         image
     }
 
@@ -421,8 +1287,7 @@ impl NicaiMachine {
     }
 
     fn draw_image_at(&mut self, source: u32, x: i32, y: i32, transparent: bool) {
-        let width = self.memory.r16(source + 4) as i32;
-        let height = self.memory.r16(source + 6) as i32;
+        let (width, height) = self.image_dims(source);
         self.blit_image(
             SCREEN_IMAGE_STRUCT,
             source,
@@ -496,11 +1361,9 @@ impl NicaiMachine {
         transparent: bool,
     ) {
         let source_pixels = self.memory.r32(source);
-        let source_width = self.memory.r16(source + 4) as i32;
-        let source_height = self.memory.r16(source + 6) as i32;
+        let (source_width, source_height) = self.image_dims(source);
         let mut destination_pixels = self.memory.r32(destination);
-        let mut destination_width = self.memory.r16(destination + 4) as i32;
-        let mut destination_height = self.memory.r16(destination + 6) as i32;
+        let (mut destination_width, mut destination_height) = self.image_dims(destination);
         if service_trace_enabled(4, 24)
             || service_trace_enabled(4, if transparent { 26 } else { 25 })
         {
@@ -586,8 +1449,7 @@ impl NicaiMachine {
         let height = signed_coord(self.memory.r32(stack));
         let color = self.memory.r32(stack + 4) as u16;
         let mut pixels = self.memory.r32(destination);
-        let mut destination_width = self.memory.r16(destination + 4) as i32;
-        let mut destination_height = self.memory.r16(destination + 6) as i32;
+        let (mut destination_width, mut destination_height) = self.image_dims(destination);
         if destination == SCREEN_IMAGE_STRUCT
             || pixels == 0
             || destination_width <= 0
@@ -696,13 +1558,47 @@ impl NicaiMachine {
 
     fn draw_text(&mut self, address: u32, x: i32, y: i32, color: u16) {
         let bytes = self.read_c_bytes(address, 4096);
-        let (text, _, _) = GBK.decode(&bytes);
+        self.draw_text_bytes(&bytes, x, y, color);
+    }
+
+    fn draw_text_bytes(&mut self, bytes: &[u8], x: i32, y: i32, color: u16) {
+        self.draw_text_bytes_on_image(SCREEN_IMAGE_STRUCT, bytes, x, y, color);
+    }
+
+    fn draw_text_bytes_on_image(&mut self, image: u32, bytes: &[u8], x: i32, y: i32, color: u16) {
+        self.draw_text_bytes_with_height(image, bytes, x, y, color, 16);
+    }
+
+    fn draw_text_bytes_with_height(
+        &mut self,
+        image: u32,
+        bytes: &[u8],
+        x: i32,
+        y: i32,
+        color: u16,
+        glyph_height: i32,
+    ) {
+        let (text, _, _) = GBK.decode(bytes);
         // Text coordinates live in the presented display space: the firmware
         // renders the glyphs itself, so a landscape-packaged game issues them
         // with 400x240 coordinates that have to be mapped back into the
         // 240x400 framebuffer pixel by pixel (identity for portrait games).
-        let swaps = self.effective_orientation.swaps_dimensions();
-        let (display_width, display_height) = if swaps { (400, 240) } else { (240, 400) };
+        let screen = image == 0 || image == SCREEN_IMAGE_STRUCT;
+        let swaps = screen && self.effective_orientation.swaps_dimensions();
+        let (pixels, width, height) = if screen {
+            (SCREEN_IMAGE, 240, 400)
+        } else {
+            let (width, height) = self.image_dims(image);
+            (self.memory.r32(image), width, height)
+        };
+        let (display_width, display_height) = if swaps {
+            (height, width)
+        } else {
+            (width, height)
+        };
+        if pixels == 0 {
+            return;
+        }
         let orientation = self.effective_orientation;
         let mut pen_x = x;
         for character in text.chars() {
@@ -710,7 +1606,7 @@ impl NicaiMachine {
                 pen_x += 16;
                 continue;
             };
-            for glyph_y in 0..16i32 {
+            for glyph_y in 0..glyph_height {
                 let display_y = y + glyph_y;
                 if !(0..display_height).contains(&display_y) {
                     continue;
@@ -718,15 +1614,15 @@ impl NicaiMachine {
                 for glyph_x in 0..glyph.get_width() as i32 {
                     let display_x = pen_x + glyph_x;
                     if (0..display_width).contains(&display_x)
-                        && glyph.get_pixel(glyph_x as usize, glyph_y as usize)
+                        && glyph.get_pixel(glyph_x as usize, (glyph_y * 16 / glyph_height) as usize)
                     {
                         let (screen_x, screen_y) = if swaps {
                             orientation.unrotate(display_x, display_y)
                         } else {
                             (display_x, display_y)
                         };
-                        let offset = (screen_y as u32 * 240 + screen_x as u32) * 2;
-                        self.memory.w16(SCREEN_IMAGE + offset, color);
+                        let offset = (screen_y as u32 * width as u32 + screen_x as u32) * 2;
+                        self.memory.w16(pixels + offset, color);
                     }
                 }
             }
@@ -736,6 +1632,94 @@ impl NicaiMachine {
 
     pub(crate) fn handle_game_lcd_service(&mut self, index: u32) {
         match index {
+            0 => {
+                let image = self.create_image_from_stream(self.register(0), 0);
+                self.set_result(image);
+            }
+            1 | 2 => {
+                let stack = self.register(reg::SP);
+                let height = signed_coord(self.memory.r32(stack));
+                let x = signed_coord(self.memory.r32(stack + 4));
+                let y = signed_coord(self.memory.r32(stack + 8));
+                self.legacy_clipped_blit(
+                    SCREEN_IMAGE_STRUCT,
+                    self.register(0),
+                    signed_coord(self.register(1)),
+                    signed_coord(self.register(2)),
+                    signed_coord(self.register(3)),
+                    height,
+                    x,
+                    y,
+                    index == 2,
+                );
+                self.set_result(0);
+            }
+            3 => {
+                self.draw_image_at(self.register(0), 0, 0, false);
+                self.set_result(0);
+            }
+            9 => {
+                let rgb = self.memory.r32(self.register(reg::SP));
+                let color =
+                    (((rgb >> 19) & 31) << 11) | (((rgb >> 10) & 63) << 5) | ((rgb >> 3) & 31);
+                let length = signed_coord(self.register(1));
+                let mut bytes = self.read_c_bytes(self.register(0), 4096);
+                if length >= 0 {
+                    bytes.truncate(length as usize);
+                }
+                self.draw_text_bytes(
+                    &bytes,
+                    signed_coord(self.register(2)),
+                    signed_coord(self.register(3)),
+                    color as u16,
+                );
+                self.set_result(0);
+            }
+            13 | 14 => {
+                let offset = if index == 13 { 6 } else { 4 };
+                let size = self.memory.r16(self.register(0) + offset) as u32;
+                self.set_result(size);
+            }
+            12 => {
+                for offset in 0..4 {
+                    self.memory.w16(
+                        SCREEN_IMAGE_STRUCT + 12 + offset * 2,
+                        self.register(offset as u8) as u16,
+                    );
+                }
+                self.set_result(0);
+            }
+            21 => {
+                let output = self.register(0);
+                if output != 0 {
+                    for offset in 0..4 {
+                        let value = self.memory.r16(SCREEN_IMAGE_STRUCT + 12 + offset * 2);
+                        self.memory.w16(output + offset * 2, value);
+                    }
+                }
+                self.set_result(output);
+            }
+            23..=26 => self.set_result(if index <= 24 { 8 } else { 16 }),
+            27 | 28 => {
+                let stack = self.register(reg::SP);
+                let width = signed_coord(self.memory.r32(stack));
+                let height = signed_coord(self.memory.r32(stack + 4));
+                let x = signed_coord(self.memory.r32(stack + 8));
+                let y = signed_coord(self.memory.r32(stack + 12));
+                self.legacy_clipped_blit(
+                    self.register(0),
+                    self.register(1),
+                    signed_coord(self.register(2)),
+                    signed_coord(self.register(3)),
+                    width,
+                    height,
+                    x,
+                    y,
+                    index == 28,
+                );
+                self.set_result(0);
+            }
+            32 => self.set_result(SCREEN_IMAGE),
             11 => {
                 let image = self.register(0);
                 if image != 0 {
@@ -749,7 +1733,68 @@ impl NicaiMachine {
                 let result = self.decode_resource_stream(self.register(0));
                 self.set_result(result);
             }
+            // F_12 InitTextBox is the same builder as the gameold method
+            // slot (F_0 0x11c).  Returning zero left callers holding a
+            // NULL text box whose next method load jumped through NULL.
+            33 => {
+                let stub = Self::method_stub_address(METHOD_KIND_GAMEOLD, 0x011c) & !1;
+                self.handle_method_stub(stub);
+            }
+            39 => {
+                // Menu-label builder: the caller formats the label into the
+                // object's text buffer (+8) and hands us the header, whose two
+                // word slots are the object's method table.  They were left
+                // null, so the redraw loop's `ldr r7, [obj, #4]; bx r7` jumped
+                // to 0 on the first item.
+                let object = self.register(0);
+                if object != 0 {
+                    for offset in (0..8u32).step_by(4) {
+                        self.memory.w32(
+                            object + offset,
+                            Self::method_stub_address(METHOD_KIND_AUTO, offset),
+                        );
+                    }
+                }
+                self.set_result(object);
+            }
             _ => self.set_result(0),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn legacy_clipped_blit(
+        &mut self,
+        destination: u32,
+        source: u32,
+        sx: i32,
+        sy: i32,
+        width: i32,
+        height: i32,
+        x: i32,
+        y: i32,
+        alpha: bool,
+    ) {
+        // Store the clip in the reserved screen descriptor bytes so memory snapshots preserve it.
+        let cx = self.memory.r16(SCREEN_IMAGE_STRUCT + 12) as i16 as i32;
+        let cy = self.memory.r16(SCREEN_IMAGE_STRUCT + 14) as i16 as i32;
+        let cw = self.memory.r16(SCREEN_IMAGE_STRUCT + 16) as i16 as i32;
+        let ch = self.memory.r16(SCREEN_IMAGE_STRUCT + 18) as i16 as i32;
+        let left = x.max(cx);
+        let top = y.max(cy);
+        let right = (x + width).min(cx + cw);
+        let bottom = (y + height).min(cy + ch);
+        if right > left && bottom > top {
+            self.blit_image(
+                destination,
+                source,
+                sx + left - x,
+                sy + top - y,
+                right - left,
+                bottom - top,
+                left,
+                top,
+                alpha,
+            );
         }
     }
 

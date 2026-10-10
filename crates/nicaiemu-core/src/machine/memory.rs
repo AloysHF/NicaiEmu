@@ -48,6 +48,18 @@ impl MachineMemory {
         });
     }
 
+    /// Addresses of guest accesses (reads or writes) that landed outside any
+    /// mapped region, in ascending order. Used to diagnose faults caused by
+    /// guests dereferencing tables the host never populated.
+    pub(crate) fn unmapped_accesses(&self) -> &BTreeSet<u32> {
+        &self.bad_accesses
+    }
+
+    /// Whether guest multi-byte values are stored big-endian.
+    pub(crate) fn is_big_endian(&self) -> bool {
+        self.big_endian
+    }
+
     pub(crate) fn load(&mut self, address: u32, data: &[u8]) -> Result<()> {
         let region = self
             .region_mut(address, data.len())
