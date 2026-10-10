@@ -146,6 +146,7 @@ incomplete; normal process completion is recorded separately from compatibility.
 | 卧底风云(精品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 双截龙(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 | 在线书城(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 坦克大战(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 
 ## Summary
 
