@@ -69,7 +69,7 @@ not provide the original server's content or a real carrier payment service.
 
 | # | Application / file | Display | Screenshot | Network | Execution | Coverage / limitation |
 | ---: | --- | --- | --- | --- | --- | --- |
-| 1 | `A/1943命运之决战V101.CBE` | 240×320 | <img src="images/A/1943命运之决战V101.png" width="120" alt="1943命运之决战V101 idle frame"> | Local billing simulation | Ready | Local point-play receipt, aircraft/equipment selection, battle start, directional movement, firing and retry flow checked; full campaign and audio unverified |
+| 1 | `A/1943命运之决战V101.CBE` | 240×320 | <img src="images/A/1943命运之决战V101.png" width="120" alt="1943命运之决战V101 idle frame"> | Local billing simulation | Ready | Local point-play receipt, aircraft/equipment selection, battle start, directional movement, firing and retry flow checked; sequential review replayed battle/movement/fire at 205 frames and retry at 560 frames without faults; full campaign and audio unverified |
 | 2 | `A/三国大富翁(新品).CBE` | 240×320 | <img src="images/A/三国大富翁(新品).png" width="120" alt="三国大富翁(新品) idle frame"> | Not assessed | Ready | Title/menu, help text, scrolling and back navigation checked for 2,000 frames; complete gameplay unverified |
 | 3 | `A/三国大富翁V10.CBE` | 240×320 | <img src="images/A/三国大富翁V10.png" width="120" alt="三国大富翁V10 idle frame"> | Not assessed | Ready | Image palette colors checked; interaction/gameplay unverified |
 | 4 | `A/三国志(新品)V10.CBE` | 240×320 | <img src="images/A/三国志(新品)V10.png" width="120" alt="三国志(新品)V10 idle frame"> | Not assessed | Ready | Menu, introduction and purchase-failure recovery checked; paid battle unverified |
